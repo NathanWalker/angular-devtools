@@ -1,4 +1,13 @@
-import { Component, DestroyRef, computed, effect, inject, input, signal } from '@angular/core';
+import {
+  Component,
+  DestroyRef,
+  computed,
+  effect,
+  inject,
+  input,
+  output,
+  signal,
+} from '@angular/core';
 import { JsonPipe } from '@angular/common';
 import type { DevframeRpcClient } from 'devframe/client';
 
@@ -68,6 +77,11 @@ interface ProviderEntry {
                   <dt>Standalone</dt>
                   <dd>{{ comp.isStandalone ? 'Yes' : 'No' }}</dd>
                 </dl>
+                @for (form of formsIn(comp.file); track form.formId) {
+                  <button type="button" class="show-form" (click)="showForm.emit(form.formId)">
+                    Show {{ form.label }} in Forms
+                  </button>
+                }
                 @if (comp.inputs.length) {
                   <h4>Inputs</h4>
                   <ul class="prop-list" role="list">
@@ -192,6 +206,9 @@ interface ProviderEntry {
     .io .label {
       color: #71717a;
     }
+    .show-form {
+      margin: 0 8px 8px 0;
+    }
     .inline-detail {
       padding: 0 16px 12px;
       border-top: 1px solid #27272a;
@@ -291,6 +308,8 @@ interface ProviderEntry {
 })
 export class ComponentTree {
   rpc = input<DevframeRpcClient | null>(null);
+  readonly showForm = output<string>();
+  formOwners = signal<{ formId: string; label: string; file: string | null }[]>([]);
 
   components = signal<ComponentInfo[]>([]);
   allProviders = signal<ProviderEntry[]>([]);
@@ -367,6 +386,12 @@ export class ComponentTree {
         my.rpc.call('get-providers') as Promise<ProviderEntry[]>,
       ]);
       this.components.set(comps);
+      const owners = (await my.rpc.call('forms-owners').catch(() => [])) as {
+        formId: string;
+        label: string;
+        file: string | null;
+      }[];
+      this.formOwners.set(owners ?? []);
       this.allProviders.set(providers);
       const sel = this.selected();
       if (sel) {
@@ -382,6 +407,10 @@ export class ComponentTree {
     } finally {
       this.loading.set(false);
     }
+  }
+
+  formsIn(file: string) {
+    return this.formOwners().filter((form) => form.file === file);
   }
 
   isSelected(comp: ComponentInfo): boolean {

@@ -64,7 +64,7 @@ type Tab = 'dashboard' | 'components' | 'routes' | 'signals' | 'injectors' | 'st
           <app-dashboard [rpc]="rpc()" (navigate)="switchTab($event)" />
         }
         @case ('components') {
-          <app-component-tree [rpc]="rpc()" />
+          <app-component-tree [rpc]="rpc()" (showForm)="showForm($event)" />
         }
         @case ('routes') {
           <app-route-inspector [rpc]="rpc()" />
@@ -79,7 +79,11 @@ type Tab = 'dashboard' | 'components' | 'routes' | 'signals' | 'injectors' | 'st
           <app-store-inspector [rpc]="rpc()" />
         }
         @case ('forms') {
-          <app-forms-inspector [rpc]="rpc()" />
+          <app-forms-inspector
+            [rpc]="rpc()"
+            [focus]="formFocus()"
+            (focusHandled)="formFocus.set(null)"
+          />
         }
       }
     </main>
@@ -197,6 +201,13 @@ export class App implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     // cleanup handled by devframe client
+  }
+
+  formFocus = signal<{ id: string } | null>(null);
+
+  showForm(formId: string) {
+    this.formFocus.set({ id: formId });
+    this.switchTab('forms');
   }
 
   switchTab(id: Tab) {

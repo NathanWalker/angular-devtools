@@ -1,18 +1,5 @@
 import { connectDevframe } from 'devframe/client';
-import {
-  collectForms,
-  diffForms,
-  findFieldElement,
-  findForms,
-  formIdFor,
-  propertyHolding,
-  serializeControl,
-  watchControlEvents,
-  type CollectedForm,
-  type FormEvent,
-  type FormFieldNode,
-  type FoundForm,
-} from './forms.ts';
+import { attachForms } from './forms-collector.ts';
 import {
   findRouters,
   setGeneration,
@@ -38,18 +25,8 @@ import { createSignalHistory, type RawSignalNode } from './signal-history.ts';
 let highlightEl: HTMLElement | null = null;
 let highlightTimer: ReturnType<typeof setTimeout> | undefined;
 let highlightFrame = 0;
-const MAX_FORM_EVENTS = 200;
-const FORMS_HEARTBEAT_MS = 5000;
-const DIFFED_FOR_ALL: FormEvent['type'][] = [
-  'value',
-  'status',
-  'touched',
-  'dirty',
-  'added',
-  'removed',
-];
-
 const PAGE_ID_KEY = 'ng-devtools-page-id';
+const ROUTER_HEARTBEAT_MS = 5000;
 
 function storedPageId(): string | null {
   try {
@@ -94,16 +71,6 @@ async function claimPageId(): Promise<{ id: string; release: () => void }> {
   return { id, release: () => channel.close() };
 }
 
-function isFieldTarget(target: unknown): target is { formId: string; path: string } {
-  const t = target as { formId?: unknown; path?: unknown } | null;
-  return (
-    typeof t?.formId === 'string' &&
-    typeof t.path === 'string' &&
-    t.formId.length < 50 &&
-    t.path.length < 500
-  );
-}
-
 export async function initOverlay(options: { baseURL?: string | string[] } = {}) {
   // `connectDevframe()` alone looks for the connection next to the page, which
   // misses the documented `/__ng-devtools/` mount in a host app.
@@ -142,113 +109,8 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
   }
 
   const { id: pageId, release: releasePageId } = await claimPageId();
-  const idOf = (root: object) => `${formIdFor(root)}@${pageId}`;
-  let lastForms: CollectedForm[] = [];
-  let lastPayload = '';
-  let lastPushAt = 0;
-  const formEvents: FormEvent[] = [];
-  const watched = new Map<object, { formId: string; stop: () => void }>();
-  const lastStatus = new Map<string, string>();
-  const lastValue = new Map<string, string>();
-  let foundById = new Map<string, FoundForm>();
-  let fieldElements = new WeakMap<object, Element>();
-
-  let eventSeq = 0;
-
-  function recordFormEvent(input: FormEvent) {
-    const event = { ...input, seq: ++eventSeq };
-    if (event.type === 'value') {
-      const key = `${event.formId}:${event.path}`;
-      if (lastValue.get(key) === event.detail) return;
-      lastValue.set(key, event.detail ?? '');
-    }
-    if (event.type === 'status') {
-      const key = `${event.formId}:${event.path}`;
-      const status = event.detail?.split('→').pop()?.trim() ?? '';
-      if (lastStatus.get(key) === status) return;
-      lastStatus.set(key, status);
-    }
-    const last = formEvents[formEvents.length - 1];
-    if (
-      event.type === 'value' &&
-      last?.type === 'value' &&
-      last.formId === event.formId &&
-      last.path === event.path
-    ) {
-      formEvents[formEvents.length - 1] = event;
-      return;
-    }
-    formEvents.push(event);
-    if (formEvents.length > MAX_FORM_EVENTS) {
-      formEvents.splice(0, formEvents.length - MAX_FORM_EVENTS);
-    }
-  }
-
-  function seedStatuses(formId: string, node: FormFieldNode) {
-    lastStatus.set(`${formId}:${node.path}`, node.status);
-    for (const child of node.children ?? []) seedStatuses(formId, child);
-  }
-
-  function watchRoots(found: FoundForm[]) {
-    const live = new Set<object>();
-    for (const form of found) {
-      if (form.kind === 'signal') continue;
-      live.add(form.root);
-      if (watched.has(form.root)) continue;
-      const formId = idOf(form.root);
-      const stop = watchControlEvents(
-        form.root,
-        formId,
-        (event) => {
-          if (event.type !== 'touched' && event.type !== 'dirty') recordFormEvent(event);
-        },
-        {
-          elements: () => fieldElements,
-          rootKey: form.property ?? propertyHolding(form) ?? '',
-          submitted: () => form.directive?.['submitted'],
-        },
-      );
-      if (!stop) continue;
-      watched.set(form.root, { formId, stop });
-      seedStatuses(formId, serializeControl(form.root, fieldElements));
-    }
-    for (const [root, { formId, stop }] of watched) {
-      if (live.has(root)) continue;
-      stop();
-      watched.delete(root);
-      for (const map of [lastStatus, lastValue]) {
-        for (const key of map.keys()) {
-          if (key.startsWith(`${formId}:`)) map.delete(key);
-        }
-      }
-    }
-  }
-
-  async function pushForms() {
-    try {
-      const ng = getNg();
-      if (!ng?.getDirectives) return;
-      const found = findForms(ng, document.querySelectorAll('*'));
-      foundById = new Map(found.forms.map((form) => [idOf(form.root), form]));
-      fieldElements = found.elements;
-      watchRoots(found.forms);
-      const forms = collectForms(found, idOf);
-      const streamed = new Set(Array.from(watched.values(), ({ formId }) => formId));
-      for (const event of diffForms(lastForms, forms)) {
-        if (!streamed.has(event.formId) || DIFFED_FOR_ALL.includes(event.type)) {
-          recordFormEvent(event);
-        }
-      }
-      lastForms = forms;
-      const payload = JSON.stringify({ forms, events: formEvents });
-      if (payload === lastPayload && Date.now() - lastPushAt < FORMS_HEARTBEAT_MS) return;
-      lastPayload = payload;
-      lastPushAt = Date.now();
-      await my.rpc.call('push-forms', { pageId, forms, events: formEvents });
-    } catch {
-      return;
-    }
-  }
+  const forms = attachForms(my, pageId, getNg, { show: showHighlight, clear: clearHighlight });
+  const pushForms = forms.push;
 
   const navigations: NavigationRecord[] = [];
   const preloads: PreloadRecord[] = [];
@@ -320,7 +182,7 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
         report['instrumented'] = instrumented;
       }
       const payload = JSON.stringify(report);
-      if (payload === lastRouterPayload && Date.now() - lastRouterPushAt < FORMS_HEARTBEAT_MS) {
+      if (payload === lastRouterPayload && Date.now() - lastRouterPushAt < ROUTER_HEARTBEAT_MS) {
         return;
       }
       lastRouterPayload = payload;
@@ -401,31 +263,6 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     },
   });
 
-  my.rpc.register({
-    name: 'highlight-form-field',
-    type: 'event',
-    jsonSerializable: true,
-    handler: (target: { formId: string; path: string } | null) => {
-      clearHighlight();
-      const ng = getNg();
-      if (!isFieldTarget(target) || !ng?.getDirectives) return;
-      const found = foundById.get(target.formId);
-      if (!found) return;
-      try {
-        const el = findFieldElement(
-          ng,
-          document.querySelectorAll('*'),
-          found,
-          target.path,
-          fieldElements,
-        );
-        if (el instanceof HTMLElement) showHighlight(el);
-      } catch {
-        return;
-      }
-    },
-  });
-
   const leave = () => {
     void my.rpc.call('forget-forms-page', pageId).catch(() => {});
     void my.rpc.call('forget-router-page', pageId).catch(() => {});
@@ -438,14 +275,13 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     clearInterval(interval);
     restoreSignalHook();
     removeEventListener('pagehide', leave);
+    forms.stop();
     removeEventListener('pageshow', resendConfig);
-    for (const { stop } of watched.values()) stop();
     for (const cleanup of routerCleanup) cleanup();
     routerCleanup = [];
     stopInstrument?.();
     clearTimeout(routerPushTimer);
     releasePageId();
-    watched.clear();
     clearHighlight();
   };
 }
