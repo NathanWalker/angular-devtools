@@ -1,4 +1,4 @@
-import { Component, signal, OnInit, OnDestroy } from '@angular/core';
+import { Component, computed, signal, OnInit, OnDestroy } from '@angular/core';
 import { connectDevframe, type DevframeRpcClient } from 'devframe/client';
 import { Dashboard } from './pages/dashboard';
 import { ComponentTree } from './pages/component-tree';
@@ -7,8 +7,10 @@ import { SignalInspector } from './pages/signal-inspector';
 import { DiInspector } from './pages/di-inspector';
 import { StoreInspector } from './pages/store-inspector';
 import { FormsInspector } from './pages/forms-inspector';
+import { AnalogInspector } from './pages/analog-inspector';
 
-type Tab = 'dashboard' | 'components' | 'routes' | 'signals' | 'injectors' | 'store' | 'forms';
+type Tab =
+  'dashboard' | 'components' | 'routes' | 'signals' | 'injectors' | 'store' | 'forms' | 'analog';
 
 @Component({
   selector: 'app-root',
@@ -20,6 +22,7 @@ type Tab = 'dashboard' | 'components' | 'routes' | 'signals' | 'injectors' | 'st
     DiInspector,
     StoreInspector,
     FormsInspector,
+    AnalogInspector,
   ],
   template: `
     <header>
@@ -50,7 +53,7 @@ type Tab = 'dashboard' | 'components' | 'routes' | 'signals' | 'injectors' | 'st
         <span>Angular DevTools</span>
       </h1>
       <nav>
-        @for (t of tabs; track t.id) {
+        @for (t of tabs(); track t.id) {
           <button [class.active]="tab() === t.id" (click)="switchTab(t.id)">{{ t.label }}</button>
         }
       </nav>
@@ -84,6 +87,9 @@ type Tab = 'dashboard' | 'components' | 'routes' | 'signals' | 'injectors' | 'st
             [focus]="formFocus()"
             (focusHandled)="formFocus.set(null)"
           />
+        }
+        @case ('analog') {
+          <app-analog-inspector [rpc]="rpc()" />
         }
       }
     </main>
@@ -167,8 +173,10 @@ type Tab = 'dashboard' | 'components' | 'routes' | 'signals' | 'injectors' | 'st
   `,
 })
 export class App implements OnInit, OnDestroy {
-  readonly tabs = [
+  readonly analog = signal(false);
+  private readonly allTabs = [
     { id: 'dashboard' as Tab, label: 'Dashboard' },
+    { id: 'analog' as Tab, label: 'Analog' },
     { id: 'components' as Tab, label: 'Components' },
     { id: 'routes' as Tab, label: 'Routes' },
     { id: 'signals' as Tab, label: 'Signals' },
@@ -176,6 +184,7 @@ export class App implements OnInit, OnDestroy {
     { id: 'store' as Tab, label: 'Store' },
     { id: 'forms' as Tab, label: 'Forms' },
   ];
+  readonly tabs = computed(() => this.allTabs.filter((t) => t.id !== 'analog' || this.analog()));
 
   tab = signal<Tab>('dashboard');
   rpc = signal<DevframeRpcClient | null>(null);
@@ -185,7 +194,7 @@ export class App implements OnInit, OnDestroy {
     // Deep link: read tab from hash
     const params = new URLSearchParams(location.hash.replace(/^#/, ''));
     const hashTab = params.get('tab');
-    if (hashTab && this.tabs.some((t) => t.id === hashTab)) {
+    if (hashTab && this.allTabs.some((t) => t.id === hashTab)) {
       this.tab.set(hashTab as Tab);
     }
 
@@ -193,6 +202,19 @@ export class App implements OnInit, OnDestroy {
     connectDevframe(baseURL ? { baseURL } : {}).then((client) => {
       this.rpc.set(client);
       this.connected.set(true);
+      const scoped = client.scope('ng-devtools').rpc as unknown as {
+        call: (name: string) => Promise<unknown>;
+      };
+      scoped.call('analog-project').then(
+        (project) => {
+          const isAnalog = !!(project as { analog?: boolean } | null)?.analog;
+          this.analog.set(isAnalog);
+          if (!isAnalog && this.tab() === 'analog') this.tab.set('dashboard');
+        },
+        () => {
+          if (this.tab() === 'analog') this.tab.set('dashboard');
+        },
+      );
       client.events.on('connection:status', (status) => {
         this.connected.set(status === 'connected');
       });

@@ -3,12 +3,14 @@ import * as v from 'valibot';
 import { describable } from './agent-schema.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { analogConfig, analogVersion } from './analog-scan.ts';
 
 const BuildMetaSchema = v.object({
   angularVersion: v.string(),
   projectName: v.string(),
   typescript: v.string(),
   ssr: v.boolean(),
+  analog: v.optional(v.string()),
   builtAt: v.number(),
 });
 
@@ -45,11 +47,13 @@ export const getBuildMeta = defineRpcFunction({
         projectConfig?.architect?.build?.options?.server
       );
 
+      const analog = analogVersion(ctx.cwd);
       return {
         angularVersion,
         projectName: defaultProject,
         typescript,
-        ssr: hasSsr,
+        ssr: analog ? analogConfig(ctx.cwd).ssr !== false : hasSsr,
+        ...(analog ? { analog: analog.replace(/^\^|~/, '') } : {}),
         builtAt: Date.now(),
       };
     },

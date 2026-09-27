@@ -120,6 +120,16 @@ MCP clients see these with an underscore, as `ng-devtools_get-routes`.
 | `ng-devtools:export-navigation`      | Markdown repro of a navigation                              |
 | `ng-devtools:explain-render-mode`    | ServerRoute and render mode for a URL                       |
 | `ng-devtools:navigate`               | Navigate, abort, replay, probe, instrument (dev only)       |
+| `ng-devtools:analog-routes`          | Analog file routes with their page, layout and server files |
+| `ng-devtools:analog-explain-url`     | Which Analog files render a URL, or why nothing matches     |
+| `ng-devtools:analog-current-page`    | The open page's files, load() data and hydration state      |
+| `ng-devtools:analog-server-calls`    | Page renders, load(), server function and API calls         |
+| `ng-devtools:analog-api-routes`      | Server routes with method, URL and file                     |
+| `ng-devtools:analog-call-api`        | Send a request to a server route (non-GET needs confirm)    |
+| `ng-devtools:analog-render-modes`    | SSR, prerendered or client only, per page                   |
+| `ng-devtools:analog-prerender-plan`  | prerender.routes compared with pages and build output       |
+| `ng-devtools:analog-content`         | Markdown content with slug and frontmatter                  |
+| `ng-devtools:analog-lint`            | Analog routing, server, prerender and content mistakes      |
 
 #### Forms
 
@@ -162,6 +172,37 @@ For agents:
 Without instrumentation, the guards listed for a navigation are candidates (the `canDeactivate` guards of the page being left and the `canActivate`/`canActivateChild` guards of the target), because the router reports one result for all of them. Instrumentation wraps each guard and resolver in the live config to record its verdict; it is off by default and undone when turned off. A navigation that finished before the devtools connected is listed without timing or guard details.
 
 Query, matrix and fragment keys that look secret (token, password, api key, code, sig, session, jwt and similar), including inside encoded return URLs, JWTs, bearer tokens, long opaque tokens and route params with such names are replaced with `[redacted]` in URLs, params, data and messages. A secret route param is only known once the route is recognized or found in the config, so a navigation that fails before that (for example inside a lazy route that failed to load) can still show it in its URL.
+
+#### Analog
+
+For [Analog](https://analogjs.org) apps, add the Vite plugin next to `analog()` and load the overlay in `main.ts`:
+
+```ts
+// vite.config.ts
+import analog from '@analogjs/platform';
+import ngDevtools from '@santoshyadavdev/ng-devtools/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [analog(), ngDevtools()],
+});
+```
+
+```ts
+// src/main.ts
+bootstrapApplication(App, appConfig).then(() => {
+  if (import.meta.env.DEV) void import('@santoshyadavdev/ng-devtools/overlay');
+});
+```
+
+The panel is then at `/__ng-devtools/` on the Vite dev server, and the MCP endpoint at `/__ng-devtools/__mcp`. The Analog tab shows:
+
+- Routes: every page, layout and markdown file with its URL, route groups, `[param]` and catch-all segments, `.server.ts` files and routeMeta. Test a URL to see which files render it.
+- Server: page renders (server rendered or client only), `load()` fetches, server functions and API calls with status, time and a redacted preview, plus a request playground for API routes. A `load()` that runs on the server and again in the browser is flagged.
+- Render: SSR, prerendered or client only per page, from config, build output and the last request.
+- Content and Lint: markdown files, and checks for duplicate URLs, missing default exports, layouts without `<router-outlet>`, orphan `.server.ts` files, API method suffixes, prerender entries and frontmatter.
+
+The Analog tab appears only in Analog apps, and the Routes tab and Dashboard switch to Analog's file routes and SSR setting there. Tested with Analog 2.7 on Angular 20 (a fresh app from the official template, npm and pnpm) and Angular 22. The demo lives in `examples/analog` (`pnpm analog:dev`).
 
 #### Agent Resources
 

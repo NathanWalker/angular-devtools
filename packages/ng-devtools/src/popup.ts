@@ -162,7 +162,10 @@ export function createDevtoolsPopup() {
       height: 44px;
       border-radius: 50%;
       border: none;
-      background: var(--ng-devtools-accent, #7c3aed);
+      background: var(
+        --ng-devtools-accent,
+        linear-gradient(135deg, #e40035 0%, #f60a48 25%, #dc087d 50%, #9717e7 75%, #6c00f5 100%)
+      );
       color: var(--ng-devtools-accent-ink, #fff);
       cursor: pointer;
       touch-action: none;
@@ -170,9 +173,9 @@ export function createDevtoolsPopup() {
       align-items: center;
       justify-content: center;
       box-shadow: 0 2px 12px rgba(0,0,0,0.3);
-      transition: transform 0.15s, background 0.15s;
+      transition: transform 0.15s, filter 0.15s;
     }
-    .fab:hover { background: var(--ng-devtools-accent-hover, #6d28d9); transform: scale(1.08); }
+    .fab:hover { filter: brightness(1.1); transform: scale(1.08); }
     .fab.open { background: #3f3f46; }
     .fab.dragging {
       transition: none;

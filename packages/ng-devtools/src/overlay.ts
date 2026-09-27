@@ -1,4 +1,5 @@
 import { connectDevframe } from 'devframe/client';
+import { attachAnalog } from './analog-runtime.ts';
 import { attachForms } from './forms-collector.ts';
 import {
   findRouters,
@@ -109,6 +110,7 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
   }
 
   const { id: pageId, release: releasePageId } = await claimPageId();
+  const stopAnalog = attachAnalog(my, pageId, getNg);
   const forms = attachForms(my, pageId, getNg, { show: showHighlight, clear: clearHighlight });
   const pushForms = forms.push;
 
@@ -276,6 +278,7 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     restoreSignalHook();
     removeEventListener('pagehide', leave);
     forms.stop();
+    stopAnalog();
     removeEventListener('pageshow', resendConfig);
     for (const cleanup of routerCleanup) cleanup();
     routerCleanup = [];

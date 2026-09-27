@@ -59,6 +59,8 @@ import {
 import { extractRoutes } from './rpc/get-routes.ts';
 import { scanServerRoutes } from './rpc/server-routes.ts';
 
+import { registerAnalog } from './rpc/analog-register.ts';
+
 import pkg from '../package.json' with { type: 'json' };
 
 type PageGraph = SignalGraph & { pageId?: string };
@@ -1268,6 +1270,8 @@ const ngDevtools = defineDevframe({
         return { markdown: actionText(result, formsState.value() as FormsState) };
       },
     });
+
+    await registerAnalog(my as never, ctx as never);
   },
 });
 

@@ -16,6 +16,10 @@ import type { DevframeRpcClient } from 'devframe/client';
           <dd>{{ meta()?.typescript ?? '…' }}</dd>
           <dt>SSR</dt>
           <dd>{{ meta()?.ssr ? 'Yes' : 'No' }}</dd>
+          @if (meta()?.analog; as analog) {
+            <dt>Analog</dt>
+            <dd>{{ analog }}</dd>
+          }
         </dl>
       </div>
       <div class="card clickable" (click)="navigate.emit('components')">

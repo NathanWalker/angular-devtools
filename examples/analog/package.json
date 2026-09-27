@@ -1,0 +1,40 @@
+{
+  "name": "analog-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @santoshyadavdev/ng-devtools build && vite",
+    "build": "pnpm --filter @santoshyadavdev/ng-devtools build && vite build",
+    "preview": "node dist/analog/server/index.mjs"
+  },
+  "dependencies": {
+    "@analogjs/content": "2.7.5",
+    "@analogjs/router": "2.7.5",
+    "@angular/common": "^22.1.0",
+    "@angular/compiler": "^22.1.0",
+    "@angular/core": "^22.1.0",
+    "@angular/forms": "^22.1.0",
+    "@angular/platform-browser": "^22.1.0",
+    "@angular/platform-server": "^22.1.0",
+    "@angular/router": "^22.1.0",
+    "front-matter": "^4.0.2",
+    "h3": "^1.15.11",
+    "marked": "^15.0.12",
+    "marked-gfm-heading-id": "^4.1.1",
+    "marked-highlight": "^2.2.1",
+    "marked-mangle": "^1.1.10",
+    "prismjs": "^1.29.0",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@analogjs/platform": "2.7.5",
+    "@analogjs/vite-plugin-angular": "2.7.5",
+    "@angular/build": "^22.1.8",
+    "@angular/compiler-cli": "^22.1.0",
+    "@santoshyadavdev/ng-devtools": "workspace:*",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  }
+}
