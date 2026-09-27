@@ -20,7 +20,7 @@ pnpm install
 ```
 app/                          # Devtools UI SPA (Angular + Vite)
   src/app.ts                  # Root component with tab navigation
-  src/pages/                  # Dashboard, Components, Routes, Signals, Injectors
+  src/pages/                  # Dashboard, Components, Routes, Signals, Injectors, Store, Forms
   vite.config.ts              # Vite config with Analog Angular plugin
 packages/
   ng-devtools/                # Publishable npm package
@@ -86,6 +86,6 @@ pnpm format:check
 1. Fork and create a branch from `main`
 2. Make your changes
 3. Verify `pnpm devtools:build` succeeds
-4. If you changed `app/`, run `pnpm extension:build && pnpm devtools:build-pkg` and commit `extension/ui` and `packages/ng-devtools-assets/dist`. CI fails when they are stale
+4. If you changed `app/`, run `pnpm extension:build` and commit `extension/ui`. CI fails when it is stale
 5. Test with `pnpm devtools:dev`
 6. Open a PR against `main`
