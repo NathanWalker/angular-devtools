@@ -1,6 +1,6 @@
 {
   "name": "@santoshyadavdev/ng-devtools",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Angular DevTools \u2014 inspect components, signals, DI, and routes. Runs standalone, embedded, or over MCP.",
   "license": "MIT",
   "repository": {
