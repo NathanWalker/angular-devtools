@@ -244,4 +244,22 @@ describe('get-signals', () => {
     const signals = await signalsFor(`class Counter { total = signal(0) }`);
     expect(signals[0].file).toBe('src/app.ts');
   });
+
+  it('skips outputs and reads toSignal and the resource helpers', async () => {
+    const signals = await signalsFor(`
+      class Search {
+        picked = output<string>()
+        query = toSignal(this.route.queryParams)
+        results = httpResource(() => '/api?q=' + this.query())
+        text = httpResource.text(() => '/readme')
+        stream = rxResource({ stream: () => of(1) })
+      }
+    `);
+    expect(signals.map((s) => [s.name, s.kind])).toEqual([
+      ['query', 'toSignal'],
+      ['results', 'httpResource'],
+      ['text', 'httpResource'],
+      ['stream', 'rxResource'],
+    ]);
+  });
 });

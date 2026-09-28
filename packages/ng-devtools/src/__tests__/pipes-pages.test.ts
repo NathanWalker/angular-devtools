@@ -1,7 +1,7 @@
 import { createHostContext } from 'devframe/node';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ngDevtools from '../devframe.ts';
-import type { PipePageReport } from '../rpc/pipes-tools.ts';
+import { isPipePageReport, mergePipePageReport, type PipePageReport } from '../rpc/pipes-tools.ts';
 
 async function boot() {
   const host = {
@@ -79,5 +79,55 @@ describe('pipe pages and their connections', () => {
     await invoke('push-pipes', page('tab-2'));
     host._emitSessionDisconnected({ id: 2 });
     expect(await explain()).toContain('3 instance(s)');
+  });
+});
+
+describe('pipe page targets', () => {
+  it('keeps each page host element when merging the same component across tabs', () => {
+    const pages = new Map();
+    const withTarget = (pageId: string): PipePageReport => ({
+      ...page(pageId),
+      pipes: [
+        {
+          ...page(pageId).pipes[0],
+          components: [{ name: 'ExamplePage', count: 3, targets: [{ pageId, id: 'c1' }] }],
+        },
+      ],
+    });
+    mergePipePageReport(pages, withTarget('tab-1'), 0);
+    const state = mergePipePageReport(pages, withTarget('tab-2'), 0);
+    expect(state.pipes[0].components).toEqual([
+      {
+        name: 'ExamplePage',
+        count: 6,
+        targets: [
+          { pageId: 'tab-1', id: 'c1' },
+          { pageId: 'tab-2', id: 'c1' },
+        ],
+      },
+    ]);
+  });
+
+  it('lists a host element once when two pipes with the same name use it', () => {
+    const pages = new Map();
+    const pipe = {
+      ...page('tab-1').pipes[0],
+      components: [{ name: 'ExamplePage', count: 1, targets: [{ pageId: 'tab-1', id: 'c1' }] }],
+    };
+    const state = mergePipePageReport(pages, { ...page('tab-1'), pipes: [pipe, pipe] }, 0);
+    expect(state.pipes[0].components[0].targets).toEqual([{ pageId: 'tab-1', id: 'c1' }]);
+  });
+
+  it('rejects a report whose targets are malformed', () => {
+    const report = page('tab-1');
+    expect(isPipePageReport(report)).toBe(true);
+    const bad = {
+      ...report,
+      pipes: [{ ...report.pipes[0], components: [{ name: 'X', count: 1, targets: [{ id: 1 }] }] }],
+    };
+    expect(isPipePageReport(bad)).toBe(false);
+    expect(isPipePageReport({ ...report, async: [{ ...report.async![0], target: 'c1' }] })).toBe(
+      false,
+    );
   });
 });

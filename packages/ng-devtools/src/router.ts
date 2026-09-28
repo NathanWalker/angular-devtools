@@ -1094,7 +1094,7 @@ export function currentNavigationOf(router: AnyRecord, at: number): NavigationRe
   };
 }
 
-function eventsOf(router: AnyRecord): AnyRecord | null {
+export function eventsOf(router: AnyRecord): AnyRecord | null {
   const internal = read(() => router['navigationTransitions']?.['events'] as AnyRecord, null);
   if (internal && typeof internal['subscribe'] === 'function') return internal;
   const events = read(() => router['events'] as AnyRecord, null);

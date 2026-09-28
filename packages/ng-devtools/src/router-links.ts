@@ -7,6 +7,7 @@ import {
   type AnyRecord,
   type RouterDebugApi,
 } from './router.ts';
+import { elementId } from './element-id.ts';
 
 export interface OutletInfo {
   outlet: string;
@@ -83,8 +84,7 @@ export function outletsOf(router: AnyRecord): OutletInfo[] {
         const element = elementOf(outlet);
         if (element) {
           info.element = element.tagName.toLowerCase();
-          const id = element.getAttribute('data-ng-devtools-id');
-          if (id) info.devtoolsId = id;
+          info.devtoolsId = elementId(element);
         }
         if (bindingOn) {
           const inputs = boundInputs(type, snapshot);
@@ -107,7 +107,25 @@ export function outletsOf(router: AnyRecord): OutletInfo[] {
   );
 }
 
-function isRouterLink(value: unknown): value is AnyRecord {
+const MATCH_KEYS = ['paths', 'matrixParams', 'queryParams', 'fragment'];
+
+export function matchOptionsOf(options: unknown): boolean | AnyRecord | null {
+  if (options === null) return null;
+  if (!options || typeof options !== 'object') return false;
+  const record = options as AnyRecord;
+  if (MATCH_KEYS.some((key) => !!record[key])) {
+    return {
+      paths: 'subset',
+      matrixParams: 'ignored',
+      queryParams: 'subset',
+      fragment: 'ignored',
+      ...record,
+    };
+  }
+  return !!record['exact'];
+}
+
+export function isRouterLink(value: unknown): value is AnyRecord {
   return read(() => 'urlTree' in (value as AnyRecord) && !!(value as AnyRecord)['router'], false);
 }
 
@@ -142,11 +160,8 @@ export function linksOf(ng: RouterDebugApi, router: AnyRecord): LinkInfo[] {
     const tree = read(() => link?.['urlTree'], null);
     if (tree) {
       info.href = redactUrl(read(() => String(router['serializeUrl'](tree)), ''));
-      const exact = read(
-        () => !!(active?.['routerLinkActiveOptions'] as AnyRecord)?.['exact'],
-        false,
-      );
-      info.active = read(() => !!router['isActive'](tree, exact), false);
+      const match = read(() => matchOptionsOf(active?.['routerLinkActiveOptions']), false);
+      info.active = match !== null && read(() => !!router['isActive'](tree, match), false);
     }
     if (active) {
       info.linkActive = read(() => !!active['isActive'], false);
@@ -154,6 +169,8 @@ export function linksOf(ng: RouterDebugApi, router: AnyRecord): LinkInfo[] {
       if (classes.length) info.activeClasses = classes.slice(0, 5);
       const options = read(() => active['routerLinkActiveOptions'] as AnyRecord, null);
       if (options && 'exact' in options) info.exact = !!options['exact'];
+      else if (options && MATCH_KEYS.some((key) => !!options[key]))
+        info.exact = options['paths'] === 'exact';
       const aria = read(() => active['ariaCurrentWhenActive'] as string | undefined, undefined);
       if (aria !== undefined) info.ariaCurrent = String(aria);
     }

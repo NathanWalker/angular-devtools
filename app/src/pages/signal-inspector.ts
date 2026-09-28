@@ -1,6 +1,8 @@
-import { Component, input, signal, effect, computed } from '@angular/core';
+import { Component, DestroyRef, computed, effect, inject, input, signal } from '@angular/core';
 import { DatePipe, JsonPipe } from '@angular/common';
 import type { DevframeRpcClient } from 'devframe/client';
+import { hostPageId } from '../page-id';
+import { Select, type SelectOption } from '../ui/select';
 
 interface SignalNode {
   id: string;
@@ -8,7 +10,6 @@ interface SignalNode {
   label?: string;
   epoch: number;
   value?: unknown;
-  watched: boolean;
 }
 
 interface SignalEdge {
@@ -28,8 +29,26 @@ interface SignalGraph {
   nodes: SignalNode[];
   edges: SignalEdge[];
   componentSelector?: string;
+  component?: { id: string; name: string; tag: string; path: string };
+  source?: 'selected' | 'routed' | 'root';
+  pageId?: string;
   history?: Record<string, SignalChange[]>;
 }
+
+interface LiveNode {
+  id: string;
+  name: string;
+  tag: string;
+  children: LiveNode[];
+}
+
+const FOLLOW = 'follow';
+
+const SOURCE_NOTES: Record<NonNullable<SignalGraph['source']>, string> = {
+  selected: 'picked',
+  routed: 'rendered by the router',
+  root: 'first component with signals',
+};
 
 const SOURCE_LABELS: Record<SignalChange['source'], string> = {
   write: 'set',
@@ -46,48 +65,117 @@ interface SourceSignal {
 }
 
 const KIND_COLORS: Record<string, string> = {
-  signal: '#a78bfa',
+  signal: '#facc15',
   computed: '#60a5fa',
   linkedSignal: '#34d399',
   effect: '#fb923c',
   template: '#94a3b8',
   afterRenderEffectPhase: '#f472b6',
-  childSignalProp: '#c084fc',
+  childSignalProp: '#fef08a',
   'input (signal)': '#f59e0b',
   'input.required (signal)': '#f59e0b',
   'output (signal)': '#ec4899',
   'model (signal)': '#14b8a6',
   'model.required (signal)': '#14b8a6',
-  'viewChild (signal)': '#8b5cf6',
-  'viewChild.required (signal)': '#8b5cf6',
-  'viewChildren (signal)': '#8b5cf6',
-  'contentChild (signal)': '#6366f1',
-  'contentChild.required (signal)': '#6366f1',
-  'contentChildren (signal)': '#6366f1',
+  'viewChild (signal)': '#a3e635',
+  'viewChild.required (signal)': '#a3e635',
+  'viewChildren (signal)': '#a3e635',
+  'contentChild (signal)': '#fda4af',
+  'contentChild.required (signal)': '#fda4af',
+  'contentChildren (signal)': '#fda4af',
   resource: '#06b6d4',
-  unknown: '#71717a',
+  unknown: 'var(--text-2)',
 };
 
 @Component({
   selector: 'app-signal-inspector',
-  imports: [DatePipe, JsonPipe],
+  imports: [DatePipe, JsonPipe, Select],
   template: `
     <div class="toolbar">
       <input
         type="text"
         placeholder="Filter by name or kind…"
+        aria-label="Filter signals by name or kind"
         [value]="filter()"
         (input)="filter.set($any($event.target).value)"
       />
-      <span class="label">Component: {{ graph()?.componentSelector ?? '—' }}</span>
+      @if (componentOptions().length) {
+        <div class="picker">
+          <span class="label-key" id="signals-component-label">Component</span>
+          <app-select
+            labelledBy="signals-component-label"
+            [options]="componentOptions()"
+            [value]="pickerValue()"
+            (valueChange)="pickComponent($event)"
+          />
+        </div>
+      }
     </div>
 
-    @if (!graph() && sourceSignals().length === 0) {
+    @if (graph()?.component; as comp) {
+      <p class="showing">
+        <span class="showing-name">{{ comp.name }}</span>
+        <span class="mono">{{ comp.path }}</span>
+        @if (graph()!.source) {
+          <span class="source-note">{{ sourceNote(graph()!.source!) }}</span>
+        }
+      </p>
+      @if (picked() && graph()!.source !== 'selected') {
+        <p class="fallback" role="status">
+          The picked component is gone or has no signal graph, so this shows another one.
+        </p>
+      }
+    }
+
+    <p class="intro">
+      @if (graph()) {
+        The live signal graph of one component. Only signals that its template or an effect has read
+        appear here; a signal nothing has read yet is not part of the graph. Pick a kind to filter.
+      } @else {
+        Every signal, computed and effect found in your source. Pick a kind to filter.
+      }
+    </p>
+    @if (kindCounts().length) {
+      <div class="kinds" role="group" aria-label="Filter by kind">
+        <button
+          type="button"
+          class="kind-chip"
+          [class.active]="!kind()"
+          [attr.aria-pressed]="!kind()"
+          (click)="kind.set(null)"
+        >
+          All <span class="count">{{ kindTotal() }}</span>
+        </button>
+        @for (group of kindCounts(); track group.kind) {
+          <button
+            type="button"
+            class="kind-chip"
+            [class.active]="kind() === group.kind"
+            [attr.aria-pressed]="kind() === group.kind"
+            (click)="kind.set(kind() === group.kind ? null : group.kind)"
+          >
+            <span class="dot" aria-hidden="true" [style.background]="kindColor(group.kind)"></span>
+            <span class="chip-text">{{ group.kind }}</span>
+            <span class="count">{{ group.count }}</span>
+          </button>
+        }
+      </div>
+    }
+
+    @if (!graph() && !sourceLoaded()) {
+      <div class="empty" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <p class="empty-title">Scanning source for signals…</p>
+      </div>
+    }
+
+    @if (!graph() && sourceLoaded() && sourceSignals().length === 0) {
       <div class="empty">
-        <p class="muted">No signals found.</p>
+        <p class="empty-title">No signals found.</p>
         <p class="hint">
-          No signal(), computed(), effect() calls found in source. Runtime graph requires Angular
-          19+ with the overlay connected.
+          No <code>signal()</code>, <code>computed()</code> or <code>effect()</code> calls were
+          found in your source. To see the live graph, run Angular 19+ with the overlay connected
+          and select a component.
         </p>
       </div>
     }
@@ -104,26 +192,26 @@ const KIND_COLORS: Record<string, string> = {
               <span class="node-label">{{ sig.name }}</span>
             </div>
             <div class="node-meta">
-              {{ sig.file }}:{{ sig.line }}
+              <span class="file" [title]="sig.file + ':' + sig.line"
+                >{{ sig.file }}:{{ sig.line }}</span
+              >
               @if (sig.component) {
-                · in &lt;{{ sig.component }}&gt;
+                <span class="sep" aria-hidden="true">·</span>
+                <span>in &lt;{{ sig.component }}&gt;</span>
               }
             </div>
+          </div>
+        } @empty {
+          <div class="empty compact" role="status">
+            <p class="empty-title">No signals match.</p>
+            <p class="hint">Try a different name or kind.</p>
+            <button type="button" class="reset" (click)="clearFilters()">Clear filters</button>
           </div>
         }
       </div>
     }
 
     @if (graph()) {
-      <div class="legend">
-        @for (entry of kindLegend; track entry.kind) {
-          <span class="legend-item">
-            <span class="dot" [style.background]="entry.color"></span>
-            {{ entry.kind }}
-          </span>
-        }
-      </div>
-
       <ul class="nodes" role="list">
         @for (node of filteredNodes(); track node.id) {
           <li>
@@ -140,31 +228,31 @@ const KIND_COLORS: Record<string, string> = {
                   node.kind
                 }}</span>
                 <span class="node-label">{{ node.label ?? '(unnamed)' }}</span>
-                @if (node.watched) {
-                  <span class="watched-badge">watching</span>
-                }
                 @if (changeCount(node.id); as count) {
                   <span class="changed-badge"
                     >{{ count }} {{ count === 1 ? 'change' : 'changes' }}</span
                   >
                 }
+                <span class="chevron" aria-hidden="true"></span>
               </span>
               @if (node.value !== undefined) {
                 <span class="node-value">{{ node.value | json }}</span>
               }
               <span class="node-meta">
-                Epoch: {{ node.epoch }}
+                <span>Epoch: {{ node.epoch }}</span>
                 @if (getDependencies(node).length) {
-                  · Deps: {{ getDependencies(node).length }}
+                  <span class="sep" aria-hidden="true">·</span>
+                  <span>Deps: {{ getDependencies(node).length }}</span>
                 }
                 @if (getConsumers(node).length) {
-                  · Consumers: {{ getConsumers(node).length }}
+                  <span class="sep" aria-hidden="true">·</span>
+                  <span>Consumers: {{ getConsumers(node).length }}</span>
                 }
               </span>
             </button>
             @if (selectedId() === node.id && selectedNode()) {
               <div class="detail-panel" [id]="'signal-detail-' + node.id">
-                <h3>{{ selectedNode()!.label ?? selectedNode()!.id }}</h3>
+                <h2>{{ selectedNode()!.label ?? selectedNode()!.id }}</h2>
                 <dl>
                   <dt>Kind</dt>
                   <dd>{{ selectedNode()!.kind }}</dd>
@@ -178,33 +266,33 @@ const KIND_COLORS: Record<string, string> = {
                   }
                 </dl>
                 @if (getDependencies(selectedNode()!).length) {
-                  <h4>Dependencies (producers)</h4>
+                  <h3>Dependencies (producers)</h3>
                   <ul>
                     @for (dep of getDependencies(selectedNode()!); track dep.id) {
                       <li>
                         <span class="kind-badge sm" [style.background]="kindColor(dep.kind)">{{
                           dep.kind
                         }}</span>
-                        {{ dep.label ?? dep.id }}
+                        <span class="rel-label">{{ dep.label ?? dep.id }}</span>
                       </li>
                     }
                   </ul>
                 }
                 @if (getConsumers(selectedNode()!).length) {
-                  <h4>Consumers</h4>
+                  <h3>Consumers</h3>
                   <ul>
                     @for (con of getConsumers(selectedNode()!); track con.id) {
                       <li>
                         <span class="kind-badge sm" [style.background]="kindColor(con.kind)">{{
                           con.kind
                         }}</span>
-                        {{ con.label ?? con.id }}
+                        <span class="rel-label">{{ con.label ?? con.id }}</span>
                       </li>
                     }
                   </ul>
                 }
                 @if (selectedHistory().length) {
-                  <h4 id="value-history-heading">Value history</h4>
+                  <h3 id="value-history-heading">Value history</h3>
                   <p class="history-summary" aria-live="polite">
                     {{ changeCount(selectedNode()!.id) }} changes recorded, newest first.
                   </p>
@@ -229,70 +317,307 @@ const KIND_COLORS: Record<string, string> = {
               </div>
             }
           </li>
+        } @empty {
+          <li class="empty compact">
+            <p class="empty-title">
+              {{ graph()!.nodes.length ? 'No signals match.' : 'No signals in this component.' }}
+            </p>
+            <p class="hint">
+              {{
+                graph()!.nodes.length
+                  ? 'Try a different name or kind.'
+                  : 'Select a component that reads signals, or interact with the page to create some.'
+              }}
+            </p>
+            @if (graph()!.nodes.length) {
+              <button type="button" class="reset" (click)="clearFilters()">Clear filters</button>
+            }
+          </li>
         }
       </ul>
     }
   `,
   styles: `
+    @use 'mixins' as m;
+
+    :host {
+      display: block;
+      min-width: 0;
+      color: var(--text);
+      font-size: 13px;
+    }
     .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 2;
       display: flex;
-      gap: 12px;
+      flex-wrap: wrap;
+      gap: 8px 12px;
       align-items: center;
-      margin-bottom: 16px;
+      margin: 0 0 16px;
+      padding: 10px 12px;
+      background: color-mix(in srgb, var(--surface) 85%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
     }
     input {
-      flex: 1;
-      padding: 8px 12px;
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 6px;
-      color: #e4e4e7;
-      font-size: 14px;
-      outline: none;
-    }
-    input:focus {
-      border-color: var(--accent);
-    }
-    .label {
+      flex: 1 1 200px;
+      min-width: 0;
+      height: 34px;
+      padding: 0 12px;
+      background: var(--bg);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font: inherit;
       font-size: 13px;
-      color: #71717a;
-      white-space: nowrap;
+      outline: none;
+      transition:
+        border-color 0.15s var(--ease),
+        box-shadow 0.15s var(--ease);
+    }
+    input::placeholder {
+      color: var(--text-3);
+    }
+    input:hover {
+      border-color: color-mix(in srgb, var(--text-3) 60%, var(--border-strong));
+    }
+    input:focus-visible {
+      @include m.field-focus;
     }
     .empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
       text-align: center;
-      padding: 48px 16px;
+      padding: 40px 24px;
+      @include m.panel;
+      @include m.enter;
     }
-    .muted {
-      color: #71717a;
+    .empty.compact {
+      padding: 24px 16px;
+      border-style: dashed;
+      background: transparent;
+    }
+    .empty-title {
+      margin: 0;
+      color: var(--text-strong);
       font-size: 14px;
+      font-weight: 600;
     }
     .hint {
-      color: #52525b;
-      font-size: 12px;
-      margin-top: 8px;
-    }
-    .source-label {
+      max-width: 460px;
+      margin: 0;
+      color: var(--text-2);
       font-size: 13px;
-      color: #71717a;
-      margin-bottom: 12px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
     }
-    .legend {
+    .hint code {
+      padding: 1px 5px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text);
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+    }
+    .reset {
+      height: 34px;
+      margin-top: 4px;
+      padding: 0 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition:
+        background-color 0.15s var(--ease),
+        border-color 0.15s var(--ease);
+    }
+    .reset:hover {
+      background: var(--surface-3);
+    }
+    .reset:focus-visible {
+      @include m.focus-ring;
+    }
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--border-strong);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner {
+        animation: none;
+        border-top-color: var(--border-strong);
+      }
+    }
+    .intro {
+      margin: 0 0 12px;
+      color: var(--text-2);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .kinds {
       display: flex;
-      gap: 12px;
       flex-wrap: wrap;
+      gap: 6px;
       margin-bottom: 16px;
     }
-    .legend-item {
-      display: flex;
+    .kind-chip {
+      display: inline-flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
+      max-width: 100%;
+      height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      background: var(--surface-2);
+      color: var(--text-2);
+      font: inherit;
       font-size: 12px;
-      color: #a1a1aa;
+      font-weight: 500;
+      cursor: pointer;
+      transition:
+        background-color 0.15s var(--ease),
+        border-color 0.15s var(--ease),
+        color 0.15s var(--ease);
+    }
+    .kind-chip:hover {
+      border-color: var(--border-strong);
+      background: var(--surface-3);
+      color: var(--text);
+    }
+    .kind-chip:active {
+      transform: translateY(0.5px);
+    }
+    .kind-chip.active {
+      border-color: var(--accent-line);
+      background: var(--accent-soft);
+      color: var(--text-strong);
+    }
+    .kind-chip:focus-visible {
+      @include m.focus-ring;
+    }
+    .chip-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .kind-chip .count {
+      flex: none;
+      min-width: 18px;
+      padding: 0 5px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      color: var(--text-2);
+      font-size: 11px;
+      line-height: 16px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+    .kind-chip.active .count {
+      background: color-mix(in srgb, var(--accent) 22%, transparent);
+      color: var(--text-strong);
     }
     .dot {
+      flex: none;
       width: 8px;
       height: 8px;
       border-radius: 50%;
+    }
+    .node-header {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      min-width: 0;
+    }
+    .kind-badge {
+      flex: none;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 10.5px;
+      line-height: 18px;
+      padding: 0 8px;
+      border-radius: 99px;
+      color: var(--bg);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .node-label {
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-strong);
+      overflow-wrap: anywhere;
+    }
+    .node-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 2px 6px;
+      min-width: 0;
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--text-3);
+      font-variant-numeric: tabular-nums;
+    }
+    .node-meta .file {
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      overflow-wrap: anywhere;
+    }
+    .sep {
+      color: var(--border-strong);
+    }
+    dl {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 8px 16px;
+      margin: 0;
+      font-size: 13px;
+    }
+    dt {
+      @include m.label;
+      padding-top: 2px;
+    }
+    dd {
+      min-width: 0;
+      margin: 0;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    pre {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      margin: 0;
+      color: var(--text);
     }
     .nodes {
       display: flex;
@@ -301,179 +626,312 @@ const KIND_COLORS: Record<string, string> = {
       list-style: none;
       padding: 0;
       margin: 0;
+      @include m.enter;
     }
     .node-card {
       display: block;
       width: 100%;
+      min-width: 0;
       text-align: left;
       font: inherit;
       color: inherit;
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
       padding: 12px 16px;
-      cursor: pointer;
-      transition: border-color 0.15s;
+      transition:
+        background-color 0.15s var(--ease),
+        border-color 0.15s var(--ease),
+        box-shadow 0.15s var(--ease);
     }
     .node-card:hover {
-      border-color: #3f3f46;
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+    }
+    .picker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1 1 260px;
+      min-width: 0;
+    }
+    .picker app-select {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .label-key {
+      flex: none;
+      color: var(--text-2);
+      font-size: 12px;
+    }
+    .showing {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 4px 10px;
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--text-2);
+    }
+    .showing-name {
+      color: var(--text-strong);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .mono {
+      font-family: var(--font-mono);
+      overflow-wrap: anywhere;
+    }
+    .source-note {
+      padding: 0 8px;
+      border: 1px solid var(--border-strong);
+      border-radius: 99px;
+      line-height: 18px;
+    }
+    .fallback {
+      margin: 0 0 8px;
+      color: var(--warn);
+      font-size: 12px;
+    }
+    .source-label {
+      @include m.label;
+      margin: 0 0 12px;
+    }
+    .nodes > li {
+      display: block;
+      min-width: 0;
+      padding: 0;
+    }
+    button.node-card {
+      cursor: pointer;
     }
     .node-card:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
+      @include m.focus-ring;
     }
-    .node-value,
-    .node-meta {
+    .node-card.selected {
+      background: var(--accent-soft);
+      border-color: var(--accent-line);
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+    .chevron {
+      flex: none;
+      width: 7px;
+      height: 7px;
+      margin-left: auto;
+      border-right: 1.5px solid var(--text-3);
+      border-bottom: 1.5px solid var(--text-3);
+      transform: translateY(-2px) rotate(45deg);
+      transition:
+        transform 0.2s var(--ease),
+        border-color 0.15s var(--ease);
+    }
+    .node-card:hover .chevron {
+      border-color: var(--text);
+    }
+    .node-card.selected .chevron {
+      border-color: var(--accent);
+      transform: translateY(2px) rotate(-135deg);
+    }
+    .node-value {
       display: block;
+      margin-top: 8px;
+      padding: 4px 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-2);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .node-card.selected .node-value {
+      background: color-mix(in srgb, var(--bg) 70%, transparent);
+    }
+    .kind-badge.sm {
+      font-size: 10px;
+      line-height: 16px;
+      padding: 0 6px;
     }
     .changed-badge {
-      font-size: 10px;
-      padding: 1px 6px;
-      border-radius: 4px;
-      background: #422006;
-      color: #fbbf24;
+      flex: none;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 16px;
+      padding: 0 8px;
+      border: 1px solid;
+      border-radius: 99px;
+      font-variant-numeric: tabular-nums;
     }
-    .history-summary {
-      font-size: 12px;
-      color: #a1a1aa;
-      margin: 0 0 6px;
+    .changed-badge {
+      @include m.soft(var(--warn));
     }
-    .history {
+    .detail-panel {
+      margin-top: 8px;
+      padding: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      @include m.enter(0.25s);
+    }
+    .detail-panel h2 {
+      margin: 0 0 16px;
+      font-family: var(--font-mono);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+      overflow-wrap: anywhere;
+    }
+    .detail-panel h3 {
+      @include m.label;
+      margin: 20px 0 8px;
+    }
+    .detail-panel dd pre {
+      max-height: 240px;
+      overflow: auto;
+      padding: 8px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .detail-panel ul {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
       list-style: none;
       padding: 0;
       margin: 0;
+      font-size: 13px;
+    }
+    .detail-panel ul li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      min-height: 28px;
+      padding: 4px 8px;
+      color: var(--text-2);
+      border-radius: 6px;
+      transition: background-color 0.15s var(--ease);
+    }
+    .detail-panel ul li:hover {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+    .rel-label {
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      overflow-wrap: anywhere;
+    }
+    .history-summary {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--text-2);
+      font-variant-numeric: tabular-nums;
+    }
+    .history {
+      list-style: none;
+      padding: 4px;
+      margin: 0;
       max-height: 320px;
       overflow: auto;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
     }
     .history li {
       display: block;
-      padding: 6px 0;
-      border-top: 1px solid #27272a;
+      padding: 8px;
+      border-radius: 6px;
+      transition: background-color 0.15s var(--ease);
+    }
+    .history li + li {
+      border-top: 1px solid var(--border);
+    }
+    .history li:hover {
+      background: var(--surface-3);
     }
     .history-meta {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 4px 8px;
       align-items: center;
+      margin-bottom: 4px;
       font-size: 11px;
-      color: #a1a1aa;
-      margin-bottom: 2px;
+      color: var(--text-2);
+      font-variant-numeric: tabular-nums;
+    }
+    .history-meta time {
+      font-family: var(--font-mono);
+      color: var(--text);
     }
     .source-tag {
-      padding: 0 5px;
-      border-radius: 3px;
-      background: #27272a;
-      color: #e4e4e7;
+      line-height: 16px;
+      padding: 0 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      border: 1px solid var(--border-strong);
+      color: var(--text);
     }
     .source-write {
-      background: #1e3a8a;
-      color: #dbeafe;
+      color: #93c5fd;
+      background: color-mix(in srgb, #60a5fa 12%, transparent);
+      border-color: color-mix(in srgb, #60a5fa 30%, transparent);
     }
     .missed {
-      color: #fbbf24;
+      color: var(--warn);
     }
-    .node-card.selected {
-      border-color: var(--accent);
-    }
-    .node-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .kind-badge {
-      font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 4px;
-      color: #fff;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .kind-badge.sm {
-      font-size: 10px;
-      padding: 1px 5px;
-    }
-    .node-label {
-      font-family: monospace;
-      font-size: 14px;
-      color: #e4e4e7;
-    }
-    .watched-badge {
-      font-size: 10px;
-      padding: 1px 6px;
-      border-radius: 4px;
-      background: #14532d;
-      color: #4ade80;
-    }
-    .node-value {
-      font-family: monospace;
-      font-size: 12px;
-      color: #a1a1aa;
-      margin-top: 4px;
-      max-height: 40px;
-      overflow: hidden;
-    }
-    .node-meta {
-      font-size: 11px;
-      color: #52525b;
-      margin-top: 4px;
-    }
-    .detail-panel {
-      margin-top: 16px;
-      padding: 16px;
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 8px;
-    }
-    .detail-panel h3 {
-      font-family: monospace;
-      color: var(--accent);
-      margin-bottom: 12px;
-    }
-    .detail-panel h4 {
-      font-size: 12px;
-      color: #71717a;
-      margin: 12px 0 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    dl {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 4px 12px;
-      font-size: 13px;
-    }
-    dt {
-      color: #71717a;
-    }
-    dd {
-      color: #e4e4e7;
-    }
-    pre {
-      font-size: 12px;
-      white-space: pre-wrap;
-      margin: 0;
-    }
-    ul {
-      list-style: none;
-      padding: 0;
-      font-size: 13px;
-    }
-    li {
-      padding: 2px 0;
-      color: #a1a1aa;
-      display: flex;
-      align-items: center;
-      gap: 6px;
+    @media (max-width: 480px) {
+      .toolbar {
+        padding: 8px;
+      }
+      .toolbar input,
+      .picker {
+        flex-basis: 100%;
+      }
+      .node-card,
+      .detail-panel {
+        padding: 12px;
+      }
+      dl {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+      }
+      dd + dt {
+        margin-top: 8px;
+      }
     }
   `,
 })
 export class SignalInspector {
   rpc = input<DevframeRpcClient | null>(null);
 
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly pageId = hostPageId();
+  private readonly cleanups: (() => void)[] = [];
+  private readonly treePages = signal<Record<string, { roots?: LiveNode[]; reportedAt?: number }>>(
+    {},
+  );
+  readonly picked = signal<string | null>(null);
+
   graph = signal<SignalGraph | null>(null);
   sourceSignals = signal<SourceSignal[]>([]);
+  sourceLoaded = signal(false);
   filter = signal('');
+  kind = signal<string | null>(null);
+  kindCounts = computed(() => {
+    const kinds: string[] = this.graph()
+      ? (this.graph()?.nodes ?? []).map((n) => n.kind)
+      : this.sourceSignals().map((s) => s.kind);
+    const counts = new Map<string, number>();
+    for (const k of kinds) counts.set(k, (counts.get(k) ?? 0) + 1);
+    return [...counts].map(([kind, count]) => ({ kind, count }));
+  });
+  kindTotal = computed(() => this.kindCounts().reduce((sum, g) => sum + g.count, 0));
   selectedId = signal<string | null>(null);
   selectedNode = computed(
     () => this.graph()?.nodes.find((n) => n.id === this.selectedId()) ?? null,
@@ -489,44 +947,133 @@ export class SignalInspector {
     const g = this.graph();
     if (!g) return [];
     const q = this.filter().toLowerCase();
-    const nodes = q
-      ? g.nodes.filter((n) => (n.label ?? '').toLowerCase().includes(q) || n.kind.includes(q))
-      : [...g.nodes];
+    const kind = this.kind();
+    const nodes = g.nodes.filter(
+      (n) =>
+        (!kind || n.kind === kind) &&
+        (!q || (n.label ?? '').toLowerCase().includes(q) || n.kind.toLowerCase().includes(q)),
+    );
     // Angular orders nodes by last read order, which changes between polls; ids are stable.
     return nodes.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
   });
 
   filteredSourceSignals = computed(() => {
     const q = this.filter().toLowerCase();
-    const all = this.sourceSignals();
-    return q
-      ? all.filter(
-          (s) => s.name.toLowerCase().includes(q) || s.kind.includes(q) || s.file.includes(q),
-        )
-      : all;
+    const kind = this.kind();
+    return this.sourceSignals().filter(
+      (s) =>
+        (!kind || s.kind === kind) &&
+        (!q ||
+          s.name.toLowerCase().includes(q) ||
+          s.kind.toLowerCase().includes(q) ||
+          s.file.toLowerCase().includes(q)),
+    );
+  });
+
+  private readonly targetPageId = computed(
+    () => this.pageId ?? this.graph()?.pageId ?? this.latestTreePage()?.pageId ?? null,
+  );
+
+  private readonly latestTreePage = computed(() => {
+    let latest: { pageId: string; reportedAt: number } | null = null;
+    for (const [pageId, page] of Object.entries(this.treePages())) {
+      const at = page.reportedAt ?? 0;
+      if (!latest || at > latest.reportedAt) latest = { pageId, reportedAt: at };
+    }
+    return latest;
+  });
+
+  readonly componentOptions = computed<SelectOption[]>(() => {
+    const pageId = this.targetPageId();
+    const roots = (pageId ? this.treePages()[pageId]?.roots : undefined) ?? [];
+    const flat: LiveNode[] = [];
+    const walk = (nodes: LiveNode[]) => {
+      for (const node of nodes) {
+        flat.push(node);
+        walk(node.children);
+      }
+    };
+    walk(roots);
+    if (!flat.length) return [];
+    const totals = new Map<string, number>();
+    for (const node of flat) totals.set(node.name, (totals.get(node.name) ?? 0) + 1);
+    const seen = new Map<string, number>();
+    const options: SelectOption[] = [
+      { value: FOLLOW, label: 'Follow the routed component', hint: 'automatic' },
+    ];
+    for (const node of flat) {
+      const n = (seen.get(node.name) ?? 0) + 1;
+      seen.set(node.name, n);
+      options.push({
+        value: node.id,
+        label: (totals.get(node.name) ?? 0) > 1 ? `${node.name} #${n}` : node.name,
+        hint: `<${node.tag}>`,
+      });
+    }
+    return options;
+  });
+
+  readonly pickerValue = computed(() => {
+    const picked = this.picked();
+    return picked && this.componentOptions().some((o) => o.value === picked) ? picked : FOLLOW;
   });
 
   constructor() {
     effect(() => {
       const client = this.rpc();
       if (!client) return;
-      this.loadSignalGraph(client);
-      this.loadSourceSignals(client);
+      void this.loadSignalGraph(client);
+      void this.loadSourceSignals(client);
+    });
+    this.destroyRef.onDestroy(() => {
+      for (const cleanup of this.cleanups.splice(0)) cleanup();
     });
   }
 
   async loadSignalGraph(client: DevframeRpcClient) {
+    for (const cleanup of this.cleanups.splice(0)) cleanup();
     const my = client.scope('ng-devtools');
-    const state = await my.rpc.sharedState('signal-graph');
-    // Each open page pushes its own graph; show the one hosting this panel.
-    const pageId = new URLSearchParams(location.search).get('pageId');
-    const pick = (val: any) => (pageId && val?.pages?.[pageId]) || val?.graph;
-    const initial = pick(state.value());
-    if (initial) this.graph.set(initial);
-    state.on('updated', (next: any) => {
-      const graph = pick(next);
-      if (graph) this.graph.set(graph);
-    });
+    try {
+      const state = await my.rpc.sharedState('signal-graph');
+      if (this.destroyRef.destroyed) return;
+      const apply = (value: unknown) => {
+        const next = value as { graph?: SignalGraph | null; pages?: Record<string, SignalGraph> };
+        const graph = (this.pageId ? next?.pages?.[this.pageId] : next?.graph) ?? null;
+        if (graph?.component?.id !== this.graph()?.component?.id) this.selectedId.set(null);
+        this.graph.set(graph);
+      };
+      apply(state.value());
+      this.cleanups.push(state.on('updated', apply));
+    } catch {
+      this.graph.set(null);
+    }
+    try {
+      const tree = await my.rpc.sharedState('component-tree');
+      if (this.destroyRef.destroyed) return;
+      const applyTree = (value: unknown) => {
+        const pages = (value as { pages?: Record<string, { roots?: LiveNode[] }> } | null)?.pages;
+        this.treePages.set(pages && typeof pages === 'object' ? pages : {});
+      };
+      applyTree(tree.value());
+      this.cleanups.push(tree.on('updated', applyTree));
+    } catch {
+      this.treePages.set({});
+    }
+  }
+
+  pickComponent(value: string | null) {
+    const id = value && value !== FOLLOW ? value : null;
+    this.picked.set(id);
+    const client = this.rpc();
+    if (!client) return;
+    void client
+      .scope('ng-devtools')
+      .rpc.call('select-signal-target', { pageId: this.targetPageId() ?? undefined, id })
+      .catch(() => {});
+  }
+
+  sourceNote(source: NonNullable<SignalGraph['source']>) {
+    return SOURCE_NOTES[source];
   }
 
   async loadSourceSignals(client: DevframeRpcClient) {
@@ -536,7 +1083,14 @@ export class SignalInspector {
       this.sourceSignals.set(result);
     } catch {
       // RPC not available
+    } finally {
+      this.sourceLoaded.set(true);
     }
+  }
+
+  clearFilters() {
+    this.filter.set('');
+    this.kind.set(null);
   }
 
   selectNode(node: SignalNode) {

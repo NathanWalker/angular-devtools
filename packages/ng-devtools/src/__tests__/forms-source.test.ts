@@ -36,4 +36,39 @@ describe('form source scan', () => {
     expect(formSourceIn(file, 'a.ts', 'Account', 'account', '0')?.rules).toEqual([]);
     expect(formSourceIn(file, 'a.ts', 'Missing', 'x', '')).toBeNull();
   });
+
+  it('follows schema constants declared outside the class, in the file or elsewhere', () => {
+    const page = `import { ADDRESS } from './address';
+const PROFILE = schema<Profile>((p) => {
+  required(p.email);
+  apply(p.address, ADDRESS);
+});
+
+export class ProfilePage {
+  profile = form(this.model, PROFILE);
+}
+`;
+    const other = `export const ADDRESS = schema<Address>((a) => {
+  required(a.city);
+});
+`;
+    const lookup = (name: string) =>
+      name === 'ADDRESS' ? { content: other, file: 'src/address.ts' } : null;
+    const email = formSourceIn(page, 'src/profile.ts', 'ProfilePage', 'profile', 'email', lookup);
+    expect(email?.schemas?.map((s) => [s.name, s.file, s.line])).toEqual([
+      ['PROFILE', 'src/profile.ts', 2],
+      ['ADDRESS', 'src/address.ts', 1],
+    ]);
+    expect(email?.rules.map((r) => [r.file, r.line])).toEqual([['src/profile.ts', 3]]);
+    const city = formSourceIn(
+      page,
+      'src/profile.ts',
+      'ProfilePage',
+      'profile',
+      'address.city',
+      lookup,
+    );
+    expect(city?.rules.map((r) => [r.file, r.line])).toEqual([['src/address.ts', 2]]);
+    expect(sourceText(city)).toContain('Schema ADDRESS at src/address.ts:1');
+  });
 });

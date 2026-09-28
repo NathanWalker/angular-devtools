@@ -1,0 +1,42 @@
+@use 'sass:map';
+
+$neutrals: (
+  bg: #0b0b0e,
+  surface: #131317,
+  surface-2: #1a1a20,
+  surface-3: #222229,
+  border: #25252c,
+  border-strong: #34343d,
+  text: #ececf1,
+  text-strong: #fafafa,
+  text-2: #a1a1aa,
+  text-3: #8e8e99,
+);
+
+$accents: (
+  amber: (
+    base: #f5a524,
+    hover: #fbbf4d,
+    ink: #1c1300,
+  ),
+  ember: (
+    base: #fb7a3c,
+    hover: #fd9a67,
+    ink: #1f0a00,
+  ),
+  gold: (
+    base: #eab308,
+    hover: #facc15,
+    ink: #1a1400,
+  ),
+);
+
+$status: (
+  ok: #4ade80,
+  warn: #fbbf24,
+  danger: #f87171,
+);
+
+@function accent($name, $key) {
+  @return map.get(map.get($accents, $name), $key);
+}

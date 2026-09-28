@@ -307,6 +307,7 @@ const OPTIONAL_TYPES: Record<string, string> = {
   binding: 'object',
   dom: 'object',
   modelDrift: 'object',
+  name: 'string',
 };
 
 function optionalOk(node: Record<string, unknown>): boolean {
@@ -318,6 +319,7 @@ function optionalOk(node: Record<string, unknown>): boolean {
   for (const key of ['validatorNames', 'asyncValidatorNames', 'stale']) {
     if (node[key] !== undefined && !isStringArray(node[key])) return false;
   }
+  if (node['metadata'] !== undefined && !Array.isArray(node['metadata'])) return false;
   return true;
 }
 
@@ -353,6 +355,15 @@ function isCollectedForm(value: unknown): boolean {
     (form.submitDom === undefined ||
       (isRecord(form.submitDom) &&
         isStringArray((form.submitDom as { reasons?: unknown }).reasons))) &&
+    (form.errorSummary === undefined ||
+      (Array.isArray(form.errorSummary) &&
+        form.errorSummary.every(
+          (entry) =>
+            isRecord(entry) &&
+            typeof entry.path === 'string' &&
+            typeof entry.kind === 'string' &&
+            typeof entry.message === 'string',
+        ))) &&
     isFieldNode(form.root)
   );
 }

@@ -52,7 +52,7 @@ export function lintForm(
   for (const reason of form.submitDom?.reasons ?? []) {
     add(
       'submit-unreachable',
-      'warning',
+      'info',
       undefined,
       reason,
       'Add a type="submit" button inside the <form>, or link it with form="id".',

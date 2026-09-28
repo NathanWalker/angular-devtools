@@ -1,4 +1,12 @@
-import { DEVTOOLS_HEADER, devOrigin, onCalls, recentCalls } from '../analog-server-log.ts';
+import {
+  DEVTOOLS_HEADER,
+  clearCalls,
+  devOrigin,
+  duplicateLoads,
+  onCalls,
+  recentCalls,
+  type AnalogCall,
+} from '../analog-server-log.ts';
 import { explainUrl, scanAnalog, type AnalogProject } from './analog-scan.ts';
 import {
   analogApiRoutesText,
@@ -15,6 +23,7 @@ import {
   mergeAnalogReport,
   prerenderPlan,
   renderRows,
+  resolveAnalogReport,
   type AnalogState,
 } from './analog-tools.ts';
 
@@ -23,6 +32,9 @@ type AnyRecord = Record<string, any>;
 const SCAN_CACHE_MS = 2000;
 const CALL_TIMEOUT_MS = 10_000;
 const MAX_BODY = 2000;
+const PAGE_TTL_MS = 15_000;
+
+let disposeAnalog: (() => void) | undefined;
 
 interface Scoped {
   rpc: {
@@ -91,19 +103,49 @@ export async function callApi(request: ApiRequest, origin = devOrigin()): Promis
   }
 }
 
+export function stopAnalog() {
+  disposeAnalog?.();
+  disposeAnalog = undefined;
+}
+
 export async function registerAnalog(my: Scoped, ctx: AgentHost) {
+  disposeAnalog?.();
   const state = await my.rpc.sharedState('analog', {
-    initialValue: { pages: [], calls: [], reportedAt: 0 } as AnalogState,
+    initialValue: { pages: [], calls: [], duplicates: [], reportedAt: 0 } as AnalogState,
   });
   const current = () => state['value']() as AnalogState;
   const apply = (next: AnalogState) =>
     state['mutate']((draft: AnalogState) => {
       draft.pages = next.pages;
       draft.calls = next.calls;
+      draft.duplicates = next.duplicates;
       draft.reportedAt = next.reportedAt;
     });
-  apply({ ...current(), calls: recentCalls() });
-  onCalls((calls) => apply({ ...current(), calls }));
+  const withCalls = (calls: AnalogCall[]) =>
+    apply({ ...current(), calls, duplicates: duplicateLoads(calls) });
+  withCalls(recentCalls());
+  const stopCalls = onCalls(withCalls);
+
+  const seenAt = new Map<string, number>();
+  const dropPages = (ids: string[]) => {
+    if (!ids.length) return;
+    for (const id of ids) seenAt.delete(id);
+    const now = current();
+    apply({ ...now, pages: now.pages.filter((p) => !ids.includes(p.pageId)) });
+  };
+  const expiry = setInterval(() => {
+    const now = Date.now();
+    dropPages(
+      current()
+        .pages.map((p) => p.pageId)
+        .filter((id) => now - (seenAt.get(id) ?? 0) > PAGE_TTL_MS),
+    );
+  }, 5000);
+  expiry.unref?.();
+  disposeAnalog = () => {
+    clearInterval(expiry);
+    stopCalls();
+  };
 
   let cache: { at: number; project: AnalogProject } | null = null;
   const project = () => {
@@ -118,8 +160,24 @@ export async function registerAnalog(my: Scoped, ctx: AgentHost) {
     type: 'action',
     jsonSerializable: true,
     handler: (report: unknown) => {
-      if (isAnalogReport(report)) apply(mergeAnalogReport(current(), report));
+      if (!isAnalogReport(report)) return;
+      seenAt.set(report.pageId, Date.now());
+      apply(mergeAnalogReport(current(), resolveAnalogReport(project(), report)));
     },
+  });
+  my.rpc.register({
+    name: 'forget-analog-page',
+    type: 'action',
+    jsonSerializable: true,
+    handler: (pageId: unknown) => {
+      if (typeof pageId === 'string') dropPages([pageId]);
+    },
+  });
+  my.rpc.register({
+    name: 'analog-clear-calls',
+    type: 'action',
+    jsonSerializable: true,
+    handler: () => clearCalls(),
   });
   my.rpc.register({
     name: 'analog-project',

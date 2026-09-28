@@ -1,5 +1,6 @@
 import type { HttpCall, HttpRule } from './http-rules.ts';
 import type { PayloadSummary } from './http-payload.ts';
+import type { HydrationMismatch } from './http-hydration.ts';
 
 export interface ComponentNode {
   id: string;
@@ -35,7 +36,6 @@ export interface SignalGraphNode {
   label?: string;
   epoch: number;
   value?: unknown;
-  watched: boolean;
 }
 
 export interface SignalGraphEdge {
@@ -54,12 +54,63 @@ export interface SignalChange {
   missed?: number;
 }
 
+export interface SignalGraphComponent {
+  id: string;
+  name: string;
+  tag: string;
+  path: string;
+}
+
 export interface SignalGraph {
   nodes: SignalGraphNode[];
   edges: SignalGraphEdge[];
   componentSelector?: string;
+  component?: SignalGraphComponent;
+  source?: 'selected' | 'routed' | 'root';
+  pageId?: string;
   /** Recent value changes, keyed by node id, oldest first. */
   history?: Record<string, SignalChange[]>;
+}
+
+export interface LiveComponentNode {
+  id: string;
+  name: string;
+  tag: string;
+  directives?: string[];
+  children: LiveComponentNode[];
+}
+
+export interface ComponentProp {
+  name: string;
+  prop: string;
+  value?: unknown;
+  listened?: boolean;
+}
+
+export interface ComponentDetail {
+  id: string;
+  name: string;
+  tag: string;
+  path: string;
+  changeDetection?: string;
+  encapsulation?: string;
+  inputs: ComponentProp[];
+  outputs: ComponentProp[];
+  listeners: string[];
+  directives: { name: string; inputs: ComponentProp[]; outputs: ComponentProp[] }[];
+  dependencies: DependencyInfo[];
+}
+
+export interface ComponentTreeReport {
+  pageId: string;
+  roots: LiveComponentNode[];
+  count: number;
+  truncated?: boolean;
+  detail: ComponentDetail | null;
+}
+
+export interface ComponentPage extends ComponentTreeReport {
+  reportedAt: number;
 }
 
 export interface InjectorInfo {
@@ -67,18 +118,43 @@ export interface InjectorInfo {
   type: 'element' | 'environment' | 'null';
   name: string;
   providerCount: number;
+  component?: string;
+  directives?: string[];
+  selector?: string;
+  path?: string[];
 }
 
 export interface ProviderInfo {
   token: string;
   type: 'class' | 'value' | 'factory' | 'existing' | 'unknown';
   isViewProvider: boolean;
+  multi?: boolean;
+  importPath?: string[];
+}
+
+export interface DependencyInfo {
+  from: string;
+  token: string;
+  flags: string[];
+  providedBy: string | null;
+  providedByName?: string;
 }
 
 export interface InjectorTreeNode {
   injector: InjectorInfo;
   providers: ProviderInfo[];
   children: InjectorTreeNode[];
+  dependencies?: DependencyInfo[];
+}
+
+export interface InjectorTreeReport {
+  roots: InjectorTreeNode[];
+  environment: InjectorTreeNode[];
+}
+
+export interface InjectorPage extends InjectorTreeReport {
+  pageId: string;
+  reportedAt: number;
 }
 
 // --- NgRx Store types ---
@@ -152,17 +228,22 @@ export interface HydrationStats {
   hydratedNodes?: number;
   componentsSkippedHydration?: number;
   deferBlocksWithIncrementalHydration?: number;
+  nodes?: { hydrated: number; skipped: number; mismatched: number };
+  mismatches: HydrationMismatch[];
   skipHydrationHosts: string[];
   warnings: string[];
+  warningsCaptured: boolean;
 }
 
 export interface HttpPage {
   pageId: string;
   url: string;
+  initialUrl: string;
   title: string;
   payload: PayloadSummary;
   hydration: HydrationStats | null;
   calls: HttpCall[];
+  firstSeenAt: number;
   reportedAt: number;
 }
 
@@ -175,7 +256,8 @@ export interface HttpState {
 declare module 'devframe' {
   interface DevframeRpcSharedStates {
     'ng-devtools:component-tree': {
-      nodes: ComponentNode[];
+      nodes: LiveComponentNode[];
+      pages: Record<string, ComponentPage>;
       selectedId: string | null;
       highlightedId: string | null;
     };
@@ -185,17 +267,16 @@ declare module 'devframe' {
     };
     'ng-devtools:signal-graph': {
       graph: SignalGraph | null;
+      pages: Record<string, SignalGraph>;
       selectedNodeId: string | null;
     };
     'ng-devtools:injector-tree': {
       roots: InjectorTreeNode[];
+      environment: InjectorTreeNode[];
+      pages: Record<string, InjectorPage>;
       selectedInjectorId: string | null;
     };
-    'ng-devtools:ngrx-store': {
-      state: unknown;
-      actions: NgrxRuntimeAction[];
-      connected: boolean;
-    };
+    'ng-devtools:ngrx-store': import('./ngrx-shared.ts').NgrxState;
     'ng-devtools:http': HttpState;
   }
 }

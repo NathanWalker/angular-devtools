@@ -25,6 +25,7 @@ interface OutletRow {
   template: `
     @if (page().snapshot; as snapshot) {
       <p class="url">
+        <span class="url-label">URL</span>
         <code>{{ snapshot.url }}</code>
       </p>
       @if (snapshot.urlDrift && snapshot.browserUrl) {
@@ -36,7 +37,10 @@ interface OutletRow {
       }
       @if (snapshot.pending; as pending) {
         <div class="pending" role="status">
-          Navigating to <code>{{ pending.url }}</code> (#{{ pending.id }})
+          <span class="pulse" aria-hidden="true"></span>
+          <span class="pending-text"
+            >Navigating to <code>{{ pending.url }}</code> (#{{ pending.id }})</span
+          >
           <button type="button" class="small" (click)="abort()">Abort</button>
         </div>
       }
@@ -77,7 +81,7 @@ interface OutletRow {
           <tbody>
             @for (row of rows(); track $index) {
               <tr>
-                <td class="path" [style.padding-left.px]="12 + row.depth * 16">
+                <td class="path" [style.padding-left.px]="14 + row.depth * 16">
                   {{ row.depth === 0 && !row.route.path ? '(root)' : '/' + row.route.path }}
                   @if (row.route.outlet !== 'primary') {
                     <span class="tag">{{ row.route.outlet }}</span>
@@ -92,29 +96,38 @@ interface OutletRow {
                     </div>
                   }
                 </td>
-                <td>{{ row.route.component ?? '—' }}</td>
+                <td>
+                  @if (row.route.component) {
+                    <code class="component">{{ row.route.component }}</code>
+                  } @else {
+                    <span class="nil" aria-hidden="true">–</span
+                    ><span class="visually-hidden">none</span>
+                  }
+                </td>
                 <td>
                   @for (entry of entries(row.route.params); track entry[0]) {
-                    <div>
+                    <div class="entry">
                       <code>{{ entry[0] }}: {{ entry[1] | json }}</code>
                       @if (row.route.paramSources?.[entry[0]] === 'inherited') {
                         <span class="tag">inherited</span>
                       }
                     </div>
                   } @empty {
-                    —
+                    <span class="nil" aria-hidden="true">–</span
+                    ><span class="visually-hidden">none</span>
                   }
                 </td>
                 <td>
                   @for (entry of entries(row.route.data); track entry[0]) {
-                    <div class="data">
+                    <div class="entry data">
                       <code>{{ entry[0] }}: {{ entry[1] | json }}</code>
                       @if (row.route.dataSources?.[entry[0]]; as source) {
                         <span class="tag">{{ source }}</span>
                       }
                     </div>
                   } @empty {
-                    —
+                    <span class="nil" aria-hidden="true">–</span
+                    ><span class="visually-hidden">none</span>
                   }
                 </td>
                 <td>
@@ -124,8 +137,9 @@ interface OutletRow {
                   @for (resolver of row.route.resolvers ?? []; track resolver) {
                     <span class="tag">resolve {{ resolver }}</span>
                   }
-                  @if (!guardList(row.route).length && !row.route.resolvers) {
-                    —
+                  @if (!guardList(row.route).length && !row.route.resolvers?.length) {
+                    <span class="nil" aria-hidden="true">–</span
+                    ><span class="visually-hidden">none</span>
                   }
                 </td>
               </tr>
@@ -138,7 +152,7 @@ interface OutletRow {
         <h3>Outlets</h3>
         <ul class="outlets">
           @for (row of outletRows(); track $index) {
-            <li [style.padding-left.px]="row.depth * 16">
+            <li [style.padding-left.px]="10 + row.depth * 16">
               <span class="tag">{{ row.outlet.outlet }}</span>
               @if (row.outlet.activated) {
                 <code>{{ row.outlet.component ?? '?' }}</code> for
@@ -157,71 +171,125 @@ interface OutletRow {
         </ul>
       }
     } @else {
-      <p class="muted">This page reports no Router.</p>
+      <div class="empty">
+        <p class="empty-title">This page reports no Router.</p>
+        <p class="muted">
+          Add <code>provideRouter()</code> to the app config and navigate once to see the active
+          routes here.
+        </p>
+      </div>
     }
   `,
   styles: `
     ${SHARED_STYLES}
     :host {
       display: grid;
+      gap: 16px;
+      min-width: 0;
+    }
+    .url {
+      display: flex;
+      align-items: baseline;
       gap: 12px;
+      min-width: 0;
+      margin: 0;
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .url-label {
+      flex: none;
+      color: var(--text-3);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
     .url code {
-      font-size: 14px;
+      min-width: 0;
       color: var(--accent);
-    }
-    .note {
-      margin: 0;
-      padding: 8px 10px;
-      border-left: 3px solid #fef08a;
-      background: #27272a;
-      color: #e4e4e7;
-      font-size: 13px;
+      font-size: 14px;
+      font-weight: 500;
     }
     .pending {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 8px 12px;
       align-items: center;
-      font-size: 13px;
-      color: #fef08a;
-    }
-    .facts {
-      display: grid;
-      grid-template-columns: max-content 1fr;
-      gap: 4px 12px;
-      margin: 0;
+      padding: 6px 6px 6px 14px;
+      border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--warn) 10%, transparent);
+      color: var(--warn);
       font-size: 13px;
     }
-    dt {
-      color: #a1a1aa;
+    .pending-text {
+      flex: 1 1 200px;
+      min-width: 0;
     }
-    dd {
-      margin: 0;
-      color: #e4e4e7;
+    .pending code {
+      color: var(--text-strong);
     }
-    .path {
-      font-family: monospace;
-      color: var(--accent);
-      white-space: nowrap;
+    .pulse {
+      flex: none;
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      background: var(--warn);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      50% {
+        opacity: 0.35;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .pulse {
+        animation: none;
+      }
     }
     .sub {
-      font-family: inherit;
-      color: #a1a1aa;
+      margin-top: 4px;
+      color: var(--text-2);
+      font-family: var(--font-sans);
       font-size: 12px;
       white-space: normal;
+    }
+    .component {
+      color: var(--text-strong);
+    }
+    .entry + .entry {
+      margin-top: 2px;
     }
     .data {
       max-width: 360px;
     }
     .outlets {
-      list-style: none;
-      margin: 0;
-      padding: 0;
       display: grid;
-      gap: 6px;
+      gap: 2px;
+      margin: 0;
+      padding: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
       font-size: 13px;
-      color: #e4e4e7;
+      list-style: none;
+      animation: enter 0.35s var(--ease) both;
+    }
+    .outlets li {
+      padding-top: 6px;
+      padding-right: 10px;
+      padding-bottom: 6px;
+      border-radius: var(--radius-sm);
+      line-height: 1.8;
+      overflow-wrap: anywhere;
+      transition: background-color 0.15s var(--ease);
+    }
+    .outlets li:hover {
+      background: var(--surface-2);
     }
   `,
 })

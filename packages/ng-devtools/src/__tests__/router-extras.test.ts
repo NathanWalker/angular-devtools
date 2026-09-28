@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { noteFailedCall, redactText, type NavigationRecord } from '../router.ts';
 import type { RouteNode } from '../router-config.ts';
-import { lintRoutes, matchUrl, renderModeFor } from '../rpc/router-config-tools.ts';
+import { lintRoutes, listRoutesText, matchUrl, renderModeFor } from '../rpc/router-config-tools.ts';
 import {
   describeNavigation,
   explainNavigationText,
@@ -251,5 +251,27 @@ describe('failed calls', () => {
     expect(list).toHaveLength(50);
     expect(new Set(list.map((n) => n.id)).size).toBe(50);
     expect(list.every((n) => n.id < 0)).toBe(true);
+  });
+});
+
+describe('route sources', () => {
+  it('cites the child, not its componentless parent, when both share a full path', () => {
+    const child = node('/admin', { id: '0.0', path: '', component: 'AdminHome' });
+    const parent = node('/admin', {
+      id: '0',
+      path: 'admin',
+      kind: 'children',
+      component: undefined,
+      children: [child],
+    });
+    const text = listRoutesText({ pages: [page({ config: [parent] })] }, {}, [
+      { path: 'admin', fullPath: '/admin', file: 'app.routes.ts', line: 3 },
+      { path: '', fullPath: '/admin', component: 'AdminHome', file: 'app.routes.ts', line: 6 },
+    ]);
+    const lines = text.split('\n');
+    expect(lines.find((l) => l.includes('AdminHome'))).toContain('app.routes.ts:6');
+    expect(lines.find((l) => l.includes('/admin') && !l.includes('AdminHome'))).toContain(
+      'app.routes.ts:3',
+    );
   });
 });

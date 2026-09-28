@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { installSignalWriteHook } from '../overlay.ts';
-import { MAX_CHANGES, createSignalHistory, type RawSignalNode } from '../signal-history.ts';
+import {
+  MAX_CHANGES,
+  MAX_NODES,
+  createSignalHistory,
+  type RawSignalNode,
+} from '../signal-history.ts';
 import type { SignalGraphNode } from '../types.ts';
 
 const identity = (v: unknown) => v;
@@ -13,7 +18,7 @@ function graphNode(
   value: unknown,
   kind: SignalGraphNode['kind'] = 'signal',
 ): SignalGraphNode {
-  return { id, kind, label, epoch, value, watched: false };
+  return { id, kind, label, epoch, value };
 }
 
 function write(onWrite: (n: RawSignalNode) => void, raw: RawSignalNode, value: unknown) {
@@ -66,13 +71,22 @@ describe('createSignalHistory', () => {
     expect(list.at(-1)?.value).toBe('last');
   });
 
-  it('prunes nodes that left the graph', () => {
+  it('keeps history of nodes that left the graph, so switching components back keeps it', () => {
     const h = createSignalHistory(identity);
     h.collect([graphNode('a', 'x', 1, 1)]);
-    h.collect([]);
-    expect(h.collect([graphNode('a', 'x', 1, 1)])['a']).toEqual([
+    h.collect([graphNode('a', 'x', 2, 2)]);
+    expect(h.collect([graphNode('b', 'y', 0, 0)])['a']).toBeUndefined();
+    expect(h.collect([graphNode('a', 'x', 2, 2)])['a'].map((c) => c.value)).toEqual([1, 2]);
+  });
+
+  it('forgets the least recently seen nodes past the cap', () => {
+    const h = createSignalHistory(identity);
+    h.collect([graphNode('first', 'x', 1, 1)]);
+    for (let i = 0; i < MAX_NODES; i++) h.collect([graphNode(`n${i}`, 'y', 1, i)]);
+    expect(h.collect([graphNode('first', 'x', 1, 1)])['first']).toEqual([
       expect.objectContaining({ source: 'initial' }),
     ]);
+    expect(h.collect([graphNode('n1', 'y', 1, 1)])['n1']).toHaveLength(1);
   });
 
   it('skips effects and unnamed writes', () => {
@@ -103,6 +117,32 @@ describe('createSignalHistory', () => {
     h.collect([graphNode('a', 'n', 0, 's:undefined')]);
     write(h.onWrite, raw, 5);
     expect(h.collect([graphNode('a', 'n', 1, 's:5')])['a'][1].value).toBe('s:5');
+  });
+
+  it('passes the signal name so secret-named writes can be redacted', () => {
+    const h = createSignalHistory((v, name) => (name === 'password' ? '[redacted]' : v));
+    const raw: RawSignalNode = { debugName: 'password', kind: 'signal', version: 0 };
+    h.collect([graphNode('a', 'password', 0, '[redacted]')]);
+    write(h.onWrite, raw, 'hunter2');
+    const out = h.collect([graphNode('a', 'password', 1, '[redacted]')]);
+    expect(out['a'].map((c) => c.value)).toEqual(['[redacted]', '[redacted]']);
+  });
+
+  it('sends only changes newer than the last push unless asked for everything', () => {
+    let at = 0;
+    const h = createSignalHistory(identity, () => ++at);
+    const first = h.collectDelta([graphNode('a', 'count', 0, 0), graphNode('b', 'other', 0, 'x')]);
+    expect(Object.keys(first)).toEqual(['a', 'b']);
+    const quiet = h.collectDelta([graphNode('a', 'count', 0, 0), graphNode('b', 'other', 0, 'x')]);
+    expect(quiet).toEqual({});
+    const next = h.collectDelta([graphNode('a', 'count', 2, 2), graphNode('b', 'other', 0, 'x')]);
+    expect(next).toEqual({ a: [expect.objectContaining({ epoch: 2, value: 2 })] });
+    const full = h.collectDelta(
+      [graphNode('a', 'count', 2, 2), graphNode('b', 'other', 0, 'x')],
+      true,
+    );
+    expect(full['a'].map((c) => c.epoch)).toEqual([0, 2]);
+    expect(full['b']).toHaveLength(1);
   });
 });
 

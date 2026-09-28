@@ -336,6 +336,13 @@ export function expireRouterPages(pages: Pages, now = Date.now()): RouterState |
   return expired ? stateOf(pages) : null;
 }
 
+export function touchRouterPage(pages: Pages, pageId: unknown, now = Date.now()): boolean {
+  const page = typeof pageId === 'string' ? pages.get(pageId) : undefined;
+  if (!page) return false;
+  pages.set(page.pageId, { ...page, reportedAt: now });
+  return true;
+}
+
 export function mergeRouterReport(pages: Pages, report: RouterReport, now = Date.now()) {
   const previous = pages.get(report.pageId);
   const changedAt =

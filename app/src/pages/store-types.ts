@@ -1,0 +1,144 @@
+export type NgrxKind =
+  | 'action'
+  | 'reducer'
+  | 'effect'
+  | 'selector'
+  | 'feature'
+  | 'store-setup'
+  | 'signal-store'
+  | 'signal-state'
+  | 'signal-method';
+
+export interface NgrxStoreEntry {
+  name: string;
+  kind: NgrxKind;
+  file: string;
+  line: number;
+  detail?: string;
+}
+
+export interface NgrxSignalStoreInfo {
+  id: string;
+  kind: 'signal-store' | 'signal-state';
+  className: string;
+  name?: string;
+  declaredIn?: string;
+  scope: string;
+  stateKeys: string[];
+  state: Record<string, unknown>;
+  computed: Record<string, unknown>;
+  methods: { name: string; calls: number; rx?: boolean }[];
+  references: string[];
+  writable: boolean;
+}
+
+export interface NgrxClassicStoreInfo {
+  state: unknown;
+  devtools: boolean;
+  scope: string;
+}
+
+export interface NgrxDiffEntry {
+  path: string;
+  op: 'add' | 'remove' | 'change';
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface NgrxLogEntry {
+  seq: number;
+  source: 'signal-store' | 'store';
+  storeId: string;
+  type: string;
+  args?: unknown[];
+  action?: unknown;
+  timestamp: number;
+  diff: NgrxDiffEntry[];
+  restorable: boolean;
+}
+
+export interface NgrxPage {
+  pageId: string;
+  url: string;
+  title: string;
+  stores: NgrxSignalStoreInfo[];
+  classic: NgrxClassicStoreInfo | null;
+  log: NgrxLogEntry[];
+  reportedAt: number;
+}
+
+export interface NgrxState {
+  pages: NgrxPage[];
+}
+
+export interface LiveStore {
+  id: string;
+  label: string;
+  kind: 'signal-store' | 'signal-state' | 'store';
+  scope: string;
+  signal?: NgrxSignalStoreInfo;
+  classic?: NgrxClassicStoreInfo;
+}
+
+const TYPE = '@type';
+
+function tagged(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && TYPE in value;
+}
+
+function key(name: string): string {
+  return /^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name);
+}
+
+export function pretty(value: unknown, indent = ''): string {
+  if (value === null) return 'null';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value !== 'object') return String(value);
+  const inner = indent + '  ';
+  if (Array.isArray(value)) {
+    if (!value.length) return '[]';
+    return `[\n${value.map((v) => inner + pretty(v, inner)).join(',\n')}\n${indent}]`;
+  }
+  if (tagged(value)) {
+    const v = value as Record<string, any>;
+    switch (v[TYPE]) {
+      case 'undefined':
+        return 'undefined';
+      case 'Date':
+        return `Date(${v['value']})`;
+      case 'bigint':
+        return `${v['value']}n`;
+      case 'symbol':
+        return `Symbol(${v['value']})`;
+      case 'function':
+        return `ƒ ${v['name']}()`;
+      case 'Error':
+        return `${v['name'] ?? 'Error'}: ${v['message']}`;
+      case 'Element':
+        return `<${v['value']}>`;
+      case 'Map': {
+        const entries = (v['entries'] ?? []) as [unknown, unknown][];
+        if (!entries.length) return `Map(${v['size']}) {}`;
+        const lines = entries.map(
+          ([k, val]) => `${inner}${pretty(k, inner)} => ${pretty(val, inner)}`,
+        );
+        return `Map(${v['size']}) {\n${lines.join(',\n')}\n${indent}}`;
+      }
+      case 'Set': {
+        const values = (v['values'] ?? []) as unknown[];
+        if (!values.length) return `Set(${v['size']}) {}`;
+        return `Set(${v['size']}) {\n${values.map((x) => inner + pretty(x, inner)).join(',\n')}\n${indent}}`;
+      }
+      default:
+        return String(v['value'] ?? v[TYPE]);
+    }
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length) return '{}';
+  return `{\n${entries.map(([k, v]) => `${inner}${key(k)}: ${pretty(v, inner)}`).join(',\n')}\n${indent}}`;
+}
+
+export function short(value: unknown, max = 120): string {
+  const text = pretty(value).replace(/\s*\n\s*/g, ' ');
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}

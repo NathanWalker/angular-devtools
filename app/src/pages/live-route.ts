@@ -9,12 +9,14 @@ import {
   signal,
 } from '@angular/core';
 import type { DevframeRpcClient } from 'devframe/client';
+import { hostPageId } from '../page-id';
 import { RouteCurrent } from './route-current';
 import { RouteLint } from './route-lint';
 import { RouteSetup } from './route-setup';
 import { RouteTimeline } from './route-timeline';
 import { RouteTree } from './route-tree';
-import type { RouterPage } from './router-types';
+import type { RouterPage, SourceRoute } from './router-types';
+import { Select } from '../ui/select';
 
 const TABS = [
   { id: 'current', label: 'Current' },
@@ -28,25 +30,35 @@ type TabId = (typeof TABS)[number]['id'];
 
 @Component({
   selector: 'app-live-route',
-  imports: [RouteCurrent, RouteLint, RouteSetup, RouteTimeline, RouteTree],
+  imports: [RouteCurrent, RouteLint, RouteSetup, RouteTimeline, RouteTree, Select],
   template: `
-    @if (failed()) {
-      <p class="muted">Could not load the live router state.</p>
-    } @else if (loading()) {
-      <p class="muted">Loading the live router state…</p>
-    } @else if (page(); as current) {
-      @if (pages().length > 1) {
-        <label class="page-pick">
-          Page
-          <select (change)="pickPage($event)">
-            @for (p of pages(); track p.pageId) {
-              <option [value]="p.pageId" [selected]="p.pageId === current.pageId">
-                {{ p.snapshot?.url ?? p.pageId }} ({{ p.pageId }})
-              </option>
-            }
-          </select>
-        </label>
+    <div class="section-head">
+      <h2>Live router</h2>
+      @if (page(); as current) {
+        @if (pages().length > 1) {
+          <div class="page-pick">
+            <span class="page-label" id="live-route-page-label">Page</span>
+            <app-select
+              labelledBy="live-route-page-label"
+              [options]="pageOptions()"
+              [value]="current.pageId"
+              (valueChange)="pageId.set($event)"
+            />
+          </div>
+        }
       }
+    </div>
+    @if (failed()) {
+      <div class="empty" role="alert">
+        <p class="empty-title">Could not load the live router state.</p>
+        <p class="muted">
+          Check that the dev server with ng-devtools is still running, then retry.
+        </p>
+        <button type="button" class="retry" (click)="retry()">Retry</button>
+      </div>
+    } @else if (loading()) {
+      <p class="muted empty" role="status">Loading the live router state…</p>
+    } @else if (page(); as current) {
       <div class="tabs" role="tablist" aria-label="Router views" (keydown)="onKey($event)">
         @for (tab of tabs; track tab.id) {
           <button
@@ -60,9 +72,8 @@ type TabId = (typeof TABS)[number]['id'];
           >
             {{ tab.label }}
             @if (tab.id === 'navigations' && problems() > 0) {
-              <span class="count" [attr.aria-label]="problems() + ' problem navigations'">{{
-                problems()
-              }}</span>
+              <span class="count" aria-hidden="true">{{ problems() }}</span>
+              <span class="visually-hidden">, {{ problems() }} problem navigations</span>
             }
           </button>
         }
@@ -81,7 +92,7 @@ type TabId = (typeof TABS)[number]['id'];
             <app-route-timeline [page]="current" [rpc]="rpc()" />
           }
           @case ('routes') {
-            <app-route-tree [page]="current" [rpc]="rpc()" />
+            <app-route-tree [page]="current" [rpc]="rpc()" [sources]="sources()" />
           }
           @case ('setup') {
             <app-route-setup [page]="current" />
@@ -92,76 +103,183 @@ type TabId = (typeof TABS)[number]['id'];
         }
       </div>
     } @else {
-      <p class="muted">No page is reporting router state yet. Open the app in a browser.</p>
+      <div class="empty">
+        <p class="empty-title">No page is reporting router state yet.</p>
+        <p class="muted">
+          Open the app in a browser. This view updates as soon as a page connects.
+        </p>
+      </div>
     }
   `,
   styles: `
     :host {
       display: grid;
-      gap: 12px;
-      margin-bottom: 28px;
+      gap: 16px;
+      min-width: 0;
+      margin-bottom: 32px;
+    }
+    .section-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 34px;
+    }
+    h2 {
+      margin: 0;
+      color: var(--text-3);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
     .muted {
-      color: #a1a1aa;
+      color: var(--text-2);
       font-size: 13px;
+      line-height: 1.5;
     }
-    .page-pick {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
+    .empty {
+      display: grid;
+      gap: 6px;
+      justify-items: center;
+      margin: 0;
+      padding: 40px 24px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      text-align: center;
+      animation: enter 0.35s var(--ease) both;
+    }
+    .empty p {
+      margin: 0;
+      max-width: 480px;
+    }
+    .empty-title {
+      color: var(--text-strong);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .retry {
+      height: 34px;
+      margin-top: 8px;
+      padding: 0 12px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font: inherit;
       font-size: 13px;
-      color: #d4d4d8;
-    }
-    select {
-      max-width: 100%;
-      min-width: 0;
-      padding: 4px 8px;
-      background: #18181b;
-      border: 1px solid #52525b;
-      border-radius: 6px;
-      color: #e4e4e7;
-    }
-    .tabs {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-      border-bottom: 1px solid #27272a;
-    }
-    [role='tab'] {
-      padding: 6px 12px;
-      background: none;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: #a1a1aa;
+      font-weight: 500;
       cursor: pointer;
-      font-size: 13px;
+      transition: background-color 0.15s var(--ease);
     }
-    [role='tab'][aria-selected='true'] {
-      color: #e4e4e7;
-      border-bottom-color: var(--accent);
+    .retry:hover {
+      background: var(--surface-3);
     }
-    [role='tab']:focus-visible,
-    select:focus-visible {
+    .retry:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
     }
-    .count {
-      margin-left: 4px;
-      padding: 0 5px;
-      border-radius: 8px;
-      background: #7f1d1d;
-      color: #fecaca;
+    .page-pick {
+      display: flex;
+      flex: 0 1 420px;
+      gap: 10px;
+      align-items: center;
+      min-width: 0;
+    }
+    .page-label {
+      flex: none;
+      color: var(--text-3);
       font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .page-pick app-select {
+      flex: 1 1 auto;
+      width: 100%;
+    }
+    .tabs {
+      display: flex;
+      justify-self: start;
+      max-width: 100%;
+      gap: 2px;
+      padding: 3px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+    }
+    [role='tab'] {
+      display: inline-flex;
+      flex: none;
+      align-items: center;
+      gap: 6px;
+      height: 26px;
+      padding: 0 12px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text-2);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      cursor: pointer;
+      transition:
+        background-color 0.15s var(--ease),
+        color 0.15s var(--ease),
+        box-shadow 0.15s var(--ease);
+    }
+    [role='tab']:hover {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+    [role='tab'][aria-selected='true'] {
+      background: var(--surface-3);
+      color: var(--text-strong);
+      box-shadow: inset 0 0 0 1px var(--border-strong);
+    }
+    [role='tab']:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .panel {
+      min-width: 0;
+      animation: enter 0.35s var(--ease) both;
+    }
+    .count {
+      min-width: 18px;
+      padding: 0 6px;
+      border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+      border-radius: 99px;
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+      color: var(--danger);
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 16px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
     }
   `,
 })
 export class LiveRoute {
   rpc = input<DevframeRpcClient | null>(null);
+  sources = input<SourceRoute[]>([]);
 
   readonly tabs = TABS;
   readonly selected = signal<TabId>('current');
   readonly pages = signal<RouterPage[]>([]);
+  private readonly hostPageId = hostPageId();
   readonly loading = signal(true);
   readonly failed = signal(false);
   readonly pageId = linkedSignal<RouterPage[], string | null>({
@@ -169,7 +287,10 @@ export class LiveRoute {
     computation: (pages, previous) =>
       previous?.value && pages.some((p) => p.pageId === previous.value)
         ? previous.value
-        : (pages.find((p) => p.snapshot)?.pageId ?? pages[0]?.pageId ?? null),
+        : (pages.find((p) => p.pageId === this.hostPageId && p.snapshot)?.pageId ??
+          pages.find((p) => p.snapshot)?.pageId ??
+          pages[0]?.pageId ??
+          null),
   });
 
   private unsubscribe: (() => void) | null = null;
@@ -214,9 +335,18 @@ export class LiveRoute {
     }
   }
 
-  pickPage(event: Event) {
-    this.pageId.set((event.target as HTMLSelectElement).value);
+  retry() {
+    const client = this.rpc();
+    if (client) this.load(client);
   }
+
+  readonly pageOptions = computed(() =>
+    this.pages().map((p) => ({
+      value: p.pageId,
+      label: p.snapshot?.url ?? p.pageId,
+      hint: p.pageId,
+    })),
+  );
 
   onKey(event: KeyboardEvent) {
     const order = this.tabs.map((tab) => tab.id);

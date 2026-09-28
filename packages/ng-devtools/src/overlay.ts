@@ -1,8 +1,11 @@
 import { connectDevframe } from 'devframe/client';
+export { registerNgrxSignals } from './ngrx-register.ts';
 import { attachAnalog } from './analog-runtime.ts';
 import { attachForms } from './forms-collector.ts';
 import { attachPipes } from './pipes-collector.ts';
 import { attachHttp } from './http-overlay.ts';
+import { attachNgrx } from './ngrx-overlay.ts';
+import { collectInjectorTree } from './injector-tree.ts';
 import {
   findRouters,
   setGeneration,
@@ -20,10 +23,17 @@ import {
   capturePreloads,
   instrument,
   isRouterAction,
+  onGuardsCheckStart,
   runAction,
+  storeInstrumented,
+  storedInstrumented,
   type PreloadRecord,
 } from './router-actions.ts';
 import { createSignalHistory, type RawSignalNode } from './signal-history.ts';
+import { collectComponentTree } from './component-tree.ts';
+import { elementById } from './element-id.ts';
+import { collectSignalGraph, graphKey, toSignalTarget, type SignalTarget } from './signal-graph.ts';
+import { serializeNamed } from './serialize.ts';
 
 let highlightEl: HTMLElement | null = null;
 let highlightTimer: ReturnType<typeof setTimeout> | undefined;
@@ -77,38 +87,62 @@ async function claimPageId(): Promise<{ id: string; release: () => void }> {
 export async function initOverlay(options: { baseURL?: string | string[] } = {}) {
   // `connectDevframe()` alone looks for the connection next to the page, which
   // misses the documented `/__ng-devtools/` mount in a host app.
-  const rpc = await connectDevframe({ baseURL: options.baseURL ?? ['./', '/__ng-devtools/'] });
+  const rpc = await connectDevframe({
+    baseURL: options.baseURL ?? ['./', '/__ng-devtools/', '/__devframes/ng-devtools/'],
+  });
   const my = rpc.scope('ng-devtools');
 
-  async function pushTree() {
-    const tree = collectComponentTree();
-    await my.rpc.call('push-component-tree', tree);
+  let componentTarget: string | null = null;
+  let lastTreeJson = '';
+  let treeSkips = 0;
+  async function pushTree(force = false) {
+    const tree = collectComponentTree(getNg(), { selectedId: componentTarget });
+    const json = JSON.stringify(tree);
+    if (!force && json === lastTreeJson && ++treeSkips < 4) return;
+    lastTreeJson = json;
+    treeSkips = 0;
+    await my.rpc.call('push-component-tree', { ...tree, pageId });
   }
 
-  const signalHistory = createSignalHistory(serializeValue);
+  const signalHistory = createSignalHistory((value, name) =>
+    serializeNamed(name, value, { budget: 1000 }),
+  );
   const restoreSignalHook = await installSignalWriteHook(signalHistory.onWrite);
 
-  // Set from the Components tab; null follows the routed component.
-  let signalTarget: string | null = null;
+  let signalTarget: SignalTarget = null;
+  let lastSignalKey = '';
+  let signalSkips = 0;
+  let historyDelta = false;
+  let historyFor = '';
 
-  async function pushSignalGraph() {
-    const graph = collectSignalGraph(signalTarget);
+  async function pushSignalGraph(force = false) {
+    const graph = collectSignalGraph(getNg(), signalTarget);
     if (!graph) return;
-    await my.rpc.call('push-signal-graph', {
+    const key = graphKey(graph);
+    if (!force && key === lastSignalKey && ++signalSkips < 4) return;
+    lastSignalKey = key;
+    signalSkips = 0;
+    const owner = graph.component?.id ?? '';
+    const full = force || !historyDelta || owner !== historyFor;
+    historyFor = owner;
+    const history = signalHistory.collectDelta(graph.nodes, full);
+    const answer = (await my.rpc.call('push-signal-graph', {
       ...graph,
       pageId,
-      history: signalHistory.collect(graph.nodes),
-    });
+      ...(full ? { history } : { historyDelta: history }),
+    })) as { delta?: boolean } | undefined;
+    historyDelta = answer?.delta === true;
   }
 
+  let lastInjectorJson = '';
+  let injectorSkips = 0;
   async function pushInjectorTree() {
-    const tree = collectInjectorTree();
-    if (tree.length) await my.rpc.call('push-injector-tree', tree);
-  }
-
-  async function pushNgrxState() {
-    const data = collectNgrxState();
-    if (data) await my.rpc.call('push-ngrx-state', data);
+    const tree = collectInjectorTree(getNg());
+    const json = JSON.stringify(tree);
+    if (json === lastInjectorJson && ++injectorSkips < 4) return;
+    lastInjectorJson = json;
+    injectorSkips = 0;
+    await my.rpc.call('push-injector-tree', { ...tree, pageId });
   }
 
   const { id: pageId, release: releasePageId } = await claimPageId();
@@ -118,6 +152,8 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
   const pipes = attachPipes(my, pageId, getNg);
   const pushPipes = pipes.push;
   const http = attachHttp(my, pageId);
+  const ngrx = attachNgrx(my, pageId, getNg);
+  const pushNgrxState = () => void ngrx.push();
   const pushHttp = () => void http.push().catch(() => {});
 
   const navigations: NavigationRecord[] = [];
@@ -128,7 +164,7 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
   let routerRoot: Element | null = null;
   let routerCleanup: (() => void)[] = [];
   let stopInstrument: (() => void) | null = null;
-  let instrumented = false;
+  let instrumented = storedInstrumented();
   let config: RouteNode[] | undefined;
   let setup: RouterSetup | undefined;
   let sentGeneration = -1;
@@ -136,11 +172,41 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
   let lastRouterPayload = '';
   let lastRouterPushAt = 0;
   let routerPushTimer: ReturnType<typeof setTimeout> | undefined;
+  let routerDomDirty = true;
+  let outlets: ReturnType<typeof outletsOf> = [];
+  let links: ReturnType<typeof linksOf> = [];
+  const routerDomObserver =
+    typeof MutationObserver === 'function'
+      ? new MutationObserver(() => (routerDomDirty = true))
+      : null;
+  routerDomObserver?.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'href', 'aria-current'],
+  });
+
+  function onRouterChange() {
+    routerDomDirty = true;
+    scheduleRouterPush();
+  }
+
+  function instrumentLoadedRoutes() {
+    if (!instrumented || !router || !configTracker.update(router)) return;
+    config = undefined;
+    const previous = stopInstrument;
+    const next = instrument(router, navigations);
+    stopInstrument = () => {
+      next();
+      previous?.();
+    };
+  }
 
   function setInstrumented(on: boolean) {
     stopInstrument?.();
     stopInstrument = null;
     instrumented = on;
+    storeInstrumented(on);
     if (on && router) stopInstrument = instrument(router, navigations);
     lastRouterPayload = '';
     scheduleRouterPush();
@@ -157,9 +223,10 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     router = routers[0];
     routerCount = routers.length;
     routerRoot = candidates[0] ?? null;
-    const stop = watchRouter(router, navigations, scheduleRouterPush);
+    const stop = watchRouter(router, navigations, onRouterChange);
     if (stop) routerCleanup.push(stop);
-    routerCleanup.push(captureCallers(router, navigations));
+    routerCleanup.push(onGuardsCheckStart(router, instrumentLoadedRoutes));
+    routerCleanup.push(captureCallers(router, navigations, ng));
     routerCleanup.push(captureDiagnostics(router, navigations));
     routerCleanup.push(capturePreloads(preloaderOf(ng, routerRoot), preloads, scheduleRouterPush));
   }
@@ -184,13 +251,25 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
         if (sentGeneration !== configTracker.generation) report['config'] = config;
         report['activeIds'] = activeIds(router);
         report['setup'] = setup;
-        report['outlets'] = outletsOf(router);
-        report['links'] = linksOf(ng, router);
+        if (routerDomDirty) {
+          routerDomDirty = false;
+          outlets = outletsOf(router);
+          links = linksOf(ng, router);
+        }
+        report['outlets'] = outlets;
+        report['links'] = links;
         report['preloads'] = preloads;
         report['instrumented'] = instrumented;
       }
       const payload = JSON.stringify(report);
-      if (payload === lastRouterPayload && Date.now() - lastRouterPushAt < ROUTER_HEARTBEAT_MS) {
+      if (payload === lastRouterPayload) {
+        if (Date.now() - lastRouterPushAt < ROUTER_HEARTBEAT_MS) return;
+        lastRouterPushAt = Date.now();
+        const ping = (await my.rpc.call('ping-router', pageId)) as { known?: boolean } | undefined;
+        if (ping?.known === false) {
+          lastRouterPayload = '';
+          sentGeneration = -1;
+        }
         return;
       }
       lastRouterPayload = payload;
@@ -233,8 +312,16 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     name: 'highlight-in-page',
     type: 'event',
     jsonSerializable: true,
-    handler: (selector: string) => {
+    handler: (selector: string | { pageId?: string; id?: string } | null) => {
+      if (selector && typeof selector === 'object') {
+        if (selector.pageId && selector.pageId !== pageId) return;
+        clearHighlight();
+        const host = typeof selector.id === 'string' ? elementById(selector.id) : null;
+        if (host instanceof HTMLElement) showHighlight(host);
+        return;
+      }
       clearHighlight();
+      if (typeof selector !== 'string' || !selector) return;
       // The selector comes from an agent, so it may not be valid CSS.
       let el: Element | null = null;
       try {
@@ -269,9 +356,22 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     name: 'select-signal-component',
     type: 'event',
     jsonSerializable: true,
-    handler: (selector: string | null) => {
-      signalTarget = typeof selector === 'string' && selector.length < 500 ? selector : null;
-      void pushSignalGraph();
+    handler: (request: unknown) => {
+      const next = toSignalTarget(request, pageId);
+      if (next === undefined) return;
+      signalTarget = next;
+      void pushSignalGraph(true);
+    },
+  });
+
+  my.rpc.register({
+    name: 'inspect-component-in-page',
+    type: 'event',
+    jsonSerializable: true,
+    handler: (request: { pageId?: string; id?: string | null } | null) => {
+      if (request?.pageId && request.pageId !== pageId) return;
+      componentTarget = typeof request?.id === 'string' ? request.id : null;
+      void pushTree(true);
     },
   });
 
@@ -280,7 +380,12 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     void my.rpc.call('forget-forms-page', pageId).catch(() => {});
     void my.rpc.call('forget-router-page', pageId).catch(() => {});
     void my.rpc.call('forget-pipes-page', pageId).catch(() => {});
+    void my.rpc.call('forget-component-page', pageId).catch(() => {});
+    lastInjectorJson = '';
+    void my.rpc.call('forget-injector-page', pageId).catch(() => {});
     http.leave();
+    void my.rpc.call('forget-analog-page', pageId).catch(() => {});
+    ngrx.leave();
   };
   addEventListener('pagehide', leave);
   const resendConfig = () => {
@@ -296,21 +401,17 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     forms.stop();
     pipes.stop();
     void my.rpc.call('forget-pipes-page', pageId).catch(() => {});
+    ngrx.stop();
     stopAnalog();
     removeEventListener('pageshow', resendConfig);
     for (const cleanup of routerCleanup) cleanup();
     routerCleanup = [];
     stopInstrument?.();
+    routerDomObserver?.disconnect();
     clearTimeout(routerPushTimer);
     releasePageId();
     clearHighlight();
   };
-}
-
-export interface AngularDebugApi {
-  getComponent(el: Element): unknown;
-  getInjector?(el: Element): unknown;
-  ɵgetSignalGraph?(injector: unknown): unknown;
 }
 
 function findAngularElements(): Element[] {
@@ -322,138 +423,17 @@ function findAngularElements(): Element[] {
   return Array.from(new Set([...versionEls, ...hostEls]));
 }
 
-export function collectComponentTree() {
-  const nodes: ComponentTreeNode[] = [];
-  const allRoots = findAngularElements();
-  const roots = allRoots.filter(
-    (root) => !allRoots.some((other) => other !== root && other.contains(root)),
-  );
-
-  // Use Angular's debug utilities if available
-  const ng = (window as unknown as { ng?: AngularDebugApi }).ng;
-  if (ng?.getComponent) {
-    if (roots.length > 0) {
-      for (const root of roots) {
-        walkAngularTree(root, nodes, ng);
-      }
-    } else if (typeof document !== 'undefined' && document.body) {
-      walkAngularTree(document.body, nodes, ng);
-    }
-  } else {
-    // Fallback: walk DOM for Angular component host elements
-    if (typeof document !== 'undefined' && document.body) {
-      walkDom(document.body, nodes);
-    }
-  }
-
-  return nodes;
-}
-
-export interface ComponentTreeNode {
-  id: string;
-  selector: string;
-  tagName: string;
-  children: ComponentTreeNode[];
-  inputs?: Record<string, unknown>;
-}
-
-export function walkAngularTree(el: Element, out: ComponentTreeNode[], ng: AngularDebugApi) {
-  const component = ng.getComponent(el);
-
-  if (component) {
-    const node: ComponentTreeNode = {
-      id: generateId(el),
-      selector: el.tagName.toLowerCase(),
-      tagName: el.tagName.toLowerCase(),
-      children: [],
-      inputs: tryGetInputs(component),
-    };
-
-    for (const child of el.children) {
-      walkAngularTree(child, node.children, ng);
-    }
-
-    out.push(node);
-  } else {
-    for (const child of el.children) {
-      walkAngularTree(child, out, ng);
-    }
-  }
-}
-
-function walkDom(el: Element, out: ComponentTreeNode[]) {
-  const tagName = el.tagName.toLowerCase();
-  const isComponent =
-    tagName.includes('-') || Array.from(el.attributes).some((a) => a.name.startsWith('_nghost'));
-
-  if (isComponent) {
-    const node: ComponentTreeNode = {
-      id: generateId(el),
-      selector: tagName,
-      tagName,
-      children: [],
-    };
-    for (const child of el.children) {
-      walkDom(child, node.children);
-    }
-    out.push(node);
-  } else {
-    for (const child of el.children) {
-      walkDom(child, out);
-    }
-  }
-}
-
-function isSignal(val: unknown): val is () => unknown {
-  if (typeof val !== 'function') return false;
-  if (val.name === 'signalValueFn') return true;
-  const symbols = Object.getOwnPropertySymbols(val);
-  return symbols.some((s) => s.description === 'SIGNAL' || s.toString().includes('SIGNAL'));
-}
-
-function tryGetInputs(component: unknown): Record<string, unknown> | undefined {
-  if (!component || typeof component !== 'object') return undefined;
-  try {
-    const inputs: Record<string, unknown> = {};
-    const comp = component as Record<string, unknown>;
-    for (const key of Object.keys(comp)) {
-      const val = comp[key];
-      if (isSignal(val)) {
-        try {
-          inputs[key] = serializeValue(val());
-        } catch {
-          // skip
-        }
-      } else if (typeof val !== 'function') {
-        inputs[key] = serializeValue(val);
-      }
-    }
-    return Object.keys(inputs).length > 0 ? inputs : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-let idCounter = 0;
-function generateId(el: Element) {
-  const existing = el.getAttribute('data-ng-devtools-id');
-  if (existing) return existing;
-  const id = `ngdt-${++idCounter}`;
-  el.setAttribute('data-ng-devtools-id', id);
-  return id;
-}
-
 // Highlight overlay
 function showHighlight(el: HTMLElement) {
   clearHighlight();
   highlightEl = document.createElement('div');
   Object.assign(highlightEl.style, {
     position: 'fixed',
-    background: 'rgba(104, 182, 255, 0.25)',
-    border: '2px solid rgba(104, 182, 255, 0.8)',
+    background: 'rgba(245, 165, 36, 0.12)',
+    border: '2px solid rgba(245, 165, 36, 0.9)',
     borderRadius: '4px',
     pointerEvents: 'none',
-    zIndex: '2147483647',
+    zIndex: '2147483645',
   } satisfies Partial<CSSStyleDeclaration>);
   document.body.appendChild(highlightEl);
   const follow = () => {
@@ -525,379 +505,11 @@ function getNg(): any {
   return (window as any).ng;
 }
 
-function queryTarget(selector: string | null): Element | null {
-  if (!selector) return null;
-  // The selector comes from the devtools or an agent, so it may not be valid CSS.
-  try {
-    return document.querySelector(selector);
-  } catch {
-    return null;
-  }
-}
-
-/** The component the deepest `<router-outlet>` rendered, if any. */
-function routedComponent(): Element | null {
-  const ng = getNg();
-  const outlets = Array.from(document.querySelectorAll('router-outlet'));
-  for (const outlet of outlets.reverse()) {
-    const el = outlet.nextElementSibling;
-    if (el && ng?.getComponent?.(el)) return el;
-  }
-  return null;
-}
-
-export function collectSignalGraph(target: string | null = null) {
-  const ng = getNg();
-  if (!ng?.ɵgetSignalGraph) return null;
-
-  for (const el of [queryTarget(target), routedComponent()]) {
-    const graph = el && getSignalGraphForElement(el);
-    if (graph) return graph;
-  }
-
-  const roots = document.querySelectorAll('[ng-version], [_nghost-ng-c]');
-  for (const root of roots) {
-    const graph = getSignalGraphForElement(root);
-    if (graph) return graph;
-  }
-  return null;
-}
-
-function getSignalGraphForElement(el: Element) {
-  const ng = getNg();
-  if (!ng?.ɵgetSignalGraph || !ng?.getInjector) return null;
-
-  try {
-    const injector = ng.getInjector(el);
-    if (!injector) return null;
-
-    const raw = ng.ɵgetSignalGraph(injector);
-    if (!raw) return null;
-
-    return {
-      nodes: raw.nodes.map((n: any) => ({
-        id: n.id,
-        kind: n.kind ?? 'unknown',
-        label: n.label,
-        epoch: n.epoch ?? 0,
-        value: serializeValue(n.value),
-        watched: n.watched ?? false,
-      })),
-      edges: raw.edges ?? [],
-      componentSelector: el.tagName.toLowerCase(),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function serializeValue(val: unknown): unknown {
-  if (val === undefined || val === null) return val;
-  if (typeof val === 'function') return `[Function: ${val.name || 'anonymous'}]`;
-  if (typeof val === 'symbol') return val.toString();
-  if (typeof val === 'bigint') return val.toString();
-  if (typeof val === 'object') {
-    try {
-      return JSON.parse(JSON.stringify(val));
-    } catch {
-      return String(val);
-    }
-  }
-  return val;
-}
-
-// --- DI Injector Tree collection ---
-
-interface CollectedInjector {
-  injector: { id: string; type: string; name: string; providerCount: number };
-  providers: { token: string; type: string; isViewProvider: boolean }[];
-  children: CollectedInjector[];
-}
-
-function collectInjectorTree(): CollectedInjector[] {
-  const ng = getNg();
-  if (!ng?.getInjector || !ng?.ɵgetInjectorMetadata) return [];
-
-  const roots: CollectedInjector[] = [];
-  const visited = new WeakSet();
-  const componentEls = document.querySelectorAll('[ng-version], [_nghost-ng-c]');
-
-  for (const el of componentEls) {
-    try {
-      const injector = ng.getInjector(el);
-      if (!injector || visited.has(injector)) continue;
-      visited.add(injector);
-
-      const node = serializeInjectorNode(ng, injector, el, visited);
-      if (node) roots.push(node);
-    } catch {
-      // skip
-    }
-  }
-  return roots;
-}
-
-function serializeInjectorNode(
-  ng: any,
-  injector: any,
-  el: Element,
-  visited: WeakSet<object>,
-): CollectedInjector | null {
-  try {
-    const metadata = ng.ɵgetInjectorMetadata?.(injector);
-    if (!metadata) return null;
-
-    const providers = getInjectorProvidersList(ng, injector);
-    const children: CollectedInjector[] = [];
-
-    // Walk child components
-    for (const child of el.querySelectorAll(':scope > *')) {
-      try {
-        const childInjector = ng.getInjector(child);
-        if (!childInjector || visited.has(childInjector) || childInjector === injector) continue;
-        visited.add(childInjector);
-        const childNode = serializeInjectorNode(ng, childInjector, child, visited);
-        if (childNode) children.push(childNode);
-      } catch {
-        // skip
-      }
-    }
-
-    return {
-      injector: {
-        id: `inj-${el.tagName.toLowerCase()}-${Math.random().toString(36).slice(2, 8)}`,
-        type: metadata.type ?? 'unknown',
-        name:
-          metadata.type === 'element'
-            ? el.tagName.toLowerCase()
-            : (metadata.source?.toString?.() ?? 'Environment'),
-        providerCount: providers.length,
-      },
-      providers,
-      children,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function getInjectorProvidersList(ng: any, injector: any) {
-  if (!ng.ɵgetInjectorProviders) return [];
-  try {
-    const raw = ng.ɵgetInjectorProviders(injector) ?? [];
-    return raw.map((p: any) => ({
-      token: p.token?.name ?? p.token?.toString?.() ?? 'unknown',
-      type: inferProviderType(p),
-      isViewProvider: p.isViewProvider ?? false,
-    }));
-  } catch {
-    return [];
-  }
-}
-
-function inferProviderType(p: any): string {
-  if (p.useClass) return 'class';
-  if (p.useValue !== undefined) return 'value';
-  if (p.useFactory) return 'factory';
-  if (p.useExisting) return 'existing';
-  return 'class';
-}
-
-function getProvidersForElement(el: Element) {
-  const ng = getNg();
-  if (!ng?.getInjector || !ng?.ɵgetInjectorProviders) return null;
-
-  try {
-    const injector = ng.getInjector(el);
-    if (!injector) return null;
-
-    const providers = getInjectorProvidersList(ng, injector);
-    const resolutionPath = ng.ɵgetInjectorResolutionPath?.(injector) ?? [];
-
-    return {
-      providers,
-      resolutionPath: resolutionPath.map((inj: any) => {
-        const meta = ng.ɵgetInjectorMetadata?.(inj);
-        return {
-          type: meta?.type ?? 'unknown',
-          name:
-            meta?.type === 'element'
-              ? (meta.source?.tagName?.toLowerCase?.() ?? 'element')
-              : 'environment',
-        };
-      }),
-    };
-  } catch {
-    return null;
-  }
-}
-
-// --- NgRx Store state collection via Redux DevTools protocol ---
-
-const ngrxActionLog: { type: string; payload?: unknown; timestamp: number }[] = [];
-const MAX_ACTION_LOG = 50;
-let reduxDevToolsSubscribed = false;
-
-function collectNgrxState(): {
-  state: unknown;
-  actions: { type: string; payload?: unknown; timestamp: number }[];
-  connected: boolean;
-} | null {
-  const win = window as any;
-
-  // Try Redux DevTools Extension connection
-  if (!reduxDevToolsSubscribed) {
-    subscribeToReduxDevTools();
-  }
-
-  // Try to get state from the NgRx store via Angular's DI
-  const storeState = getNgrxStoreState();
-  if (storeState !== undefined) {
-    return { state: storeState, actions: ngrxActionLog.slice(), connected: true };
-  }
-
-  // Check if we have actions from Redux DevTools subscription
-  if (ngrxActionLog.length > 0) {
-    return {
-      state: win.__NGRX_DEVTOOLS_LAST_STATE__ ?? null,
-      actions: ngrxActionLog.slice(),
-      connected: true,
-    };
-  }
-
-  return null;
-}
-
-function getNgrxStoreState(): unknown | undefined {
-  const ng = getNg();
-  if (!ng?.getInjector) return undefined;
-
-  const roots = document.querySelectorAll('[ng-version], [_nghost-ng-c]');
-  for (const root of roots) {
-    try {
-      const injector = ng.getInjector(root);
-      if (!injector) continue;
-
-      // Try to get the NgRx Store service from the injector
-      // NgRx Store has a `select` method and an internal `state` observable
-      const allProviders = ng.ɵgetInjectorProviders?.(injector) ?? [];
-      for (const p of allProviders) {
-        const token = p.token;
-        if (!token) continue;
-
-        // Check if this is the NgRx Store token
-        const tokenName = token.name ?? token.toString?.() ?? '';
-        if (tokenName === 'Store') {
-          try {
-            const store = injector.get(token);
-            if (!store || typeof store.subscribe !== 'function') continue;
-            // Subscribe once to capture the synchronous initial emission
-            let snapshot: unknown;
-            const sub = store.subscribe((val: unknown) => {
-              snapshot = val;
-            });
-            sub.unsubscribe();
-            if (snapshot !== undefined) return safeSerialize(snapshot);
-          } catch {
-            // not resolvable at this injector level
-          }
-        }
-      }
-    } catch {
-      // skip
-    }
-  }
-  return undefined;
-}
-
-function subscribeToReduxDevTools() {
-  const win = window as any;
-
-  // Hook into __REDUX_DEVTOOLS_EXTENSION__ if it exists
-  const ext = win.__REDUX_DEVTOOLS_EXTENSION__;
-  if (!ext) return;
-
-  reduxDevToolsSubscribed = true;
-
-  // Wrap the connect method to intercept NgRx connections
-  const originalConnect = ext.connect?.bind(ext);
-  if (originalConnect) {
-    ext.connect = function (...args: unknown[]) {
-      const connection = originalConnect(...args);
-
-      // Intercept send calls to capture actions
-      const originalSend = connection.send?.bind(connection);
-      if (originalSend) {
-        connection.send = function (action: unknown, state: unknown) {
-          captureAction(action);
-          win.__NGRX_DEVTOOLS_LAST_STATE__ = safeSerialize(state);
-          return originalSend(action, state);
-        };
-      }
-
-      // Intercept init to capture initial state
-      const originalInit = connection.init?.bind(connection);
-      if (originalInit) {
-        connection.init = function (state: unknown) {
-          win.__NGRX_DEVTOOLS_LAST_STATE__ = safeSerialize(state);
-          return originalInit(state);
-        };
-      }
-
-      return connection;
-    };
-  }
-
-  // Also try to subscribe to existing connections
-  if (typeof ext.subscribe === 'function') {
-    try {
-      ext.subscribe((message: any) => {
-        try {
-          if (message?.type === 'ACTION' || message?.type === 'DISPATCH') {
-            captureAction(message.payload);
-          }
-          if (message?.state) {
-            win.__NGRX_DEVTOOLS_LAST_STATE__ = safeSerialize(
-              typeof message.state === 'string' ? JSON.parse(message.state) : message.state,
-            );
-          }
-        } catch {
-          // ignore malformed messages
-        }
-      });
-    } catch {
-      // subscription not supported
-    }
-  }
-}
-
-function captureAction(action: unknown) {
-  if (!action) return;
-  const entry = {
-    type: (action as any).type ?? String(action),
-    payload: safeSerialize((action as any).payload ?? (action as any)),
-    timestamp: Date.now(),
-  };
-  ngrxActionLog.push(entry);
-  if (ngrxActionLog.length > MAX_ACTION_LOG) {
-    ngrxActionLog.splice(0, ngrxActionLog.length - MAX_ACTION_LOG);
-  }
-}
-
-function safeSerialize(val: unknown): unknown {
-  if (val === undefined || val === null) return val;
-  try {
-    return JSON.parse(JSON.stringify(val));
-  } catch {
-    return String(val);
-  }
-}
-
 // Auto-init when loaded as a script (skip during test environment)
 if (
   typeof document !== 'undefined' &&
   !(typeof process !== 'undefined' && process.env?.['VITEST'])
 ) {
   initOverlay().catch(console.error);
-  import('./popup.ts').then((m) => m.createDevtoolsPopup()).catch(console.error);
+  import('./popup.ts').then((m) => m.showDevtools()).catch(console.error);
 }

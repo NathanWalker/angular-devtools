@@ -18,24 +18,34 @@ import { StatCard } from './stat-card';
   `,
   styles: `
     .panel {
-      border: 1px solid var(--line);
-      border-radius: 10px;
       padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius, 12px);
       background: var(--surface);
+      box-shadow: var(--shadow-sm);
     }
     h3 {
       margin: 0 0 12px;
       font-size: 16px;
+      line-height: 1.3;
     }
     .slot {
       display: grid;
       gap: 12px;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+      align-items: start;
     }
     .summary {
       margin: 12px 0 0;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
       color: var(--muted);
       font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
+    strong {
+      color: var(--ink);
+      font-weight: 600;
     }
   `,
 })

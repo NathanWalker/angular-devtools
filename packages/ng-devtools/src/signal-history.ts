@@ -2,6 +2,7 @@ import type { SignalChange, SignalGraphNode } from './types.ts';
 
 export const MAX_CHANGES = 50;
 const MAX_TRACKS = 500;
+export const MAX_NODES = 500;
 const VALUE_KINDS = new Set(['signal', 'computed', 'linkedSignal']);
 
 /** The fields Angular's `setPostSignalSetFn` hook exposes on a signal node. */
@@ -24,11 +25,15 @@ function append(list: SignalChange[], change: SignalChange) {
   if (list.length > MAX_CHANGES) list.splice(0, list.length - MAX_CHANGES);
 }
 
-export function createSignalHistory(serialize: (value: unknown) => unknown, now = Date.now) {
+export function createSignalHistory(
+  serialize: (value: unknown, name?: string) => unknown,
+  now = Date.now,
+) {
   const tracks = new Map<string, Track>();
   const trackIds = new WeakMap<RawSignalNode, string>();
   const bound = new Map<string, string>();
   const history = new Map<string, SignalChange[]>();
+  const sent = new Map<string, number>();
   let trackSeq = 0;
 
   function onWrite(node: RawSignalNode) {
@@ -50,7 +55,7 @@ export function createSignalHistory(serialize: (value: unknown) => unknown, now 
     }
     append(track.changes, {
       epoch: node.version ?? 0,
-      value: serialize(node.value),
+      value: serialize(node.value, node.debugName),
       at: now(),
       source: 'write',
     });
@@ -85,13 +90,6 @@ export function createSignalHistory(serialize: (value: unknown) => unknown, now 
   }
 
   function collect(nodes: SignalGraphNode[]): Record<string, SignalChange[]> {
-    const live = new Set(nodes.map((n) => n.id));
-    for (const id of history.keys()) {
-      if (!live.has(id)) {
-        history.delete(id);
-        bound.delete(id);
-      }
-    }
     const taken = new Set(bound.values());
     const out: Record<string, SignalChange[]> = {};
     for (const node of nodes) {
@@ -113,11 +111,35 @@ export function createSignalHistory(serialize: (value: unknown) => unknown, now 
           ...(missed > 0 ? { missed } : {}),
         });
       }
+      history.delete(node.id);
       history.set(node.id, list);
       out[node.id] = list.slice();
+    }
+    for (const id of history.keys()) {
+      if (history.size <= MAX_NODES) break;
+      history.delete(id);
+      bound.delete(id);
     }
     return out;
   }
 
-  return { onWrite, collect };
+  function collectDelta(nodes: SignalGraphNode[], full = false): Record<string, SignalChange[]> {
+    const out: Record<string, SignalChange[]> = {};
+    for (const [id, list] of Object.entries(collect(nodes))) {
+      const last = full ? -Infinity : (sent.get(id) ?? -Infinity);
+      const fresh = list.filter((change) => change.epoch > last);
+      if (list.length) {
+        sent.delete(id);
+        sent.set(id, list.at(-1)!.epoch);
+      }
+      if (fresh.length) out[id] = fresh;
+    }
+    for (const id of sent.keys()) {
+      if (sent.size <= MAX_NODES) break;
+      sent.delete(id);
+    }
+    return out;
+  }
+
+  return { onWrite, collect, collectDelta };
 }

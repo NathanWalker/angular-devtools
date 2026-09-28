@@ -50,3 +50,59 @@ describe('get-ngrx-store', () => {
     expect(entries.map((e) => e.name)).toEqual(['ProductStore']);
   });
 });
+
+describe('get-ngrx-store members', () => {
+  it('lists the members of a signal store', async () => {
+    const entries = await storeFor(
+      [
+        'const initialState: State = { query: "", saved: [], bookings: [] };',
+        'export const TravelStore = signalStore(',
+        "  { providedIn: 'root' },",
+        '  withState(initialState),',
+        '  withEntities<Todo>(),',
+        '  withComputed(({ saved }) => ({ count: computed(() => saved().length), other: computed(() => 1) })),',
+        '  withProps(() => ({ api: inject(Api) })),',
+        '  withMethods((store) => ({',
+        '    setQuery(query: string): void { patchState(store, { query }); },',
+        '    book(b: Omit<Booking, "id">): Booking { return b as Booking; },',
+        '    load: rxMethod<void>(pipe()),',
+        '  })),',
+        '  withHooks({ onInit() {}, onDestroy: () => {} }),',
+        ');',
+      ].join('\n'),
+    );
+    const store = entries.find((e) => e.name === 'TravelStore')!;
+    expect(store.members).toEqual({
+      state: ['query', 'saved', 'bookings'],
+      entities: ['Todo'],
+      computed: ['count', 'other'],
+      props: ['api'],
+      methods: ['setQuery', 'book', 'load'],
+      rxMethods: ['load'],
+      hooks: ['onInit', 'onDestroy'],
+    });
+    expect(store.detail).toBe(
+      'state: query, saved, bookings; computed: count, other; methods: setQuery, book, load; rxMethod: load; props: api; hooks: onInit, onDestroy; entities: Todo',
+    );
+  });
+
+  it('reads inline withState keys and class field signalState', async () => {
+    const entries = await storeFor(
+      [
+        "import { signalState, signalMethod } from '@ngrx/signals';",
+        'export const S = signalStore(withState({ a: 1, b: { c: 2 } }));',
+        'class Cmp {',
+        '  readonly state = signalState({ x: 1 });',
+        '  private readonly log = signalMethod<number>((n) => n);',
+        '}',
+      ].join('\n'),
+    );
+    expect(entries.find((e) => e.name === 'S')?.members).toEqual({ state: ['a', 'b'] });
+    expect(entries.map((e) => [e.name, e.kind])).toEqual(
+      expect.arrayContaining([
+        ['state', 'signal-state'],
+        ['log', 'signal-method'],
+      ]),
+    );
+  });
+});

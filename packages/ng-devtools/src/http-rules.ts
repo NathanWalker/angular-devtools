@@ -36,6 +36,7 @@ export interface HttpRegistry {
   warnings?: string[];
   /** Set by the devframe server so SSR calls reach the timeline. */
   record?: (call: HttpCall) => void;
+  dispose?: () => void;
 }
 
 export const MAX_CALLS = 200;

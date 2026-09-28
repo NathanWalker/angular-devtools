@@ -19,6 +19,7 @@
     "./overlay": "./src/overlay.ts",
     "./popup": "./src/popup.ts",
     "./http": "./src/http.ts",
+    "./hub": "./src/hub.ts",
     "./package.json": "./package.json",
     "./vite": "./src/vite.ts"
   },
@@ -29,6 +30,7 @@
       "./overlay": "./dist/overlay.mjs",
       "./popup": "./dist/popup.mjs",
       "./http": "./dist/http.mjs",
+      "./hub": "./dist/hub.mjs",
       "./package.json": "./package.json",
       "./vite": "./dist/vite.mjs"
     }
@@ -51,6 +53,8 @@
   ],
   "dependencies": {
     "@devframes/agentic": "^1.1.0",
+    "@devframes/hub": "^1.1.0",
+    "@devframes/hub-ui": "^1.1.0",
     "@valibot/to-json-schema": "^1.8.0",
     "cac": "^7.0.0",
     "devframe": "^1.1.0",
@@ -60,7 +64,8 @@
   "peerDependencies": {
     "@angular/common": ">=20",
     "@angular/core": ">=20",
-    "rxjs": ">=7"
+    "rxjs": ">=7",
+    "vite": ">=5"
   },
   "peerDependenciesMeta": {
     "@angular/common": {
@@ -70,6 +75,9 @@
       "optional": true
     },
     "rxjs": {
+      "optional": true
+    },
+    "vite": {
       "optional": true
     }
   },
@@ -81,13 +89,5 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "peerDependencies": {
-    "vite": ">=5"
-  },
-  "peerDependenciesMeta": {
-    "vite": {
-      "optional": true
-    }
   }
 }

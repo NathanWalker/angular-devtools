@@ -119,4 +119,60 @@ class Settings {}`,
     `);
     expect(providers.map((p) => p.token)).toEqual(['ChangeDetection (zoneless)', 'CheckNoChanges']);
   });
+
+  it('reads only the provided token of each providers entry', async () => {
+    const providers = await providersFor(`
+      @Component({
+        providers: [
+          { provide: API_URL, useFactory: (config: AppConfig) => config.url, deps: [AppConfig] },
+          { provide: Logger, useClass: ConsoleLogger },
+          { provide: Parent, useExisting: forwardRef(() => Child) },
+          { provide: forwardRef(() => Late), useValue: 1 },
+          ...FEATURE_PROVIDERS,
+          APP_PROVIDERS,
+          importProvidersFrom(SomeModule),
+          Store,
+        ],
+        viewProviders: [ViewOnly],
+      })
+      class Panel {}
+    `);
+    expect(providers.map((p) => [p.token, p.type])).toEqual([
+      ['API_URL', 'provider'],
+      ['Logger', 'provider'],
+      ['Parent', 'provider'],
+      ['Late', 'provider'],
+      ['Store', 'provider'],
+      ['ViewOnly', 'provider'],
+    ]);
+  });
+
+  it('reads a root signalStore and a tree-shakable InjectionToken as providers', async () => {
+    const providers = await providersFor(`
+      export const CartStore = signalStore({ providedIn: 'root' }, withState({ items: [] }));
+      export const LocalStore = signalStore(withState({ open: false }));
+      export const API_URL = new InjectionToken<string>('api', {
+        providedIn: 'root',
+        factory: () => '/api',
+      });
+      export const PLAIN = new InjectionToken<string>('plain');
+    `);
+    expect(providers.map((p) => [p.token, p.source, p.providedIn, p.type])).toEqual([
+      ['CartStore', 'signalStore', 'root', 'injectable'],
+      ['API_URL', 'InjectionToken', 'root', 'injectable'],
+    ]);
+  });
+
+  it('tells inject() consumers apart from provider declarations', async () => {
+    const providers = await providersFor(`
+      @Injectable({ providedIn: 'root' })
+      export class Api {}
+      export class Panel {
+        api = inject(Api);
+        other = inject(Api);
+      }
+    `);
+    expect(providers.filter((p) => p.type !== 'injection').map((p) => p.token)).toEqual(['Api']);
+    expect(providers.filter((p) => p.type === 'injection')).toHaveLength(2);
+  });
 });

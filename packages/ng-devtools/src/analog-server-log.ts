@@ -73,6 +73,13 @@ export function recordCall(call: Omit<AnalogCall, 'id'>): AnalogCall {
 
 export function clearCalls() {
   calls.length = 0;
+  for (const listener of listeners) {
+    try {
+      listener([]);
+    } catch {
+      // a broken listener must not break the dev server
+    }
+  }
 }
 
 export function setDevOrigin(value: string | undefined) {
@@ -106,6 +113,16 @@ export function previewOf(body: string, type: string | undefined): string | unde
   return text.length > MAX_PREVIEW ? `${text.slice(0, MAX_PREVIEW)}…` : text;
 }
 
+/** Maps an Analog load endpoint path back to the page URL it serves. */
+export function loadRoute(endpoint: string): string {
+  return (
+    endpoint
+      .replace(/\/\([^/]*\)(?=\/|$)/g, '')
+      .replace(/\/-[^/]+-$/, '')
+      .replace(/\/index$/, '') || '/'
+  );
+}
+
 export function classify(
   url: string,
   method: string,
@@ -116,7 +133,7 @@ export function classify(
   const prefix = apiPrefix ? `/${apiPrefix}` : '';
   for (const base of [`${prefix}/_analog/pages`, '/_analog/pages']) {
     if (path.startsWith(`${base}/`) || path === base) {
-      return { kind: 'load', route: path.slice(base.length).replace(/\/index$/, '') || '/' };
+      return { kind: 'load', route: loadRoute(path.slice(base.length)) };
     }
   }
   for (const base of [`${prefix}/_analog/fn`, '/_analog/fn']) {
@@ -219,17 +236,39 @@ export interface DuplicateLoad {
   browserAt: number;
 }
 
-export function duplicateLoads(list: AnalogCall[], windowMs = 15_000): DuplicateLoad[] {
+/**
+ * Pairs the SSR load() of a server rendered page with the first browser load()
+ * of the same route that follows the render. Any other navigation resets it.
+ */
+function rendersRoute(loadRoute: string, pageRoute: string): boolean {
+  const load = loadRoute.replace(/\/+$/, '') || '/';
+  const page = pageRoute.replace(/\/+$/, '') || '/';
+  return load === page || load === '/' || page.startsWith(`${load}/`);
+}
+
+export function duplicateLoads(list: AnalogCall[], windowMs = 10_000): DuplicateLoad[] {
   const out: DuplicateLoad[] = [];
-  const lastSsr = new Map<string, number>();
+  let ssrLoads = new Map<string, number>();
+  let armed = new Map<string, number>();
+  let armedAt = 0;
   for (const call of list) {
-    if (call.kind !== 'load' || !call.route) continue;
-    if (call.from === 'ssr') lastSsr.set(call.route, call.at);
-    else if (call.from === 'browser') {
-      const ssrAt = lastSsr.get(call.route);
-      if (ssrAt !== undefined && call.at - ssrAt <= windowMs) {
-        out.push({ route: call.route, ssrAt, browserAt: call.at });
-        lastSsr.delete(call.route);
+    if (call.from === 'devtools' || !call.route) continue;
+    if (call.kind === 'page') {
+      const page = call.route;
+      armed =
+        call.from === 'browser' && call.render === 'ssr'
+          ? new Map([...ssrLoads].filter(([route]) => rendersRoute(route, page)))
+          : new Map();
+      armedAt = call.at;
+      ssrLoads = new Map();
+    } else if (call.kind === 'load') {
+      if (call.from === 'ssr') {
+        ssrLoads.set(call.route, call.at);
+      } else if (armed.has(call.route) && call.at - armedAt <= windowMs) {
+        out.push({ route: call.route, ssrAt: armed.get(call.route)!, browserAt: call.at });
+        armed.delete(call.route);
+      } else {
+        armed = new Map();
       }
     }
   }

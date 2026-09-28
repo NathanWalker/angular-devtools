@@ -3,10 +3,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** The module auto-creates on import and keeps a single instance, so each test
  * needs it loaded afresh. */
-async function loadPopup() {
+async function loadPopup(hub = false) {
   document.body.innerHTML = '';
+  document.head.innerHTML = '';
   vi.resetModules();
-  await import('../popup.ts');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      hub
+        ? new Response('{}', { headers: { 'content-type': 'application/json' } })
+        : new Response('', { status: 404 }),
+    ),
+  );
+  const popup = await import('../popup.ts');
+  await popup.showDevtools();
 }
 
 function parts() {
@@ -21,6 +31,38 @@ function parts() {
 // One document and one localStorage, so these share state by nature.
 describe.sequential('devtools popup', () => {
   beforeEach(() => localStorage.clear());
+
+  it('opens the whole hub from the launcher when a hub is mounted', async () => {
+    await loadPopup(true);
+    const { fab } = parts();
+    fab.click();
+    const frame = document
+      .getElementById('ng-devtools-popup-root')!
+      .shadowRoot!.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame.src).toBe(`${location.origin}/__devframes/`);
+    expect(document.head.querySelector('script[src="/__devframes/embedded.js"]')).toBeNull();
+  });
+
+  it('closes on Escape pressed inside a dock frame nested in the hub', async () => {
+    await loadPopup(true);
+    const { fab, panel } = parts();
+    fab.click();
+    const frame = document
+      .getElementById('ng-devtools-popup-root')!
+      .shadowRoot!.querySelector('iframe') as HTMLIFrameElement;
+    const viewerFrame = document.createElement('iframe');
+    document.body.appendChild(viewerFrame);
+    const viewer = viewerFrame.contentDocument!;
+    Object.defineProperty(frame, 'contentDocument', { get: () => viewer });
+    frame.dispatchEvent(new Event('load'));
+    const dock = viewer.createElement('iframe');
+    viewer.body.appendChild(dock);
+    await new Promise((resolve) => setTimeout(resolve));
+    dock.contentDocument!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    expect(panel.classList.contains('open')).toBe(false);
+  });
 
   it('mounts even when the stored state is unusable', async () => {
     for (const stored of ['null', '123', '"float"', '[]', '{not json', '{"launcher":{}}']) {

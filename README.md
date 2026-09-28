@@ -8,7 +8,7 @@ Inspect Angular component trees, signals, dependency injection, and routes — a
 - **Signal graph** — visualize signal, computed, linkedSignal, effect nodes and their dependency edges (Angular 19+)
 - **DI inspector** — browse the injector hierarchy (element and environment) with providers at each level (Angular 17+)
 - **Route inspector** — the live route, every navigation as a full story (who started it, redirects, per-phase timing, which guard or resolver decided it, errors explained), the live route config with URL testing, router setup, route lint, and actions to navigate, replay, probe and abort
-- **NgRx Store inspector** — detect `@ngrx/store` (actions, reducers, effects, selectors) and `@ngrx/signals` (`signalStore`, `signalState`, `signalMethod`) patterns from source; live state & action log via Redux DevTools protocol
+- **NgRx Store inspector**: live `@ngrx/signals` stores (state, computed, methods, the component fields that use them) with a change log, per-change diffs and state restore (call `registerNgrxSignals({ patchState })` from `@santoshyadavdev/ng-devtools/overlay` once, so restore also notifies `watchState` listeners), plus the `@ngrx/store` state and action log (time travel with `provideStoreDevtools()`); source scan of `signalStore` members, `signalState`, `signalMethod`, actions, reducers, effects, selectors and features
 - **Forms inspector** — every form on the page (Signal Forms, reactive and template-driven) with each field's value, status, touched/dirty state and readable errors, plus a timeline of recent changes; hover a field to highlight its input
 - **SSR & HTTP inspector** — the TransferState payload, a timeline of HTTP calls made during SSR and on the client, hydration stats and warnings, and fault injection (status, delay, mock JSON body) per URL pattern on the client, in SSR or both
 - **Build metadata** — Angular version, TypeScript version, SSR status
@@ -29,18 +29,29 @@ MCP agent support (`@devframes/agentic`) is included.
 
 ### Embedded in an Angular app (Express SSR)
 
-Add the devframe middleware to your Express server:
+Mount the devtools hub in your Express server:
 
 ```ts
 // server.ts
-import { initDevframe } from 'devframe/initiate';
-import ngDevtools from '@santoshyadavdev/ng-devtools/devframe';
+import { initNgDevtoolsHub } from '@santoshyadavdev/ng-devtools/hub';
 
-const devtools = initDevframe(ngDevtools, { base: '/__ng-devtools/' });
+const devtools = initNgDevtoolsHub({ ws: false });
 app.use(devtools.nodeMiddleware);
 ```
 
-Open `http://localhost:4000/__ng-devtools/` to see the devtools UI.
+Load the overlay in development (see [Browser Overlay](#browser-overlay)) and a floating button appears on your page. It opens the devtools with one dock entry per tool:
+
+| Dock entry   | Shows                                                                          |
+| ------------ | ------------------------------------------------------------------------------ |
+| Angular      | Dashboard, components, routes, signals, injectors and forms                    |
+| NgRx         | Store patterns from source, and live state and actions                         |
+| Analog       | File routes, server calls, render modes and lint (a notice in non-Analog apps) |
+| NativeScript | Coming soon                                                                    |
+| Capacitor    | Coming soon                                                                    |
+
+The full-page viewer is at `http://localhost:4000/__devframes/`. The hub is built on [`@devframes/hub`](https://github.com/devframes/devframe), so other devframe tools can join the same dock.
+
+To mount only the devtools panel without the dock, use `initDevframe(ngDevtools, { base: '/__ng-devtools/' })` from `devframe/initiate`, as before.
 
 To fill the SSR & HTTP tab, add the interceptor and hydration hooks to your app config:
 
@@ -99,7 +110,7 @@ npx @santoshyadavdev/ng-devtools mcp
 }
 ```
 
-When embedded in Express, the MCP endpoint is also available over HTTP at `/__ng-devtools/__mcp`.
+When embedded in Express, the MCP endpoint is also available over HTTP at `/__devframes/__mcp` (or `/__ng-devtools/__mcp` without the hub).
 
 #### Agent Tools
 
@@ -212,23 +223,29 @@ bootstrapApplication(App, appConfig).then(() => {
 });
 ```
 
-The panel is then at `/__ng-devtools/` on the Vite dev server, and the MCP endpoint at `/__ng-devtools/__mcp`. The Analog tab shows:
+The floating button appears on the page, the full viewer is at `/__devframes/` on the Vite dev server, and the MCP endpoint at `/__devframes/__mcp`.
+
+The devtools only answer this machine, and only pages served from `localhost`, `127.0.0.1` or the Chrome extension, so another website open in your browser can't reach them. If you open the dev server through another hostname that points to your machine (for example `myapp.test`), list it in Vite's `server.allowedHosts` and the devtools trust it too. Other origins can be added with `ngDevtools({ allowedOrigins: ['https://tunnel.example'] })`.
+
+The Analog dock shows:
 
 - Routes: every page, layout and markdown file with its URL, route groups, `[param]` and catch-all segments, `.server.ts` files and routeMeta. Test a URL to see which files render it.
-- Server: page renders (server rendered or client only), `load()` fetches, server functions and API calls with status, time and a redacted preview, plus a request playground for API routes. A `load()` that runs on the server and again in the browser is flagged.
+- Server: page renders (server rendered or client only), `load()` fetches, server functions and API calls with status, time and a redacted preview, plus a request playground for API routes and a button to clear the list. A `load()` that runs while a page is server rendered and again in the browser right after it loads is flagged.
 - Render: SSR, prerendered or client only per page, from config, build output and the last request.
 - Content and Lint: markdown files, and checks for duplicate URLs, missing default exports, layouts without `<router-outlet>`, orphan `.server.ts` files, API method suffixes, prerender entries and frontmatter.
 
-The Analog tab appears only in Analog apps, and the Routes tab and Dashboard switch to Analog's file routes and SSR setting there. Tested with Analog 2.7 on Angular 20 (a fresh app from the official template, npm and pnpm) and Angular 22. The demo lives in `examples/analog` (`pnpm analog:dev`).
+The Analog dock is always in the rail, but it shows Analog data only in Analog apps; in other apps it shows a "This app doesn’t use Analog" page. In Analog apps it is also a tab when the panel is mounted without the hub, and the Routes tab and Dashboard switch to Analog's file routes and SSR setting. Tested with Analog 2.7 on Angular 20 (a fresh app from the official template, npm and pnpm) and Angular 22. The demo lives in `examples/analog` (`pnpm analog:dev`).
 
 #### SSR & HTTP
 
 The SSR & HTTP tab needs `withNgDevtools()` and `provideNgDevtoolsHttp()` (see [Embedded in an Angular app](#embedded-in-an-angular-app-express-ssr)), and SSR and the devtools middleware must run in the same Express process. It works in development builds only; in production the interceptor passes requests through untouched.
 
-- **HTTP timeline**: every `HttpClient` request, tagged SSR or Client, with method, URL, status, time, whether the transfer cache answered it, and whether a fault rule changed it. Click a row for a response preview. Client calls are grouped by page; pick the page at the top. SSR calls are kept for the whole server, not per page, until you press Clear timeline.
-- **Fault injection**: add a rule with a URL pattern (a substring, or a glob where `*` matches anything, so `/api/*` matches both relative and absolute URLs), an optional method, where it applies (SSR + client, SSR only, client only), and a status, a delay (up to 10 s) and an optional JSON body. A status of 400 or more fails the request with an `HttpErrorResponse`; a lower status returns the body as a mocked response. Client rules apply right away; SSR rules apply from the next page load.
-- **Hydration**: whether hydration is on, hydrated components and nodes, skipped components, incremental defer blocks, and the hydration warnings Angular logged.
-- **TransferState payload**: each entry in the page's `ng-state` script with its size, with HTTP cache entries decoded to status, URL and body.
+Register `withNgDevtools()` before your own interceptors (`provideHttpClient(withNgDevtools(), withInterceptors([auth]))`), so it records requests as the app makes them and fault rules apply before anything else. Transfer cache hits are detected when the cached response comes back right away, or when the page's TransferState holds a GET or HEAD entry for the same URL, so an async interceptor after it does not hide them.
+
+- **HTTP timeline**: every `HttpClient` request, tagged SSR or Client, with method, URL, the page that made it, status, time, whether the transfer cache answered it, and whether a fault rule changed it. Click a row for a response preview. Pick the page at the top; the timeline shows its client calls and the SSR calls made while rendering its first URL. The picker stays on the page you picked until that tab closes. Calls are kept until you press Clear timeline.
+- **Fault injection**: add a rule with a URL pattern (a substring, or a glob where `*` matches anything, so `/api/*` matches both relative and absolute URLs), an optional method, where it applies (SSR + client, SSR only, client only), and a status, a delay (up to 10 s) and an optional JSON body. A status of 400 or more fails the request with an `HttpErrorResponse`; a lower status returns the body as a mocked response (a `responseType: 'text'` request gets the body as text). A rule with only a delay passes the request through. Client rules apply right away; SSR rules apply from the next page load. SSR mocks are not written to TransferState, so the browser requests the URL again; apply the rule on SSR + client to mock both.
+- **Hydration**: whether hydration is on (the server sent hydration annotations), hydrated components and nodes, skipped components, incremental defer blocks, mismatched components with the expected and actual DOM, and the hydration warnings (NG05xx) Angular logged. Warnings are captured only with `provideNgDevtoolsHttp()`.
+- **TransferState payload**: each entry in the page's `{APP_ID}-state` script with its size, with HttpClient and Analog cache entries decoded to status, URL and body, and `__nghData__` / `__nghDeferData__` labelled as hydration annotations.
 
 Routes that are prerendered at build time make no requests at runtime and ignore SSR rules. Use `RenderMode.Server` in `app.routes.server.ts` for pages you want to test this way.
 
@@ -241,7 +258,7 @@ Response previews and TransferState values are not redacted: they are sent to th
 | `ng-devtools:component-tree` | Live component hierarchy      |
 | `ng-devtools:signal-graph`   | Signal dependency graph       |
 | `ng-devtools:injector-tree`  | DI injector hierarchy         |
-| `ng-devtools:ngrx-store`     | Live NgRx state & action log  |
+| `ng-devtools:ngrx-store`     | Live NgRx stores & change log |
 | `ng-devtools:forms`          | Live forms and recent changes |
 | `ng-devtools:router`         | Live route and navigations    |
 
@@ -277,8 +294,10 @@ The overlay runs inside the user's Angular page and collects live component, sig
 import '@santoshyadavdev/ng-devtools/overlay';
 ```
 
-It looks for the devframe connection next to the page and then at
-`/__ng-devtools/`.
+It looks for the devframe connection next to the page, then at
+`/__ng-devtools/` and `/__devframes/ng-devtools/`. It also adds the floating
+button below; with the hub mounted, the button opens the whole hub (every dock
+in a side rail).
 
 `initOverlay` is exported for a devtools mounted somewhere else. Importing the
 module has already started an overlay on the default URLs by then, so dispose of
@@ -301,18 +320,20 @@ import { createDevtoolsPopup } from '@santoshyadavdev/ng-devtools/popup';
 createDevtoolsPopup();
 ```
 
-This adds a purple FAB button (bottom-right) that opens the full devtools UI in an iframe. Supports three dock modes (float, bottom, right), dragging, resizing, and persists position via localStorage. The popup is automatically loaded in development when using the demo app.
+This adds a floating button (bottom-right) that opens the full devtools UI in an iframe. Supports three dock modes (float, bottom, right), dragging, resizing, and persists position via localStorage. The popup is automatically loaded in development when using the demo app.
 
 ## Demo App
 
-The repository includes a demo Angular app (`src/`) that showcases the devtools with a product catalog built using `@ngrx/signals`:
+The repository includes a demo app, **Angular Travel** (`src/`), that looks and behaves like a real booking site so every inspector has something to show:
 
-- **Home** — simple counter with `signal()`
-- **Products** — product list and detail pages powered by a `signalStore` with `withState`, `withComputed`, and `withMethods`
-- **About** — static page
-- **Examples → SSR & HTTP** (`/examples/http`) — a product list fetched from `/api/products` during SSR and replayed from the transfer cache. The endpoint accepts `?delay=` and `?fail=` for backend scenarios; run the SSR server (`pnpm build --configuration development && node dist/angular-devtools/server/server.mjs`) to see server calls
+- **Destinations**: search, region filter and sort kept in the URL, backed by an `@ngrx/signals` store (`withState`, `withComputed`, `withMethods`)
+- **Trip pages**: loaded by a resolver that redirects unknown trips, with a route title resolver
+- **Booking**: a Signal Forms checkout with a departure date rule, a seat limit and an unsaved-changes guard
+- **My Trips**: behind a sign-in guard that redirects to a reactive form and back
+- **DevTools Lab** (`/examples`): small, focused pages for signals, components, DI, routes and all three form APIs
+- **SSR & HTTP** (`/examples/http`): a product list fetched from `/api/products` during SSR and replayed from the transfer cache. The endpoint accepts `?delay=` and `?fail=` for backend scenarios; run the SSR server (`pnpm build --configuration development && node dist/angular-devtools/server/server.mjs`) to see server calls
 
-Run `pnpm start` and click the purple FAB button to open the devtools popup and see all inspectors in action.
+Run `pnpm start` and click the amber button in the corner to open the devtools. Destination photos are from Unsplash, credited in `public/destinations/CREDITS.md`.
 
 ## Development
 

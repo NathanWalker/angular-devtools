@@ -1,8 +1,10 @@
+import { elementId } from './element-id.ts';
 import {
-  findPipeUsages,
   instrumentPipes,
   readBoundArg,
+  scanPipeViews,
   staleCheckFor,
+  stripBundlerPrefix,
   type NgDebugApi,
   type PipeCall,
   type PipeInstrumentation,
@@ -14,6 +16,7 @@ import type {
   PipeComponentUsage,
   PipeInstanceCall,
   PipePageReport,
+  PipeTarget,
   PipeUsageInfo,
 } from './rpc/pipes-tools.ts';
 
@@ -32,6 +35,10 @@ interface Rpc {
 }
 
 const HEARTBEAT_MS = 5000;
+const FULL_SCAN_EVERY = 20;
+const MAX_ADDED_ROOTS = 200;
+const MAX_TARGETS = 10;
+const MAX_ASYNC_USAGES = 200;
 
 function read<T>(fn: () => T, fallback: T): T {
   try {
@@ -42,7 +49,8 @@ function read<T>(fn: () => T, fallback: T): T {
 }
 
 function componentName(component: unknown): string {
-  return read(() => (component as { constructor?: Function })?.constructor?.name, undefined) || '?';
+  const name = read(() => (component as { constructor?: Function })?.constructor?.name, undefined);
+  return name ? stripBundlerPrefix(name) : '?';
 }
 
 const MAX_DESCRIBE_CHARS = 200;
@@ -64,7 +72,10 @@ function describeValue(value: unknown): string {
 /** `AsyncPipe` keeps its subscribed source and latest value on plain (not
  * ECMAScript-private) fields — `_obj`/`_latestValue` — so this reads them
  * passively; no patching needed, unlike other pipes' call tracking. */
-function asyncReportFor(usages: PipeUsage[]): AsyncUsageInfo[] {
+function asyncReportFor(
+  usages: PipeUsage[],
+  targetOf: (component: unknown) => PipeTarget | undefined,
+): AsyncUsageInfo[] {
   const asyncUsages = usages.filter((u) => u.name === 'async');
   const bySource = new Map<unknown, number>();
   for (const usage of asyncUsages) {
@@ -72,17 +83,19 @@ function asyncReportFor(usages: PipeUsage[]): AsyncUsageInfo[] {
     if (source === undefined || source === null) continue;
     bySource.set(source, (bySource.get(source) ?? 0) + 1);
   }
-  return asyncUsages.map((usage) => {
+  return asyncUsages.slice(0, MAX_ASYNC_USAGES).map((usage) => {
     const source = read(() => (usage.instance as { _obj?: unknown })._obj, undefined);
-    const latestValue = read(
-      () => (usage.instance as { _latestValue?: unknown })._latestValue,
-      undefined,
-    );
+    const hasSource = source !== undefined && source !== null;
+    const latestValue = hasSource
+      ? read(() => (usage.instance as { _latestValue?: unknown })._latestValue, undefined)
+      : undefined;
+    const target = targetOf(usage.component);
     return {
       component: componentName(usage.component),
-      hasSource: source !== undefined && source !== null,
+      hasSource,
       latestValue: latestValue === undefined ? undefined : describeValue(latestValue),
-      duplicate: source !== undefined && source !== null && (bySource.get(source) ?? 0) > 1,
+      duplicate: hasSource && (bySource.get(source) ?? 0) > 1,
+      ...(target ? { target } : {}),
     };
   });
 }
@@ -139,6 +152,21 @@ interface StaleSnapshot {
 class StaleTracker {
   private readonly checks = new WeakMap<AnyRecord, StaleCheck | null>();
   private readonly snapshots = new WeakMap<AnyRecord, StaleSnapshot>();
+  private readonly detected = new WeakMap<AnyRecord, number>();
+
+  /** When the instance was first seen stale, kept until its argument changes
+   * reference (Angular then recomputes, so the value is fresh again). */
+  staleSince(usage: PipeUsage): number | undefined {
+    const prev = this.snapshots.get(usage.instance);
+    const stale = this.isStale(usage);
+    const current = this.snapshots.get(usage.instance);
+    if (stale) {
+      if (!this.detected.has(usage.instance)) this.detected.set(usage.instance, Date.now());
+    } else if (!prev || !current || !Object.is(prev.ref, current.ref)) {
+      this.detected.delete(usage.instance);
+    }
+    return this.detected.get(usage.instance);
+  }
 
   /** Returns true the moment a pure pipe's bound argument is found unchanged
    * by reference but different in shape from last time — i.e. Angular's own
@@ -189,10 +217,90 @@ export function attachPipes(
   let lastPushAt = 0;
   let paused = false;
 
+  let usages: PipeUsage[] = [];
+  let entries: Element[] = [];
+  let scansSinceFull = 0;
+  let fullScanDue = true;
+  let removed = false;
+  const added = new Set<Element>();
+  const textParents = new Set<Element>();
+  const observer =
+    typeof MutationObserver === 'function'
+      ? new MutationObserver((records) => {
+          for (const record of records) {
+            if (record.removedNodes.length) removed = true;
+            for (const node of Array.from(record.addedNodes)) {
+              if (node.nodeType !== 1) {
+                if (node.parentElement) textParents.add(node.parentElement);
+                continue;
+              }
+              added.add(node as Element);
+            }
+          }
+          if (added.size + textParents.size > MAX_ADDED_ROOTS) {
+            added.clear();
+            textParents.clear();
+            fullScanDue = true;
+          }
+        })
+      : null;
+  observer?.observe(document.documentElement, { childList: true, subtree: true });
+
+  function discover(ng: NgDebugApi): PipeUsage[] {
+    scansSinceFull++;
+    let elements: Iterable<Element>;
+    if (!observer || fullScanDue || scansSinceFull >= FULL_SCAN_EVERY) {
+      elements = document.querySelectorAll('*');
+      fullScanDue = false;
+      scansSinceFull = 0;
+    } else if (added.size || textParents.size || removed) {
+      const candidates = new Set<Element>(document.querySelectorAll('[ng-version]'));
+      for (const el of entries) if (el.isConnected) candidates.add(el);
+      for (const el of textParents) if (el.isConnected) candidates.add(el);
+      for (const el of added) {
+        if (!el.isConnected) continue;
+        candidates.add(el);
+        for (const child of Array.from(el.querySelectorAll('*'))) candidates.add(child);
+      }
+      elements = candidates;
+    } else {
+      return usages;
+    }
+    added.clear();
+    textParents.clear();
+    removed = false;
+    const scan = scanPipeViews(ng, elements);
+    usages = scan.usages;
+    entries = scan.entries;
+    return usages;
+  }
+
+  function targetOf(ng: NgDebugApi): (component: unknown) => PipeTarget | undefined {
+    const cache = new Map<unknown, PipeTarget | undefined>();
+    return (component) => {
+      if (cache.has(component)) return cache.get(component);
+      const host =
+        component && typeof component === 'object'
+          ? read(() => ng.getHostElement?.(component) ?? null, null)
+          : null;
+      const target = host instanceof Element ? { pageId, id: elementId(host) } : undefined;
+      cache.set(component, target);
+      return target;
+    };
+  }
+
   function onPipeCall(call: PipeCall) {
     const prev = stats.get(call.instance);
+    if (prev) {
+      prev.callCount++;
+      prev.lastArgs = call.args;
+      prev.lastResult = call.result;
+      prev.lastCaller = call.caller;
+      prev.lastAt = Date.now();
+      return;
+    }
     stats.set(call.instance, {
-      callCount: (prev?.callCount ?? 0) + 1,
+      callCount: 1,
       lastArgs: call.args,
       lastResult: call.result,
       lastCaller: call.caller,
@@ -200,7 +308,10 @@ export function attachPipes(
     });
   }
 
-  function reportFor(usages: PipeUsage[]): PipeUsageInfo[] {
+  function reportFor(
+    usages: PipeUsage[],
+    targetOf: (component: unknown) => PipeTarget | undefined,
+  ): PipeUsageInfo[] {
     const byName = new Map<string, PipeUsage[]>();
     for (const usage of usages) {
       const group = byName.get(usage.name);
@@ -209,19 +320,26 @@ export function attachPipes(
     }
     const out: PipeUsageInfo[] = [];
     for (const [name, group] of byName) {
-      const componentCounts = new Map<string, number>();
+      const byComponent = new Map<string, PipeComponentUsage>();
       for (const usage of group) {
         const label = componentName(usage.component);
-        componentCounts.set(label, (componentCounts.get(label) ?? 0) + 1);
+        let entry = byComponent.get(label);
+        if (!entry) {
+          entry = { name: label, count: 0 };
+          byComponent.set(label, entry);
+        }
+        entry.count++;
+        const target = targetOf(usage.component);
+        if (target && !entry.targets?.some((t) => t.id === target.id)) {
+          entry.targets ??= [];
+          if (entry.targets.length < MAX_TARGETS) entry.targets.push(target);
+        }
       }
-      const components: PipeComponentUsage[] = Array.from(componentCounts, ([label, count]) => ({
-        name: label,
-        count,
-      }));
+      const components = Array.from(byComponent.values());
 
       let callCount = 0;
       const called: { usage: PipeUsage; stats: InstanceStats }[] = [];
-      let stale = false;
+      let staleAt: number | undefined;
       for (const usage of group) {
         const s = stats.get(usage.instance);
         if (s) {
@@ -230,7 +348,8 @@ export function attachPipes(
         }
         // Only while instrumented: the check has a real (capped) cost, and
         // establishing a baseline while not watching would just be noise.
-        if (instrumented && staleTracker.isStale(usage)) stale = true;
+        const since = instrumented ? staleTracker.staleSince(usage) : undefined;
+        if (since !== undefined && (staleAt === undefined || since < staleAt)) staleAt = since;
       }
 
       called.sort((a, b) => b.stats.lastAt - a.stats.lastAt);
@@ -260,7 +379,7 @@ export function attachPipes(
                 instances,
               }
             : undefined,
-        stale: stale ? { detectedAt: Date.now() } : undefined,
+        stale: staleAt !== undefined ? { detectedAt: staleAt } : undefined,
       });
     }
     return out;
@@ -271,15 +390,16 @@ export function attachPipes(
     try {
       const ng = getNg();
       if (!ng?.getComponent) return;
-      const usages = findPipeUsages(ng, document.querySelectorAll('*'));
+      const usages = discover(ng);
       for (const usage of usages) ownerNames.add(componentName(usage.component));
       if (instrumentation) {
         for (const usage of usages) instrumentation.addPipe(usage);
       }
+      const targets = targetOf(ng);
       const report: PipePageReport = {
         pageId,
-        pipes: reportFor(usages),
-        async: asyncReportFor(usages),
+        pipes: reportFor(usages, targets),
+        async: asyncReportFor(usages, targets),
         instrumented,
       };
       const payload = JSON.stringify(report);
@@ -329,6 +449,11 @@ export function attachPipes(
     },
     stop() {
       paused = true;
+      observer?.disconnect();
+      usages = [];
+      entries = [];
+      added.clear();
+      textParents.clear();
       instrumentation?.stop();
       instrumentation = null;
       instrumented = false;

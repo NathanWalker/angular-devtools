@@ -5,8 +5,9 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
   selector: 'app-examples',
   imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
-    <section class="wrap">
+    <section class="container wrap">
       <header>
+        <p class="eyebrow">DevTools Lab</p>
         <h1>DevTools examples</h1>
         <p class="lead">
           Each page below feeds one inspector. Serve the app, open the DevTools popup and switch
@@ -40,47 +41,45 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
   `,
   styles: `
     .wrap {
-      max-width: 1080px;
-      margin: 0 auto;
-      padding: 24px 24px 0;
+      display: block;
+      padding-top: 40px;
     }
     h1 {
       margin: 0 0 8px;
-      font-size: 26px;
+      font-size: clamp(26px, 3.5vw, 34px);
+      line-height: 1.15;
       letter-spacing: -0.02em;
-    }
-    h1::after {
-      content: '';
-      display: block;
-      width: 56px;
-      height: 3px;
-      margin-top: 10px;
-      border-radius: 2px;
-      background: var(--angular-gradient);
     }
     .lead {
       margin: 0;
-      max-width: 70ch;
+      max-width: 68ch;
       color: var(--muted);
     }
     .tabs {
       display: flex;
-      flex-wrap: wrap;
       gap: 4px;
-      margin: 16px 0 0;
+      margin: 24px -4px 0;
+      padding: 0 4px 12px;
       border-bottom: 1px solid var(--line);
-      padding-bottom: 12px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      scroll-padding-inline: 16px;
     }
     .tabs a {
-      padding: 6px 14px;
-      border-radius: 6px;
+      display: inline-flex;
+      flex: none;
+      align-items: center;
+      height: 36px;
+      padding: 0 14px;
+      border-radius: var(--radius-sm, 8px);
+      color: var(--muted);
       font-size: 14px;
       font-weight: 500;
-      color: var(--muted);
       text-decoration: none;
+      white-space: nowrap;
       transition:
-        background 0.15s,
-        color 0.15s;
+        background-color 0.15s var(--ease, ease),
+        color 0.15s var(--ease, ease);
     }
     .tabs a:hover {
       background: var(--subtle);
@@ -88,11 +87,20 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
     }
     .tabs a.active {
       background: var(--brand-soft);
-      color: var(--brand);
+      color: var(--brand-strong);
     }
     .tabs a:focus-visible {
       outline: 2px solid var(--brand);
-      outline-offset: 2px;
+      outline-offset: -2px;
+    }
+    @media (max-width: 600px) {
+      .wrap {
+        padding-top: 28px;
+      }
+      .tabs {
+        margin-inline: -16px;
+        padding-inline: 16px;
+      }
     }
   `,
 })

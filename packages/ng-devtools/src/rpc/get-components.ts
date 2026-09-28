@@ -7,6 +7,7 @@ import {
   ANNOTATION,
   IGNORED_DIRS,
   classScopes,
+  lineCounter,
   maskStrings,
   sourceRoots,
   stripComments,
@@ -14,8 +15,10 @@ import {
 
 const ComponentSchema = v.object({
   selector: v.string(),
-  kind: v.string(),
+  className: v.string(),
+  kind: v.picklist(['component', 'directive']),
   file: v.string(),
+  line: v.number(),
   inputs: v.array(v.string()),
   outputs: v.array(v.string()),
   isStandalone: v.boolean(),
@@ -29,7 +32,7 @@ export const getComponents = defineRpcFunction({
   returns: describable(v.array(ComponentSchema)),
   agent: {
     description:
-      'Discover Angular components and directives by scanning source files for @Component and @Directive decorators. Returns each selector with its kind, inputs, outputs, and file path. Call this to understand the component architecture.',
+      'Discover Angular components and directives by scanning source files for @Component and @Directive decorators. Returns one entry per decorated class: its class name, selector (empty when it has none, as with routed components), `kind` (component or directive), inputs, outputs, file and line. Count `kind` to tell components from directives. Call this to understand the component architecture.',
     title: 'List Angular components',
   },
   setup: (ctx) => ({
@@ -39,9 +42,11 @@ export const getComponents = defineRpcFunction({
 
 interface ComponentInfo {
   selector: string;
+  className: string;
   /** `component` or `directive`: the scan covers both. */
-  kind: string;
+  kind: 'component' | 'directive';
   file: string;
+  line: number;
   inputs: string[];
   outputs: string[];
   isStandalone: boolean;
@@ -91,14 +96,17 @@ function componentsIn(content: string, relPath: string): ComponentInfo[] {
   const code = maskStrings(source);
 
   const components: ComponentInfo[] = [];
+  const lineAt = lineCounter(code);
   const scopes = classScopes(code, source);
   scopes.forEach((scope) => {
-    if (!scope.component) return;
+    if (!scope.kind || scope.kind === 'pipe') return;
     const body = code.slice(scope.start, scope.end);
     components.push({
-      selector: scope.component,
-      kind: scope.kind ?? 'component',
+      selector: scope.component ?? '',
+      className: scope.className ?? '',
+      kind: scope.kind,
       file: relPath,
+      line: lineAt(scope.start),
       inputs: [...names(body, INPUT), ...names(body, INPUT_DECORATOR)],
       outputs: [...names(body, OUTPUT), ...names(body, OUTPUT_DECORATOR)],
       isStandalone: !/\bstandalone\s*:\s*false\b/.test(scope.decoratorArgs ?? ''),

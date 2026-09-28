@@ -2,7 +2,8 @@ import { defineRpcFunction } from 'devframe';
 import * as v from 'valibot';
 import { describable } from './agent-schema.ts';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { analogConfig, analogVersion } from './analog-scan.ts';
 
 const BuildMetaSchema = v.object({
@@ -32,8 +33,10 @@ export const getBuildMeta = defineRpcFunction({
       const angularJson = readJson(join(ctx.cwd, 'angular.json'));
 
       const deps = { ...pkg['dependencies'], ...pkg['devDependencies'] };
-      const angularVersion = (deps['@angular/core'] ?? 'unknown').replace(/^\^|~/, '');
-      const typescript = (deps['typescript'] ?? 'unknown').replace(/^\^|~/, '');
+      const angularVersion =
+        installedVersion(ctx.cwd, '@angular/core') ?? versionFromRange(deps['@angular/core']);
+      const typescript =
+        installedVersion(ctx.cwd, 'typescript') ?? versionFromRange(deps['typescript']);
 
       const defaultProject =
         angularJson?.['defaultProject'] ??
@@ -53,7 +56,14 @@ export const getBuildMeta = defineRpcFunction({
         projectName: defaultProject,
         typescript,
         ssr: analog ? analogConfig(ctx.cwd).ssr !== false : hasSsr,
-        ...(analog ? { analog: analog.replace(/^\^|~/, '') } : {}),
+        ...(analog
+          ? {
+              analog:
+                installedVersion(ctx.cwd, '@analogjs/platform') ??
+                installedVersion(ctx.cwd, '@analogjs/router') ??
+                versionFromRange(analog),
+            }
+          : {}),
         builtAt: Date.now(),
       };
     },
@@ -67,4 +77,29 @@ function readJson(path: string): Record<string, any> {
   } catch {
     return {};
   }
+}
+
+export function installedVersion(cwd: string, name: string): string | undefined {
+  const resolved = resolvePackageJson(cwd, name);
+  const version = resolved ? readJson(resolved)['version'] : undefined;
+  if (typeof version === 'string') return version;
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    const found = readJson(join(dir, 'node_modules', name, 'package.json'))['version'];
+    if (typeof found === 'string') return found;
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+function resolvePackageJson(cwd: string, name: string): string | undefined {
+  try {
+    return createRequire(join(cwd, 'package.json')).resolve(`${name}/package.json`);
+  } catch {
+    return undefined;
+  }
+}
+
+export function versionFromRange(range: unknown): string {
+  if (typeof range !== 'string' || !range.trim()) return 'unknown';
+  const version = /\d+(?:\.(?:\d+|x|\*)){0,2}(?:-[\w.]+)?/.exec(range);
+  return version ? version[0] : range.trim();
 }

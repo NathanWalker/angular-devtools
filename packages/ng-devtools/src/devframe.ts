@@ -9,8 +9,31 @@ import { trackPageSessions } from './rpc/page-sessions.ts';
 import { getBuildMeta } from './rpc/build-meta.ts';
 import { getSignals } from './rpc/get-signals.ts';
 import { getProviders } from './rpc/get-providers.ts';
-import { getNgrxStore } from './rpc/get-ngrx-store.ts';
-import type { NgrxRuntimeAction, SignalGraph } from './types.ts';
+import { getNgrxStore, scanNgrxStore } from './rpc/get-ngrx-store.ts';
+import {
+  expireNgrxPages,
+  isNgrxReport,
+  mergeNgrxReport,
+  ngrxStateOf,
+  type NgrxDeclaration,
+  type NgrxPages,
+} from './rpc/ngrx-tools.ts';
+import type { NgrxState } from './ngrx-shared.ts';
+import type {
+  ComponentPage,
+  InjectorPage,
+  InjectorTreeNode,
+  LiveComponentNode,
+  SignalChange,
+  SignalGraph,
+} from './types.ts';
+import {
+  expireComponentPages,
+  findComponents,
+  isComponentReport,
+  latestComponentPage,
+  toComponentPage,
+} from './rpc/component-tools.ts';
 import {
   explainFormsText,
   formsResourceText,
@@ -56,6 +79,7 @@ import {
   isRouterReport,
   mergeRouterReport,
   routerResourceText,
+  touchRouterPage,
   type RouterPage,
   type RouterState,
 } from './rpc/router-tools.ts';
@@ -82,6 +106,7 @@ import { sanitizeHydration, sanitizePayload } from './http-payload.ts';
 import type { HttpPage, HttpState } from './types.ts';
 
 import { registerAnalog } from './rpc/analog-register.ts';
+import { registerHubDocks } from './hub-docks.ts';
 
 import pkg from '../package.json' with { type: 'json' };
 
@@ -104,6 +129,7 @@ const ngDevtools = defineDevframe({
   icon: 'ph:angular-logo-duotone',
   importMetaUrl: import.meta.url,
   clientAssets,
+  dock: { visibility: 'false' },
 
   async setup(ctx) {
     const my = ctx.scope('ng-devtools');
@@ -118,11 +144,18 @@ const ngDevtools = defineDevframe({
 
     const componentTree = await my.rpc.sharedState('component-tree', {
       initialValue: {
-        nodes: [],
-        selectedId: null,
-        highlightedId: null,
+        nodes: [] as LiveComponentNode[],
+        pages: {} as Record<string, ComponentPage>,
+        selectedId: null as string | null,
+        highlightedId: null as string | null,
       },
     });
+    const componentPages = new Map<string, ComponentPage>();
+    const applyComponentPages = () =>
+      componentTree.mutate((draft) => {
+        draft.pages = Object.fromEntries(componentPages);
+        draft.nodes = latestComponentPage(componentPages.values())?.roots ?? [];
+      });
 
     await my.rpc.sharedState('routes', {
       initialValue: {
@@ -142,18 +175,44 @@ const ngDevtools = defineDevframe({
 
     const injectorTreeState = await my.rpc.sharedState('injector-tree', {
       initialValue: {
-        roots: [] as any[],
+        roots: [] as InjectorTreeNode[],
+        environment: [] as InjectorTreeNode[],
+        pages: {} as Record<string, InjectorPage>,
         selectedInjectorId: null as string | null,
       },
     });
+    const injectorPages = new Map<string, InjectorPage>();
+    const latestInjectorPage = () =>
+      [...injectorPages.values()].sort((a, b) => b.reportedAt - a.reportedAt)[0];
+    const applyInjectorPages = () =>
+      injectorTreeState.mutate((draft) => {
+        const latest = latestInjectorPage();
+        draft.pages = Object.fromEntries(injectorPages);
+        draft.roots = latest?.roots ?? [];
+        draft.environment = latest?.environment ?? [];
+      });
 
     const ngrxStoreState = await my.rpc.sharedState('ngrx-store', {
-      initialValue: {
-        state: null as unknown,
-        actions: [] as NgrxRuntimeAction[],
-        connected: false,
-      },
+      initialValue: { pages: [] } as NgrxState,
     });
+    const ngrxPages: NgrxPages = new Map();
+    let ngrxDeclarations: { at: number; list: NgrxDeclaration[] } = { at: 0, list: [] };
+    const ngrxNames = () => {
+      if (Date.now() - ngrxDeclarations.at > 10_000) {
+        let list: NgrxDeclaration[] = [];
+        try {
+          list = scanNgrxStore(ctx.cwd).filter((e) => e.kind === 'signal-store');
+        } catch {
+          list = [];
+        }
+        ngrxDeclarations = { at: Date.now(), list };
+      }
+      return ngrxDeclarations.list;
+    };
+    const applyNgrx = () =>
+      ngrxStoreState.mutate((draft) => {
+        draft.pages = ngrxStateOf(ngrxPages).pages as never;
+      });
 
     const formPages = new Map<string, PageReport & { reportedAt: number }>();
     const formsState = await my.rpc.sharedState('forms', {
@@ -268,6 +327,21 @@ const ngDevtools = defineDevframe({
       },
     });
 
+    my.rpc.register({
+      name: 'ping-router',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (pageId: unknown) => {
+        if (!touchRouterPage(routerPages, pageId)) return { known: false };
+        const reportedAt = routerPages.get(pageId as string)!.reportedAt;
+        routerState.mutate((draft) => {
+          const page = draft.pages.find((p) => p.pageId === pageId);
+          if (page) page.reportedAt = reportedAt;
+        });
+        return { known: true };
+      },
+    });
+
     const pendingActions = new Map<string, (result: unknown) => void>();
     let actionSeq = 0;
 
@@ -373,6 +447,7 @@ const ngDevtools = defineDevframe({
       initialValue: { serverCalls: [], pages: [], rules: [] } as HttpState,
     });
     const registry = httpRegistry();
+    registry.dispose?.();
     registry.rules ??= [];
     let pendingServerCalls: HttpCall[] = [];
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -394,7 +469,7 @@ const ngDevtools = defineDevframe({
     };
     const applyHttpPages = () =>
       httpState.mutate((draft) => {
-        draft.pages = [...httpPages.values()].sort((a, b) => b.reportedAt - a.reportedAt);
+        draft.pages = [...httpPages.values()].sort((a, b) => a.firstSeenAt - b.firstSeenAt);
       });
     const setHttpRules = (rules: HttpRule[]) => {
       registry.rules = rules;
@@ -412,16 +487,23 @@ const ngDevtools = defineDevframe({
       handler: (report: unknown) => {
         const page = report as Partial<HttpPage> | null;
         if (!page || typeof page.pageId !== 'string' || typeof page.url !== 'string') return;
+        const known = httpPages.get(page.pageId);
+        const url = page.url.slice(0, 2000);
+        const hasPayload = page.payload !== undefined;
+        if (!hasPayload && !known) return { needPayload: true };
         httpPages.set(page.pageId, {
           pageId: page.pageId,
-          url: page.url.slice(0, 2000),
+          url,
+          initialUrl: typeof page.initialUrl === 'string' ? page.initialUrl.slice(0, 2000) : url,
           title: typeof page.title === 'string' ? page.title.slice(0, 200) : '',
-          payload: sanitizePayload(page.payload),
+          payload: hasPayload ? sanitizePayload(page.payload) : known!.payload,
           hydration: sanitizeHydration(page.hydration),
           calls: sanitizeCalls(page.calls),
+          firstSeenAt: known?.firstSeenAt ?? Date.now(),
           reportedAt: Date.now(),
         });
         applyHttpPages();
+        return { needPayload: false };
       },
     });
 
@@ -479,14 +561,28 @@ const ngDevtools = defineDevframe({
           }
         });
       }
+      if (expireComponentPages(componentPages)) applyComponentPages();
+      const staleInjectors = [...injectorPages].filter(
+        ([, p]) => Date.now() - p.reportedAt > 15_000,
+      );
+      if (staleInjectors.length) {
+        for (const [id] of staleInjectors) injectorPages.delete(id);
+        applyInjectorPages();
+      }
       const next = expirePages(formPages);
       if (next) applyForms(next);
       const nextRouter = expireRouterPages(routerPages);
       if (nextRouter) applyRouter(nextRouter);
       const nextPipes = expirePipePages(pipePages);
       if (nextPipes) applyPipes(nextPipes);
+      if (expireNgrxPages(ngrxPages)) applyNgrx();
     }, 5000);
     expiry.unref?.();
+    registry.dispose = () => {
+      clearInterval(expiry);
+      clearTimeout(flushTimer);
+      registry.record = undefined;
+    };
 
     my.rpc.register({
       name: 'forget-forms-page',
@@ -509,6 +605,24 @@ const ngDevtools = defineDevframe({
           args: [target],
           optional: true,
         });
+      },
+    });
+
+    my.rpc.register({
+      name: 'request-page-highlight',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (selector: string | { pageId?: unknown; id?: unknown } | null) => {
+        const target =
+          selector && typeof selector === 'object' && typeof selector.id === 'string'
+            ? {
+                id: selector.id.slice(0, 50),
+                ...(typeof selector.pageId === 'string' ? { pageId: selector.pageId } : {}),
+              }
+            : typeof selector === 'string'
+              ? selector
+              : '';
+        void my.rpc.broadcast({ method: 'highlight-in-page', args: [target], optional: true });
       },
     });
 
@@ -616,10 +730,19 @@ const ngDevtools = defineDevframe({
       name: 'push-component-tree',
       type: 'action',
       jsonSerializable: true,
-      handler: (nodes: unknown[]) => {
-        componentTree.mutate((draft) => {
-          draft.nodes = nodes as any;
-        });
+      handler: (report: unknown) => {
+        if (!isComponentReport(report)) return;
+        componentPages.set(report.pageId, toComponentPage(report));
+        applyComponentPages();
+      },
+    });
+
+    my.rpc.register({
+      name: 'forget-component-page',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (pageId: unknown) => {
+        if (typeof pageId === 'string' && componentPages.delete(pageId)) applyComponentPages();
       },
     });
 
@@ -627,13 +750,38 @@ const ngDevtools = defineDevframe({
       name: 'select-component',
       type: 'action',
       jsonSerializable: true,
-      handler: (id: string | null) => {
+      handler: (target: string | { pageId?: unknown; id?: unknown } | null) => {
+        if (typeof target === 'string') {
+          void my.rpc.broadcast({
+            method: 'select-signal-component',
+            args: [target.slice(0, 500)],
+            optional: true,
+          });
+          return;
+        }
+        const id = typeof target?.id === 'string' ? target.id.slice(0, 50) : null;
+        const pageId = typeof target?.pageId === 'string' ? target.pageId : undefined;
         componentTree.mutate((draft) => {
           draft.selectedId = id;
         });
         void my.rpc.broadcast({
+          method: 'inspect-component-in-page',
+          args: [{ pageId, id }],
+          optional: true,
+        });
+      },
+    });
+
+    my.rpc.register({
+      name: 'select-signal-target',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (target: { pageId?: unknown; id?: unknown } | null) => {
+        const id = typeof target?.id === 'string' ? target.id.slice(0, 50) : null;
+        const pageId = typeof target?.pageId === 'string' ? target.pageId : undefined;
+        void my.rpc.broadcast({
           method: 'select-signal-component',
-          args: [id],
+          args: [{ pageId, id }],
           optional: true,
         });
       },
@@ -643,16 +791,29 @@ const ngDevtools = defineDevframe({
       name: 'push-signal-graph',
       type: 'action',
       jsonSerializable: true,
-      handler: (graph: PageGraph) => {
-        const pageId = graph?.pageId;
-        if (typeof pageId === 'string' && pageId.length < 50) {
-          signalPages.set(pageId, { graph, reportedAt: Date.now() });
+      handler: (incoming: PageGraph & { historyDelta?: Record<string, SignalChange[]> }) => {
+        const pageId = incoming?.pageId;
+        const known = typeof pageId === 'string' && pageId.length < 50;
+        const prev = known ? signalPages.get(pageId)?.graph : undefined;
+        let graph: PageGraph = incoming;
+        let delta = true;
+        if (incoming?.historyDelta) {
+          const { historyDelta, ...rest } = incoming;
+          if (!prev) delta = false;
+          const history: Record<string, SignalChange[]> = {};
+          for (const node of rest.nodes ?? []) {
+            const list = [...(prev?.history?.[node.id] ?? []), ...(historyDelta[node.id] ?? [])];
+            if (list.length) history[node.id] = list.slice(-50);
+          }
+          graph = { ...rest, history };
         }
+        if (known) signalPages.set(pageId, { graph, reportedAt: Date.now() });
         signalGraphState.mutate((draft) => {
           draft.graph = graph;
           // Every open page pushes, so one shared graph would flip between them.
           draft.pages = Object.fromEntries([...signalPages].map(([id, page]) => [id, page.graph]));
         });
+        return { delta };
       },
     });
 
@@ -660,10 +821,27 @@ const ngDevtools = defineDevframe({
       name: 'push-injector-tree',
       type: 'action',
       jsonSerializable: true,
-      handler: (roots: unknown[]) => {
-        injectorTreeState.mutate((draft) => {
-          draft.roots = roots as any;
+      handler: (report: { pageId?: unknown; roots?: unknown; environment?: unknown } | null) => {
+        const pageId = report?.pageId;
+        if (typeof pageId !== 'string' || !pageId || pageId.length >= 50) return;
+        injectorPages.set(pageId, {
+          pageId,
+          roots: (Array.isArray(report?.roots) ? report.roots : []) as InjectorTreeNode[],
+          environment: (Array.isArray(report?.environment)
+            ? report.environment
+            : []) as InjectorTreeNode[],
+          reportedAt: Date.now(),
         });
+        applyInjectorPages();
+      },
+    });
+
+    my.rpc.register({
+      name: 'forget-injector-page',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (pageId: unknown) => {
+        if (typeof pageId === 'string' && injectorPages.delete(pageId)) applyInjectorPages();
       },
     });
 
@@ -671,13 +849,63 @@ const ngDevtools = defineDevframe({
       name: 'push-ngrx-state',
       type: 'action',
       jsonSerializable: true,
-      handler: (data: { state: unknown; actions: NgrxRuntimeAction[]; connected: boolean }) => {
-        ngrxStoreState.mutate((draft) => {
-          draft.state = data.state;
-          draft.actions = data.actions;
-          draft.connected = data.connected;
-        });
+      handler: (report: unknown) => {
+        if (!isNgrxReport(report)) return { seq: 0 };
+        const seq = mergeNgrxReport(ngrxPages, report, ngrxNames());
+        applyNgrx();
+        return { seq };
       },
+    });
+
+    my.rpc.register({
+      name: 'forget-ngrx-page',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (pageId: unknown) => {
+        if (typeof pageId === 'string' && ngrxPages.delete(pageId)) applyNgrx();
+      },
+    });
+
+    const pendingNgrx = new Map<string, (result: unknown) => void>();
+    let ngrxSeq = 0;
+
+    my.rpc.register({
+      name: 'ngrx-action-result',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (message: { requestId?: unknown; result?: unknown }) => {
+        if (typeof message?.requestId !== 'string') return;
+        pendingNgrx.get(message.requestId)?.(message.result);
+      },
+    });
+
+    my.rpc.register({
+      name: 'request-ngrx-action',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (message: { pageId?: unknown; request?: unknown }) =>
+        new Promise<unknown>((resolve) => {
+          const pageId =
+            typeof message?.pageId === 'string'
+              ? message.pageId
+              : ngrxStateOf(ngrxPages).pages[0]?.pageId;
+          const requestId = `n${++ngrxSeq}`;
+          const timer = setTimeout(() => {
+            pendingNgrx.delete(requestId);
+            resolve({ error: 'No page answered within 10s. Is the app open in a browser?' });
+          }, 10_000);
+          timer.unref?.();
+          pendingNgrx.set(requestId, (result) => {
+            clearTimeout(timer);
+            pendingNgrx.delete(requestId);
+            resolve(result);
+          });
+          void my.rpc.broadcast({
+            method: 'ngrx-action',
+            args: [{ requestId, pageId, request: message?.request }],
+            optional: true,
+          });
+        }),
     });
 
     // Agent resources
@@ -685,7 +913,7 @@ const ngDevtools = defineDevframe({
       id: 'ng-devtools:component-tree',
       name: 'Angular Component Tree',
       description:
-        'Component hierarchy last reported by a connected page, as JSON. Empty when no page is connected.',
+        'Live component instances per connected page, as JSON: `pages[pageId].roots` is a tree with one node per rendered instance (`id` instance id, `name` class name, `tag` host tag, `directives` on the host), `count`, and `detail` (live input values, outputs, listeners, change detection, encapsulation and injected dependencies) for the instance selected in the panel. `nodes` repeats the roots of the most recent page. Empty when no page is connected.',
       mimeType: 'application/json',
       read: () => ({ text: JSON.stringify(componentTree.value(), null, 2) }),
     });
@@ -694,7 +922,7 @@ const ngDevtools = defineDevframe({
       id: 'ng-devtools:signal-graph',
       name: 'Angular Signal Graph',
       description:
-        'Live signal dependency graph: nodes (signal, computed, effect, linkedSignal), edges (producer→consumer) and recent value history per node. Read this to understand reactive data flow.',
+        'Live signal dependency graph per connected page (`pages[pageId]`, `graph` is the latest): nodes (signal, computed, effect, linkedSignal), edges (producer→consumer), `component` (instance id, class name, host tag and host path) and recent value history per node. Only signals a template or an effect has read appear. Read this to understand reactive data flow.',
       mimeType: 'application/json',
       read: () => ({ text: JSON.stringify(signalGraphState.value(), null, 2) }),
     });
@@ -712,7 +940,7 @@ const ngDevtools = defineDevframe({
       id: 'ng-devtools:ngrx-store',
       name: 'NgRx Store State',
       description:
-        'NgRx store state and recent actions last reported by a connected page. Empty when no page is connected.',
+        'Live NgRx state per connected page: each @ngrx/signals store (state, computed values, methods, the component fields that reference it) and the @ngrx/store state, plus a change log with a per-entry state diff (method calls, patchState writes and dispatched actions). Empty when no page is connected.',
       mimeType: 'application/json',
       read: () => ({ text: JSON.stringify(ngrxStoreState.value(), null, 2) }),
     });
@@ -738,32 +966,39 @@ const ngDevtools = defineDevframe({
     // Agent tools
     ctx.agent.registerTool({
       id: 'ng-devtools:highlight',
-      description: 'Highlight a component in the running Angular app by its selector.',
+      description:
+        'Highlight a component in the running Angular app and make it the target of ng-devtools:inspect-signals. Pass an instance id from the ng-devtools:component-tree resource (targets that exact instance, e.g. the second card of a list), a class name, a host tag, or any CSS selector.',
       safety: 'action',
       inputSchema: {
         type: 'object',
         properties: {
           selector: {
             type: 'string',
-            description: 'CSS selector of the component to highlight, e.g. app-root.',
+            description:
+              'Instance id (e.g. c12), class name (e.g. ProductCard), host tag (e.g. app-root) or CSS selector.',
           },
         },
         required: ['selector'],
       },
       handler: async (args: { selector: string }) => {
-        if (!componentTree.value().nodes.length) {
+        const pages = [...componentPages.values()];
+        if (!pages.some((page) => page.roots.length)) {
           return {
             markdown: `No component tree has been reported, so nothing was highlighted. This is what a page that has never connected reports, and also what a connected page reports when its components are not readable. Live data needs a page: connect through the MCP endpoint of the server that runs the app, with the app open in a browser. The stdio server has no page attached and only ever reports this.`,
           };
         }
-        await ctx.rpc.invokeLocal('ng-devtools:select-component' as any, args.selector);
+        const [hit] = findComponents(pages, args.selector);
+        const target = hit ? { pageId: hit.pageId, id: hit.node.id } : args.selector;
+        void my.rpc.broadcast({ method: 'highlight-in-page', args: [target], optional: true });
         void my.rpc.broadcast({
-          method: 'highlight-in-page',
-          args: [args.selector],
+          method: 'select-signal-component',
+          args: [target],
           optional: true,
         });
         return {
-          markdown: `Sent a highlight request for \`${args.selector}\`. It only shows if the selector matches an element on the page.`,
+          markdown: hit
+            ? `Sent a highlight request for \`${hit.node.name}\` (\`<${hit.node.tag}>\`, instance \`${hit.node.id}\` on page \`${hit.pageId}\`).`
+            : `Sent a highlight request for \`${args.selector}\`. It only shows if the selector matches an element on the page.`,
         };
       },
     });
@@ -771,14 +1006,14 @@ const ngDevtools = defineDevframe({
     ctx.agent.registerTool({
       id: 'ng-devtools:inspect-signals',
       description:
-        'Get the signal graph the running page last reported: signal nodes (signal, computed, linkedSignal, effect), their dependency edges, and `history` (recent value changes per node id; `write` entries are exact, `sample` entries come from polling and `missed` counts values that went unseen). The page reports one graph: the component selected in the Components tab (or via ng-devtools:highlight), otherwise the component rendered by the deepest router outlet, otherwise the root. A selector that does not match it returns what is available instead; call ng-devtools:highlight with the selector first to switch the graph to it.',
+        'Get the signal graph the running page last reported: signal nodes (signal, computed, linkedSignal, effect), their dependency edges, `component` (instance id, class name, host tag and host path), and `history` (recent value changes per node id; `write` entries are exact, `sample` entries come from polling and `missed` counts values that went unseen). Only signals a template or an effect has read appear. The page reports one graph: the component picked on the Signals page (or via ng-devtools:highlight), otherwise the component the primary router outlet renders deepest, otherwise the first component with a graph. A selector that does not match it returns what is available instead; call ng-devtools:highlight with it first to switch the graph to it.',
       safety: 'read',
       inputSchema: {
         type: 'object',
         properties: {
           selector: {
             type: 'string',
-            description: 'CSS selector of the component to inspect, e.g. app-root.',
+            description: 'Host tag, class name or instance id of the component, e.g. app-root.',
           },
         },
         required: ['selector'],
@@ -786,14 +1021,19 @@ const ngDevtools = defineDevframe({
       handler: async (args: { selector: string }) => {
         // `broadcast` resolves with nothing, so the page cannot answer a
         // question. Read the graph the overlay pushes into shared state.
-        const graph = signalGraphState.value().graph;
+        const matches = (g: PageGraph) =>
+          [g.componentSelector, g.component?.name, g.component?.id].includes(args.selector);
+        const matched = [...signalPages.values()]
+          .filter((page) => matches(page.graph))
+          .sort((a, b) => b.reportedAt - a.reportedAt)[0]?.graph;
+        const graph = matched ?? signalGraphState.value().graph;
         if (!graph) {
           return {
             markdown: `No signal graph available. Live data needs a page: connect through the MCP endpoint of the server that runs the app, with the app open in a browser. The stdio server has no page attached and only ever reports this.`,
           };
         }
         const json = JSON.stringify(graph, null, 2);
-        if (graph.componentSelector && graph.componentSelector !== args.selector) {
+        if (graph.componentSelector && !matches(graph)) {
           return {
             markdown: `No signal graph for \`${args.selector}\`. The live graph covers \`${graph.componentSelector}\`:\n\n${json}`,
           };
@@ -805,7 +1045,7 @@ const ngDevtools = defineDevframe({
     ctx.agent.registerTool({
       id: 'ng-devtools:inspect-providers',
       description:
-        'Get the DI injector hierarchy the running page last reported, with the providers at each level. The page reports the whole tree rather than one component, so the selector only labels the answer.',
+        'Get the DI injector hierarchy a running page reported, with the providers at each level. Each open tab reports its own tree; `pageId` picks one and defaults to the most recent. The page reports the whole tree rather than one component, so the selector only labels the answer.',
       safety: 'read',
       inputSchema: {
         type: 'object',
@@ -815,18 +1055,24 @@ const ngDevtools = defineDevframe({
             description:
               'Optional CSS selector, e.g. app-root. It only labels the answer: the page reports the whole tree either way.',
           },
+          pageId: {
+            type: 'string',
+            description: 'Page id, when more than one tab reports. Defaults to the most recent.',
+          },
         },
       },
-      handler: async (args: { selector?: string }) => {
-        const roots = injectorTreeState.value().roots;
-        if (!roots.length) {
+      handler: async (args: { selector?: string; pageId?: string }) => {
+        const page =
+          (args.pageId ? injectorPages.get(args.pageId) : undefined) ?? latestInjectorPage();
+        if (!page?.roots.length) {
           return {
             markdown: `No injector data available. Live data needs a page: connect through the MCP endpoint of the server that runs the app, with the app open in a browser. The stdio server has no page attached and only ever reports this.`,
           };
         }
+        const { pageId, roots, environment } = page;
         const scope = args.selector ? `, not filtered to \`${args.selector}\`` : '';
         return {
-          markdown: `This is the injector tree for the whole page${scope}:\n\n${JSON.stringify(roots, null, 2)}`,
+          markdown: `This is the injector tree for the whole page \`${pageId}\`${scope}. Element injectors list what each component and directive injected and which injector supplied it (\`providedBy\` is an injector id). Environment injectors run from the platform down to the root and any route injectors.\n\nElement injectors:\n\n${JSON.stringify(roots, null, 2)}\n\nEnvironment injectors:\n\n${JSON.stringify(environment, null, 2)}`,
         };
       },
     });
@@ -927,7 +1173,7 @@ const ngDevtools = defineDevframe({
       }) => {
         const state = routerState.value() as RouterState;
         if (!state.pages.length) return { markdown: noRouter };
-        let sources: { path: string; component?: string; redirectTo?: string; file: string }[] = [];
+        let sources: ReturnType<typeof extractRoutes> = [];
         try {
           sources = extractRoutes(ctx.cwd);
         } catch {
@@ -1080,7 +1326,8 @@ const ngDevtools = defineDevframe({
     const noForms = `No forms have been reported. Live data needs a page: connect through the MCP endpoint of the server that runs the app, with the app open in a browser, on a page that renders a form. The stdio server has no page attached and only ever reports this.`;
     const formProperty = {
       type: 'string',
-      description: 'Form id (form-1) or part of its label (Component.property).',
+      description:
+        'Form id (Checkout.form@ab12, or Checkout.form without the page) or part of its label (Component.property).',
     };
 
     ctx.agent.registerTool({
@@ -1432,7 +1679,7 @@ const ngDevtools = defineDevframe({
               'instrument',
             ],
           },
-          form: { type: 'string', description: 'Full form id, e.g. form-1@ab12.' },
+          form: { type: 'string', description: 'Full form id, e.g. Checkout.form@ab12.' },
           path: pathProperty,
           value: { description: 'New value for set-value.' },
           mode: { type: 'string', enum: ['code', 'user'] },
@@ -1461,7 +1708,7 @@ const ngDevtools = defineDevframe({
         type: 'object',
         required: ['form', 'values'],
         properties: {
-          form: { type: 'string', description: 'Full form id, e.g. form-1@ab12.' },
+          form: { type: 'string', description: 'Full form id, e.g. Checkout.form@ab12.' },
           values: { type: 'object', description: 'Map of field path to value.' },
           mode: { type: 'string', enum: ['code', 'user'] },
           submit: { type: 'boolean' },
@@ -1486,6 +1733,7 @@ const ngDevtools = defineDevframe({
     });
 
     await registerAnalog(my as never, ctx as never);
+    registerHubDocks(ctx, 'ng-devtools');
   },
 });
 

@@ -29,7 +29,7 @@ export const getSignals = defineRpcFunction({
   returns: describable(v.array(SignalEntrySchema)),
   agent: {
     description:
-      'Scan source files for signal(), computed(), linkedSignal(), and effect() declarations. Returns name, kind, file, and line number. Call this to understand the reactive architecture before suggesting changes.',
+      'Scan source files for signal(), computed(), linkedSignal(), effect(), toSignal() and resource declarations (resource, httpResource, rxResource), plus signal inputs, models and queries. Returns name, kind, file, and line number. Call this to understand the reactive architecture before suggesting changes.',
     title: 'List Angular signals from source',
   },
   setup: (ctx) => ({
@@ -51,8 +51,10 @@ const KINDS: Record<string, string> = {
   linkedSignal: 'linkedSignal',
   effect: 'effect',
   resource: 'resource',
+  httpResource: 'httpResource',
+  rxResource: 'rxResource',
+  toSignal: 'toSignal',
   input: 'input (signal)',
-  output: 'output (signal)',
   model: 'model (signal)',
   viewChild: 'viewChild (signal)',
   viewChildren: 'viewChildren (signal)',
@@ -69,7 +71,7 @@ const KINDS: Record<string, string> = {
 const SIGNAL_CALL = new RegExp(
   String.raw`(?<![\w$#.])(?:this\.)?(#?[$\w]+)\s*` +
     ANNOTATION +
-    String.raw`=\s*(${Object.keys(KINDS).join('|')})(\.required)?\s*[<(]`,
+    String.raw`=\s*(${Object.keys(KINDS).join('|')})(\.(?:required|text|blob|arrayBuffer))?\s*[<(]`,
   'g',
 );
 
@@ -127,7 +129,7 @@ function signalsIn(content: string, relPath: string): SignalEntry[] {
     const [, name, fn, required] = match;
     entries.push({
       name,
-      kind: required ? `${fn}.required (signal)` : KINDS[fn],
+      kind: required === '.required' ? `${fn}.required (signal)` : KINDS[fn],
       file: relPath,
       line: lineAt(at),
       component: scopes.find((scope) => at >= scope.start && at < scope.end)?.component,

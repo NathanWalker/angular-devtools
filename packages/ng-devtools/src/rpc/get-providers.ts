@@ -203,29 +203,114 @@ function walk(dir: string, cwd: string, out: ProviderEntry[]) {
         }
       }
 
-      // providers: [...] in every @Component / @Directive / @NgModule
-      for (const providersMatch of code.matchAll(/providers\s*:\s*\[/g)) {
+      for (const providersMatch of code.matchAll(/\b(?:providers|viewProviders)\s*:\s*\[/g)) {
         const openAt = providersMatch.index + providersMatch[0].lastIndexOf('[');
-        const blockStart = openAt + 1;
-        // A nested array, as in `useValue: [1, 2]`, must not end the list.
-        const block = code.slice(blockStart, matchDelimiter(code, openAt, '[', ']'));
-
-        for (const tokenMatch of block.matchAll(/\b([A-Z]\w+)\b/g)) {
-          const token = tokenMatch[1];
-          if (DECORATOR_KEYWORDS.has(token)) continue;
+        const close = matchDelimiter(code, openAt, '[', ']');
+        for (const element of topLevelElements(code, openAt + 1, close)) {
+          const token = providedToken(element.text);
+          if (!token || DECORATOR_KEYWORDS.has(token)) continue;
           out.push({
             token,
             source: 'providers array',
             file: relPath,
-            line: lineAt(blockStart + tokenMatch.index),
+            line: lineAt(element.start),
             type: 'provider',
           });
         }
+      }
+
+      for (const match of code.matchAll(
+        /(?:export\s+)?const\s+([\w$]+)\s*=\s*signalStore\s*(?:<[^>]*>)?\s*\(/g,
+      )) {
+        const open = match.index + match[0].length - 1;
+        const first = /^\s*\{/.exec(code.slice(open + 1));
+        if (!first) continue;
+        const brace = open + 1 + first[0].length - 1;
+        const providedIn = providedInOf(
+          source.slice(brace, matchDelimiter(code, brace, '{', '}') + 1),
+        );
+        if (!providedIn) continue;
+        out.push({
+          token: match[1],
+          source: 'signalStore',
+          file: relPath,
+          line: lineAt(match.index),
+          providedIn,
+          type: 'injectable',
+        });
+      }
+
+      for (const match of code.matchAll(
+        /(?:export\s+)?const\s+([\w$]+)\s*(?::[^=]{0,120})?=\s*new\s+InjectionToken\s*(?:<[^;]*?>)?\s*\(/g,
+      )) {
+        const open = match.index + match[0].length - 1;
+        const providedIn = providedInOf(
+          source.slice(open, matchDelimiter(code, open, '(', ')') + 1),
+        );
+        if (!providedIn) continue;
+        out.push({
+          token: match[1],
+          source: 'InjectionToken',
+          file: relPath,
+          line: lineAt(match.index),
+          providedIn,
+          type: 'injectable',
+        });
       }
     } catch {
       // skip
     }
   }
+}
+
+function providedInOf(args: string): string | undefined {
+  return /providedIn\s*:\s*(?:['"`](\w+)['"`]|([A-Za-z_$][\w$]*))/
+    .exec(args)
+    ?.slice(1)
+    .find(Boolean);
+}
+
+export function topLevelElements(
+  code: string,
+  from: number,
+  to: number,
+): { text: string; start: number }[] {
+  const out: { text: string; start: number }[] = [];
+  const pairs: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
+  let start = from;
+  const flush = (end: number) => {
+    const raw = code.slice(start, end);
+    const lead = raw.length - raw.trimStart().length;
+    if (raw.trim()) out.push({ text: raw.trim(), start: start + lead });
+  };
+  for (let i = from; i < to; i++) {
+    const ch = code[i];
+    if (pairs[ch]) i = matchDelimiter(code, i, ch, pairs[ch]);
+    else if (ch === ',') {
+      flush(i);
+      start = i + 1;
+    }
+  }
+  flush(to);
+  return out;
+}
+
+export function providedToken(element: string): string | null {
+  if (element.startsWith('...')) return null;
+  if (element.startsWith('{')) {
+    const body = element.slice(1, element.lastIndexOf('}'));
+    for (const entry of topLevelElements(body, 0, body.length)) {
+      const provide = /^provide\s*:\s*([\s\S]+)$/.exec(entry.text);
+      if (!provide) continue;
+      const value = provide[1].trim();
+      const forward = /^forwardRef\s*\(\s*\(\s*\)\s*=>\s*([\w$.]+)/.exec(value);
+      if (forward) return forward[1];
+      return /^[A-Za-z_$][\w$.]*$/.test(value) ? value : null;
+    }
+    return null;
+  }
+  if (!/^[A-Z][\w$]*$/.test(element)) return null;
+  return /^[A-Z0-9_]+$/.test(element) ? null : element;
 }
 
 /**

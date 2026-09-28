@@ -126,13 +126,20 @@ function isSubmitter(el: Element): boolean {
   return false;
 }
 
-export function submitDom(el: Element): SubmitDom {
+export interface SubmitContext {
+  valid?: boolean;
+  submitListener?: boolean;
+}
+
+export function submitDom(el: Element, context: SubmitContext = {}): SubmitDom {
   const tag = el.tagName.toLowerCase();
   const reasons: string[] = [];
   if (!(el instanceof HTMLFormElement)) {
-    reasons.push(
-      `The form directive sits on a <${tag}>, not a <form>, so the browser never fires submit or ngSubmit.`,
-    );
+    if (context.submitListener) {
+      reasons.push(
+        `The form directive sits on a <${tag}>, not a <form>, so the browser never fires submit or ngSubmit.`,
+      );
+    }
     return { tag, buttons: 0, disabledButtons: 0, novalidate: false, nativeInvalid: 0, reasons };
   }
   const inside = Array.from(el.querySelectorAll('button, input'));
@@ -152,8 +159,10 @@ export function submitDom(el: Element): SubmitDom {
         ? 'No submit button: the buttons in this form are type="button", so clicking them does not submit.'
         : 'No submit button in the form (or linked with form="id"). Enter submits only with a single text input or a submit button.',
     );
-  } else if (disabledButtons === submitters.length) {
-    reasons.push('Every submit button is disabled, so the form cannot be submitted by clicking.');
+  } else if (disabledButtons === submitters.length && context.valid) {
+    reasons.push(
+      'The form is valid but every submit button is disabled, so it cannot be submitted by clicking.',
+    );
   }
   const nativeInvalid = el.noValidate
     ? 0

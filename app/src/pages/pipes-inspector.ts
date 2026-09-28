@@ -1,5 +1,15 @@
-import { Component, DestroyRef, effect, inject, input, signal } from '@angular/core';
+import {
+  Component,
+  DestroyRef,
+  ElementRef,
+  computed,
+  effect,
+  inject,
+  input,
+  signal,
+} from '@angular/core';
 import type { DevframeRpcClient } from 'devframe/client';
+import { Select, type SelectOption } from '../ui/select';
 
 interface UsageSite {
   file: string;
@@ -18,9 +28,15 @@ interface PipeInfo {
   usages?: UsageSite[];
 }
 
+interface PipeTarget {
+  pageId: string;
+  id: string;
+}
+
 interface PipeComponentUsage {
   name: string;
   count: number;
+  targets?: PipeTarget[];
 }
 
 interface PipeInstanceCall {
@@ -57,6 +73,7 @@ interface AsyncUsageInfo {
   hasSource: boolean;
   latestValue?: string;
   duplicate: boolean;
+  target?: PipeTarget;
 }
 
 interface PipeLintFinding {
@@ -75,466 +92,970 @@ interface PipesSnapshot {
   instrumented: string[];
 }
 
+type PipeKind = 'all' | 'custom' | 'builtin' | 'impure' | 'live';
+
+const KIND_OPTIONS: readonly SelectOption<PipeKind>[] = [
+  { value: 'all', label: 'All pipes' },
+  { value: 'custom', label: 'Custom' },
+  { value: 'builtin', label: 'Built-in' },
+  { value: 'impure', label: 'Impure' },
+  { value: 'live', label: 'On the page' },
+];
+
 @Component({
   selector: 'app-pipes-inspector',
+  imports: [Select],
   template: `
+    <p class="intro">
+      Pipes declared in your source and the built-in pipes your templates use. Live data shows which
+      components use each pipe on the page; turn on recording to capture calls and the last input
+      and output.
+    </p>
+
     <div class="toolbar">
-      <input
-        #filterInput
-        type="text"
-        placeholder="Filter pipes…"
-        [value]="filter()"
-        (input)="filter.set(filterInput.value)"
-      />
-      <button (click)="refresh()">Refresh</button>
-      <button
-        class="instrument"
-        [class.on]="instrumenting()"
-        [attr.aria-pressed]="instrumenting()"
-        (click)="toggleInstrument()"
-      >
-        {{ instrumenting() ? 'Stop instrumenting' : 'Instrument' }}
-      </button>
+      <div class="search">
+        <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
+        </svg>
+        <input
+          type="search"
+          placeholder="Find a pipe, class or file…"
+          aria-label="Find a pipe, class or file"
+          autocomplete="off"
+          spellcheck="false"
+          [value]="filter()"
+          (input)="filter.set($any($event.target).value)"
+          (keydown.escape)="filter.set('')"
+        />
+      </div>
+      <app-select ariaLabel="Show pipes" [options]="kindOptions" [(value)]="kind" />
+      <span class="total" aria-live="polite">{{ filtered().length }} of {{ pipes().length }}</span>
+      <div class="actions">
+        <button type="button" (click)="refresh()" [disabled]="loading()">Refresh</button>
+        <button
+          type="button"
+          class="record"
+          [class.on]="instrumenting()"
+          [attr.aria-pressed]="instrumenting()"
+          (click)="toggleInstrument()"
+        >
+          <span class="rec-dot" aria-hidden="true"></span>
+          {{ instrumenting() ? 'Stop recording' : 'Record calls' }}
+        </button>
+      </div>
     </div>
+
     @if (instrumenting()) {
-      <p class="muted instrument-hint">
-        Recording live call counts, instance counts and last input/output. This patches pipe
-        prototypes in the inspected page, so turn it off when you're done.
+      <p class="notice" role="status">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 11v5M12 8h.01" />
+        </svg>
+        <span>
+          <strong>Recording on {{ instrumentedPages().length }} page(s).</strong>
+          Pipe prototypes are patched in the inspected page to count calls and keep the last input
+          and output. Stop recording when you are done.
+        </span>
       </p>
     }
 
-    @if (loading()) {
-      <p class="muted">Scanning pipes…</p>
-    } @else if (filtered().length === 0) {
-      <p class="muted">No pipes found.</p>
+    @if (loading() && pipes().length === 0) {
+      <div class="state" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <p class="state-title">Scanning pipes…</p>
+      </div>
+    } @else if (loadFailed() && pipes().length === 0) {
+      <div class="state" role="alert">
+        <p class="state-title">Couldn't load pipes</p>
+        <p class="state-hint">The devtools server did not answer. Check that it is running.</p>
+        <button type="button" (click)="refresh()">Try again</button>
+      </div>
+    } @else if (pipes().length === 0) {
+      <div class="state">
+        <p class="state-title">No pipes found</p>
+        <p class="state-hint">
+          No &#64;Pipe classes were found in the source, and no template uses a built-in pipe yet.
+        </p>
+      </div>
     } @else {
-      <ul class="pipe-list" role="list">
-        @for (p of filtered(); track p.file + p.name) {
-          <li class="pipe-item" [class.expanded]="isSelected(p)">
-            <button class="pipe-toggle" [attr.aria-expanded]="isSelected(p)" (click)="select(p)">
-              <div class="name-row">
-                <span class="badge" [class.impure]="!p.isPure">{{
-                  p.isPure ? 'pure' : 'impure'
-                }}</span>
-                <span class="name">{{ p.name }}</span>
-                @if (!p.isStandalone) {
-                  <span class="badge module">module</span>
+      <div class="layout">
+        <div class="list-wrap">
+          @if (filtered().length) {
+            <ul class="pipe-list" aria-label="Pipes" (keydown)="onListKey($event)">
+              @for (p of filtered(); track p.file + p.name) {
+                @let live = liveFor(p.name);
+                <li>
+                  <button
+                    type="button"
+                    class="row"
+                    data-pipe-row
+                    aria-controls="pipe-detail"
+                    [attr.aria-current]="isSelected(p) || null"
+                    [class.selected]="isSelected(p)"
+                    (click)="select(p)"
+                    (mouseenter)="highlightPipe(live)"
+                    (mouseleave)="highlight(null)"
+                    (focus)="highlightPipe(live)"
+                    (blur)="highlight(null)"
+                  >
+                    <span class="row-main">
+                      <span class="name mono">{{ p.name }}</span>
+                      <span class="sub mono">{{ p.className }}</span>
+                    </span>
+                    <span class="row-meta">
+                      @if (live?.stale) {
+                        <span class="chip warn">stale?</span>
+                      }
+                      @if (live) {
+                        <span class="chip live">{{ live.instanceCount }} live</span>
+                      }
+                      @if (p.builtin) {
+                        <span class="chip">built-in</span>
+                      }
+                      @if (!p.isStandalone) {
+                        <span class="chip">NgModule</span>
+                      }
+                      <span class="chip" [class.impure]="!p.isPure">{{
+                        p.isPure ? 'pure' : 'impure'
+                      }}</span>
+                    </span>
+                    <span class="row-file mono">
+                      {{ p.file }}:{{ p.line }}
+                      @if (p.builtin && (p.usageCount ?? 0) > 1) {
+                        <span class="more">+{{ (p.usageCount ?? 1) - 1 }} more</span>
+                      }
+                    </span>
+                  </button>
+                </li>
+              }
+            </ul>
+          } @else {
+            <div class="state compact" role="status">
+              <p class="state-title">No pipes match</p>
+              <p class="state-hint">
+                @if (filter().trim()) {
+                  Nothing matches “{{ filter().trim() }}” in this view.
+                } @else {
+                  None of the pipes fit this filter.
                 }
-                @if (p.builtin) {
-                  <span class="badge builtin">built-in</span>
+              </p>
+              <button type="button" (click)="clearFilters()">Clear filters</button>
+            </div>
+          }
+        </div>
+
+        <section id="pipe-detail" class="detail" aria-labelledby="pipe-detail-title">
+          @if (selected(); as p) {
+            <header class="detail-head">
+              <h2 id="pipe-detail-title" class="mono">{{ p.name }}</h2>
+              <span class="chip" [class.impure]="!p.isPure">{{
+                p.isPure ? 'pure' : 'impure'
+              }}</span>
+              @if (p.builtin) {
+                <span class="chip">built-in</span>
+              }
+            </header>
+
+            <div class="block">
+              <h3>Declaration</h3>
+              <dl>
+                <dt>Class</dt>
+                <dd class="mono">{{ p.className }}</dd>
+                <dt>Source</dt>
+                <dd>{{ p.builtin ? '@angular/common' : 'This project' }}</dd>
+                @if (!p.builtin) {
+                  <dt>File</dt>
+                  <dd class="mono">{{ p.file }}:{{ p.line }}</dd>
                 }
+                <dt>Standalone</dt>
+                <dd>{{ p.isStandalone ? 'Yes' : 'No, declared in an NgModule' }}</dd>
+                <dt>Pure</dt>
+                <dd>
+                  {{
+                    p.isPure
+                      ? 'Yes, reruns only when an input changes'
+                      : 'No, reruns on every check'
+                  }}
+                </dd>
+              </dl>
+            </div>
+
+            @if (p.builtin && p.usages?.length) {
+              <div class="block">
+                <h3>
+                  Used in templates <span class="pill">{{ p.usageCount }}</span>
+                </h3>
+                <ul class="sites">
+                  @for (u of p.usages; track u.file + ':' + u.line) {
+                    <li class="mono">{{ u.file }}:{{ u.line }}</li>
+                  }
+                </ul>
               </div>
-              <div class="file">
-                {{ p.file }}:{{ p.line }}
-                @if (p.builtin && (p.usageCount ?? 0) > 1) {
-                  <span class="usage-count">+{{ (p.usageCount ?? 1) - 1 }} more</span>
+            }
+
+            <div class="block">
+              <h3>Live on the page</h3>
+              @if (liveFor(p.name); as live) {
+                @if (live.stale) {
+                  <p class="warning" role="note">
+                    <span class="chip warn">experimental</span>
+                    This pure pipe got an argument whose contents changed while its reference stayed
+                    the same, so it may be showing a stale value.
+                  </p>
                 }
-              </div>
-            </button>
-            @if (isSelected(p)) {
-              <div class="inline-detail">
                 <dl>
-                  <dt>Class</dt>
-                  <dd>{{ p.className }}</dd>
-                  <dt>Source</dt>
-                  <dd>{{ p.builtin ? '@angular/common' : 'This project' }}</dd>
-                  @if (!p.builtin) {
-                    <dt>File</dt>
-                    <dd>{{ p.file }}:{{ p.line }}</dd>
-                  }
-                  <dt>Standalone</dt>
-                  <dd>{{ p.isStandalone ? 'Yes' : 'No' }}</dd>
-                  <dt>Pure</dt>
-                  <dd>{{ p.isPure ? 'Yes' : 'No' }}</dd>
-                  @if (p.builtin && p.usages?.length) {
-                    <dt>Used in ({{ p.usageCount }})</dt>
-                    <dd>
-                      <ul class="usage-list">
-                        @for (u of p.usages; track u.file + ':' + u.line) {
-                          <li>{{ u.file }}:{{ u.line }}</li>
-                        }
-                      </ul>
-                    </dd>
-                  }
-                </dl>
-                @if (liveFor(p.name); as live) {
-                  <div class="live-section">
-                    <div class="live-heading">Live</div>
-                    @if (live.stale) {
-                      <p class="stale-warning">
-                        <span class="badge impure">experimental</span>
-                        Fed an argument that changed contents without changing reference — this pure
-                        pipe may be showing a stale value.
-                      </p>
-                    }
-                    <dl>
-                      <dt>Instances</dt>
-                      <dd>{{ live.instanceCount }}</dd>
-                      <dt>Used by</dt>
+                  <dt>Instances</dt>
+                  <dd>{{ live.instanceCount }}</dd>
+                  <dt>Used by</dt>
+                  <dd>
+                    <ul class="chips">
+                      @for (c of live.components; track c.name) {
+                        <li>
+                          @if (c.targets?.[0]; as target) {
+                            <button
+                              type="button"
+                              class="component"
+                              [attr.aria-label]="'Highlight ' + c.name + ' on the page'"
+                              (click)="highlight(target)"
+                              (mouseenter)="highlight(target)"
+                              (mouseleave)="highlight(null)"
+                              (focus)="highlight(target)"
+                              (blur)="highlight(null)"
+                            >
+                              <span class="mono">{{ c.name }}</span>
+                              <span class="count">{{ c.count }}</span>
+                            </button>
+                          } @else {
+                            <span class="component">
+                              <span class="mono">{{ c.name }}</span>
+                              <span class="count">{{ c.count }}</span>
+                            </span>
+                          }
+                        </li>
+                      }
+                    </ul>
+                  </dd>
+                  @if (live.call; as call) {
+                    <dt>Calls</dt>
+                    <dd>{{ call.callCount }}</dd>
+                    <dt>Last input</dt>
+                    <dd class="mono value">{{ describe(call.lastArgs) }}</dd>
+                    <dt>Last output</dt>
+                    <dd class="mono value">{{ describe(call.lastResult) }}</dd>
+                    @if (call.instances?.length) {
+                      <dt>Per instance</dt>
                       <dd>
-                        <ul class="usage-list">
-                          @for (c of live.components; track c.name) {
-                            <li>{{ c.name }} ({{ c.count }})</li>
+                        <ul class="sites">
+                          @for (i of call.instances; track $index) {
+                            <li class="mono value">
+                              {{ describe(i.lastArgs) }} → {{ describe(i.lastResult) }}
+                              <span class="calls">{{ i.callCount }}×</span>
+                            </li>
                           }
                         </ul>
                       </dd>
-                      @if (live.call; as call) {
-                        <dt>Calls</dt>
-                        <dd>{{ call.callCount }}</dd>
-                        <dt>Last input</dt>
-                        <dd class="mono">{{ describe(call.lastArgs) }}</dd>
-                        <dt>Last output</dt>
-                        <dd class="mono">{{ describe(call.lastResult) }}</dd>
-                        @if (call.instances?.length) {
-                          <dt>Per instance</dt>
-                          <dd>
-                            <ul class="usage-list">
-                              @for (i of call.instances; track $index) {
-                                <li class="mono">
-                                  {{ describe(i.lastArgs) }} → {{ describe(i.lastResult) }} ({{
-                                    i.callCount
-                                  }})
-                                </li>
-                              }
-                            </ul>
-                          </dd>
-                        }
-                        @if (call.lastCaller) {
-                          <dt>Last caller</dt>
-                          <dd class="mono">{{ call.lastCaller }}</dd>
-                        }
-                      } @else if (instrumenting()) {
-                        <dt>Calls</dt>
-                        <dd class="muted">None recorded yet.</dd>
-                      }
-                    </dl>
-                  </div>
-                } @else if (instrumenting()) {
-                  <p class="muted live-hint">Not seen on the page yet.</p>
+                    }
+                    @if (call.lastCaller) {
+                      <dt>Last caller</dt>
+                      <dd class="mono value">{{ call.lastCaller }}</dd>
+                    }
+                  } @else if (instrumenting()) {
+                    <dt>Calls</dt>
+                    <dd class="muted">None recorded yet.</dd>
+                  }
+                </dl>
+                @if (!live.call && !instrumenting()) {
+                  <p class="hint">Turn on “Record calls” to see call counts and values.</p>
                 }
-              </div>
-            }
-          </li>
-        }
-      </ul>
-    }
-
-    @if (async().length > 0) {
-      <div class="async-panel">
-        <h3 class="async-heading">Async pipes ({{ async().length }})</h3>
-        <ul class="async-list" role="list">
-          @for (a of async(); track $index) {
-            <li class="async-item">
-              <div class="async-row">
-                <span class="component">{{ a.component }}</span>
-                @if (!a.hasSource) {
-                  <span class="badge module">no source</span>
-                }
-                @if (a.duplicate) {
-                  <span class="badge impure">duplicate subscription</span>
-                }
-              </div>
-              <div class="mono async-value">{{ a.latestValue ?? '(none yet)' }}</div>
-            </li>
+              } @else {
+                <p class="empty-line">
+                  Not in use on the connected page. Open a view that uses it, or connect the app.
+                </p>
+              }
+            </div>
+          } @else {
+            <h2 id="pipe-detail-title" class="visually-hidden">Pipe details</h2>
+            <div class="state compact">
+              <p class="state-title">Pick a pipe</p>
+              <p class="state-hint">
+                See where it is declared, which components use it and what it last returned.
+              </p>
+            </div>
           }
-        </ul>
+        </section>
       </div>
     }
 
-    <div class="lint-panel">
-      <h3 class="async-heading">Lint</h3>
+    @if (async().length > 0) {
+      <section class="section" aria-labelledby="async-title">
+        <h2 id="async-title">
+          Async subscriptions <span class="pill">{{ async().length }}</span>
+        </h2>
+        <p class="hint">
+          Each <span class="mono">| async</span> subscribes on its own. Two on the same source mean
+          the work runs twice.
+        </p>
+        <ul class="async-list">
+          @for (a of async(); track $index) {
+            <li class="async-row" (mouseenter)="highlight(a.target)" (mouseleave)="highlight(null)">
+              @if (a.target; as target) {
+                <button
+                  type="button"
+                  class="component-name mono"
+                  [attr.aria-label]="'Highlight ' + a.component + ' on the page'"
+                  (click)="highlight(target)"
+                  (focus)="highlight(target)"
+                  (blur)="highlight(null)"
+                >
+                  {{ a.component }}
+                </button>
+              } @else {
+                <span class="mono component-name">{{ a.component }}</span>
+              }
+              @if (!a.hasSource) {
+                <span class="chip">no source</span>
+              }
+              @if (a.duplicate) {
+                <span class="chip warn">duplicate subscription</span>
+              }
+              <span class="mono value latest">{{ a.latestValue ?? 'no value yet' }}</span>
+            </li>
+          }
+        </ul>
+      </section>
+    }
+
+    <section class="section" aria-labelledby="lint-title">
+      <h2 id="lint-title">
+        Lint
+        @if (lint(); as findings) {
+          <span class="pill">{{ findings.length }}</span>
+        }
+      </h2>
       @if (lintFailed()) {
-        <p class="muted" role="alert">Couldn't run the lint check. Try Refresh.</p>
+        <p class="empty-line" role="alert">Couldn't run the lint check. Try Refresh.</p>
       } @else if (lint() === null) {
-        <p class="muted">Checking…</p>
+        <p class="empty-line" role="status">Checking…</p>
       } @else if (!lint()!.length) {
-        <p class="muted">No problems found.</p>
+        <p class="empty-line ok">No problems found.</p>
       } @else {
-        <ul class="findings" role="list">
+        <ul class="findings">
           @for (f of lint(); track $index) {
             <li class="finding">
-              <span
-                class="tag"
-                [attr.data-tone]="
-                  f.severity === 'info' ? '' : f.severity === 'error' ? 'bad' : 'warn'
-                "
-                >{{ f.severity }}</span
-              >
-              <code class="finding-rule">{{ f.rule }}</code>
-              <span class="finding-meta muted">on {{ f.pipe }} at {{ f.file }}:{{ f.line }}</span>
-              <div class="finding-message">{{ f.message }}</div>
-              <div class="finding-fix muted">Fix: {{ f.fix }}</div>
+              <div class="finding-head">
+                <span class="severity" [attr.data-tone]="f.severity">{{ f.severity }}</span>
+                <code class="mono rule">{{ f.rule }}</code>
+                <span class="where mono">{{ f.pipe }} · {{ f.file }}:{{ f.line }}</span>
+              </div>
+              <p class="finding-message">{{ f.message }}</p>
+              <p class="finding-fix"><span class="fix-label">Fix</span> {{ f.fix }}</p>
             </li>
           }
         </ul>
       }
-    </div>
+    </section>
   `,
   styles: `
-    .toolbar {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
-    }
-    input {
-      flex: 1;
-      padding: 8px 12px;
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 6px;
-      color: #e4e4e7;
-      font-size: 14px;
-      outline: none;
-    }
-    input:focus {
-      border-color: var(--accent);
-    }
-    button {
-      padding: 8px 16px;
-      background: #3f3f46;
-      border: none;
-      border-radius: 6px;
-      color: #e4e4e7;
-      cursor: pointer;
+    @use 'mixins' as m;
+
+    :host {
+      display: block;
+      color: var(--text);
       font-size: 13px;
     }
-    button:hover {
-      background: #52525b;
+    .mono {
+      font-family: var(--font-mono);
     }
-    button.instrument.on {
-      background: #7c2d12;
-      color: #fdba74;
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
     }
-    .muted {
-      color: #71717a;
-      font-size: 14px;
+    .intro {
+      max-width: 720px;
+      margin: 0 0 12px;
+      color: var(--text-2);
+      line-height: 1.5;
     }
-    .instrument-hint {
-      margin: -8px 0 16px;
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+      margin: 0 0 12px;
+      padding: 8px;
+      background: color-mix(in srgb, var(--surface) 85%, transparent);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
     }
-    .live-section {
-      padding: 12px 16px 4px;
-      border-top: 1px solid #27272a;
+    .search {
+      position: relative;
+      flex: 1 1 220px;
+      min-width: 0;
     }
-    .live-heading {
-      font-size: 11px;
+    .search-icon {
+      position: absolute;
+      top: 50%;
+      left: 12px;
+      width: 14px;
+      height: 14px;
+      transform: translateY(-50%);
+      fill: none;
+      stroke: var(--text-3);
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      pointer-events: none;
+    }
+    .search:focus-within .search-icon {
+      stroke: var(--accent);
+    }
+    input[type='search'] {
+      width: 100%;
+      height: var(--control-h);
+      padding: 0 12px 0 34px;
+      background: var(--bg);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 13px;
+      transition:
+        border-color 150ms var(--ease),
+        box-shadow 150ms var(--ease);
+    }
+    input[type='search']::placeholder {
+      color: var(--text-3);
+    }
+    input[type='search']:focus-visible {
+      @include m.field-focus;
+    }
+    .toolbar app-select {
+      width: 150px;
+    }
+    .total {
+      flex: none;
+      color: var(--text-2);
+      font-size: 12px;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: var(--control-h);
+      padding: 0 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font: inherit;
+      font-weight: 500;
+      white-space: nowrap;
+      cursor: pointer;
+      transition:
+        background-color 150ms var(--ease),
+        border-color 150ms var(--ease);
+    }
+    button:hover:not(:disabled) {
+      border-color: var(--accent-line);
+      background: var(--surface-3);
+    }
+    button:focus-visible {
+      @include m.focus-ring;
+    }
+    button:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+    .rec-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-3);
+    }
+    .record.on {
+      @include m.soft(var(--accent));
+    }
+    .record.on .rec-dot {
+      background: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--accent-line);
+      border-radius: var(--radius-sm);
+      background: var(--accent-soft);
+      color: var(--text-2);
+      line-height: 1.5;
+      @include m.enter(0.2s);
+    }
+    .notice strong {
+      color: var(--text-strong);
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: #71717a;
-      margin-bottom: 8px;
     }
-    .live-hint {
-      padding: 0 16px 12px;
+    .notice svg {
+      flex: none;
+      width: 16px;
+      height: 16px;
+      margin-top: 2px;
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 2;
+      stroke-linecap: round;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+    @media (min-width: 880px) {
+      .layout {
+        grid-template-columns: minmax(0, 1fr) minmax(340px, 44%);
+      }
+      .detail {
+        position: sticky;
+        top: 64px;
+        max-height: calc(100vh - 150px);
+        overflow: auto;
+      }
+    }
+    .list-wrap {
+      min-width: 0;
+    }
+    .pipe-list {
+      display: grid;
+      gap: 2px;
       margin: 0;
+      padding: 6px;
+      list-style: none;
+      @include m.panel;
+      @include m.enter;
     }
-    .stale-warning {
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 2px 12px;
+      width: 100%;
+      height: auto;
+      padding: 8px 10px;
+      border: 0;
+      border-radius: var(--radius-sm);
+      background: none;
+      text-align: left;
+      font-weight: 400;
+      white-space: normal;
+    }
+    .row:hover:not(:disabled) {
+      border-color: transparent;
+      background: var(--surface-2);
+    }
+    .row:focus-visible {
+      @include m.focus-ring(-2px);
+    }
+    .row.selected {
+      background: var(--accent-soft);
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+    .row-main {
       display: flex;
       align-items: baseline;
       gap: 8px;
-      font-size: 12px;
-      color: #fdba74;
-      background: #431407;
-      border-radius: 6px;
-      padding: 8px 10px;
-      margin: 0 0 12px;
-    }
-    .mono {
-      font-family: monospace;
-      font-size: 12px;
-      word-break: break-all;
-    }
-    .pipe-list {
-      list-style: none;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .pipe-item {
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 8px;
-      padding: 0;
-      transition: border-color 0.15s;
-    }
-    .pipe-item:has(.pipe-toggle:hover) {
-      border-color: var(--accent);
-    }
-    .pipe-item.expanded {
-      border-color: var(--accent);
-    }
-    .pipe-toggle {
-      display: block;
-      width: 100%;
-      padding: 12px 16px;
-      background: none;
-      border: none;
-      color: inherit;
-      text-align: left;
-      cursor: pointer;
-      font: inherit;
-    }
-    .name-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      min-width: 0;
     }
     .name {
-      font-family: monospace;
-      font-size: 15px;
-      color: var(--accent);
+      flex: none;
+      color: var(--text-strong);
+      font-size: 13px;
       font-weight: 600;
     }
-    .badge {
-      font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 4px;
-      background: #14532d;
-      color: #4ade80;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .badge.impure {
-      background: #7c2d12;
-      color: #fdba74;
-    }
-    .badge.module {
-      background: #3f3f46;
-      color: #a1a1aa;
-    }
-    .badge.builtin {
-      background: #1e3a8a;
-      color: #93c5fd;
-    }
-    .file {
+    .sub {
+      color: var(--text-3);
       font-size: 12px;
-      color: #71717a;
-      margin-top: 2px;
+      @include m.truncate;
     }
-    .usage-count {
-      margin-left: 6px;
-      color: #52525b;
-    }
-    .usage-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
+    .row-meta {
       display: flex;
-      flex-direction: column;
-      gap: 2px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 4px;
     }
-    .inline-detail {
-      padding: 0 16px 12px;
-      border-top: 1px solid #27272a;
-      margin-top: 0;
-      padding-top: 12px;
+    .row-file {
+      grid-column: 1 / -1;
+      color: var(--text-3);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+    .more {
+      margin-left: 6px;
+      color: var(--text-2);
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      height: 18px;
+      padding: 0 7px;
+      border: 1px solid var(--border-strong);
+      border-radius: 99px;
+      color: var(--text-2);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .chip.impure,
+    .chip.warn {
+      @include m.soft(var(--warn));
+    }
+    .chip.live {
+      @include m.soft(var(--ok));
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      height: 16px;
+      padding: 0 5px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      color: var(--text-2);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .detail {
+      min-width: 0;
+      @include m.panel;
+      @include m.enter;
+    }
+    .detail-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-head h2 {
+      flex: 1 1 auto;
+      min-width: 0;
+      margin: 0;
+      color: var(--text-strong);
+      font-size: 15px;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .block {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .block:last-child {
+      border-bottom: 0;
+    }
+    h3 {
+      @include m.label;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0 0 10px;
     }
     dl {
       display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 4px 12px;
-      font-size: 13px;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 6px 14px;
+      margin: 0;
     }
     dt {
-      color: #71717a;
+      color: var(--text-3);
     }
     dd {
-      color: #e4e4e7;
+      min-width: 0;
+      margin: 0;
+      color: var(--text);
     }
-    .async-panel {
-      margin-top: 20px;
+    .value {
+      font-size: 12px;
+      overflow-wrap: anywhere;
     }
-    .async-heading {
-      font-size: 13px;
-      font-weight: 600;
-      color: #a1a1aa;
-      margin: 0 0 8px;
+    .muted {
+      color: var(--text-2);
     }
-    .async-list {
-      list-style: none;
+    .sites {
+      display: grid;
+      gap: 4px;
+      margin: 0;
       padding: 0;
+      list-style: none;
+      color: var(--text-2);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .calls {
+      margin-left: 6px;
+      color: var(--text-3);
+    }
+    .chips {
       display: flex;
-      flex-direction: column;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .component {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 4px 0 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: 99px;
+      background: var(--bg);
+      font-size: 12px;
+      transition:
+        border-color 150ms var(--ease),
+        background-color 150ms var(--ease);
+    }
+    button.component {
+      height: 24px;
+      padding: 0 4px 0 10px;
+      border-radius: 99px;
+      background: var(--bg);
+      font-size: 12px;
+      font-weight: 400;
+    }
+    .count {
+      padding: 0 6px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      color: var(--text-2);
+      font-size: 10px;
+      line-height: 16px;
+      font-variant-numeric: tabular-nums;
+    }
+    .warning {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
       gap: 8px;
+      margin: 0 0 12px;
+      padding: 8px 10px;
+      border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--warn) 8%, transparent);
+      color: var(--text);
+      line-height: 1.5;
     }
-    .async-item {
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 8px;
-      padding: 10px 16px;
+    .hint {
+      margin: 8px 0 0;
+      color: var(--text-3);
+      font-size: 12px;
     }
-    .async-row {
+    .empty-line {
+      margin: 0;
+      color: var(--text-2);
+      line-height: 1.5;
+    }
+    .empty-line.ok {
+      color: var(--ok);
+    }
+    .section {
+      margin-top: 20px;
+      @include m.enter;
+    }
+    .section h2 {
+      @include m.label;
       display: flex;
       align-items: center;
       gap: 8px;
+      margin: 0 0 8px;
     }
-    .component {
-      font-family: monospace;
-      font-size: 13px;
-      color: var(--accent);
+    .section > .hint {
+      margin: -2px 0 10px;
     }
-    .async-value {
-      margin-top: 4px;
-      color: #a1a1aa;
-    }
-    .lint-panel {
-      margin-top: 20px;
-    }
+    .async-list,
     .findings {
-      list-style: none;
+      display: grid;
+      gap: 6px;
+      margin: 0;
       padding: 0;
+      list-style: none;
+    }
+    .async-row {
       display: flex;
-      flex-direction: column;
-      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 8px;
+      min-width: 0;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      @include m.panel;
+      transition:
+        background-color 150ms var(--ease),
+        border-color 150ms var(--ease);
+    }
+    .async-row:hover {
+      border-color: var(--border-strong);
+      background: var(--surface-2);
+    }
+    .component-name {
+      color: var(--text-strong);
+      font-weight: 600;
+    }
+    button.component-name {
+      height: 24px;
+      padding: 0 8px;
+      margin-left: -8px;
+      border-color: transparent;
+      background: none;
       font-size: 13px;
+    }
+    .latest {
+      flex: 1 1 100%;
+      color: var(--text-2);
     }
     .finding {
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 8px;
-      padding: 10px 16px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      @include m.panel;
     }
-    .finding-rule {
-      color: #c4b5fd;
+    .finding-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 8px;
     }
-    .finding-meta,
-    .finding-message,
-    .finding-fix {
-      display: block;
-      margin-top: 0.5rem;
+    .severity {
+      padding: 0 7px;
+      border: 1px solid var(--border-strong);
+      border-radius: 99px;
+      color: var(--text-2);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      line-height: 16px;
+      text-transform: uppercase;
     }
-    .tag {
-      display: inline-block;
-      margin: 0 4px 2px 0;
-      padding: 0 5px;
-      border: 1px solid #3f3f46;
-      border-radius: 4px;
-      color: #d4d4d8;
+    .severity[data-tone='warning'] {
+      @include m.soft(var(--warn));
+    }
+    .severity[data-tone='error'] {
+      @include m.soft(var(--danger));
+    }
+    .rule {
+      color: var(--accent);
+      font-size: 12px;
+    }
+    .where {
+      color: var(--text-3);
       font-size: 11px;
+      overflow-wrap: anywhere;
     }
-    .tag[data-tone='warn'] {
-      border-color: #a16207;
-      color: #fef08a;
+    .finding-message {
+      margin: 6px 0 0;
+      color: var(--text);
+      line-height: 1.5;
     }
-    .tag[data-tone='bad'] {
-      border-color: #b91c1c;
-      color: #fca5a5;
+    .finding-fix {
+      margin: 4px 0 0;
+      color: var(--text-2);
+      line-height: 1.5;
+    }
+    .fix-label {
+      @include m.label;
+      margin-right: 4px;
+    }
+    .state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 40px 16px;
+      text-align: center;
+      background: var(--surface);
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius);
+      @include m.enter;
+    }
+    .state.compact {
+      padding: 28px 16px;
+      border: 0;
+      background: none;
+    }
+    .list-wrap .state.compact {
+      @include m.panel;
+    }
+    .state-title {
+      margin: 0;
+      color: var(--text-strong);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .state-hint {
+      max-width: 440px;
+      margin: 0;
+      color: var(--text-2);
+      line-height: 1.5;
+    }
+    .state button {
+      margin-top: 8px;
+    }
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border-strong);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner {
+        animation: none;
+      }
     }
   `,
 })
 export class PipesInspector {
   private readonly destroyRef = inject(DestroyRef);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   rpc = input<DevframeRpcClient | null>(null);
 
+  protected readonly kindOptions = KIND_OPTIONS;
+
   pipes = signal<PipeInfo[]>([]);
   filter = signal('');
+  kind = signal<PipeKind | null>('all');
   loading = signal(false);
+  loadFailed = signal(false);
   selected = signal<PipeInfo | null>(null);
-
-  filtered = signal<PipeInfo[]>([]);
 
   live = signal<LivePipeInfo[]>([]);
   async = signal<AsyncUsageInfo[]>([]);
@@ -543,24 +1064,29 @@ export class PipesInspector {
   instrumentedPages = signal<string[]>([]);
   instrumenting = signal(false);
 
+  private readonly liveByName = computed(() => new Map(this.live().map((p) => [p.name, p])));
+
+  filtered = computed(() => {
+    const q = this.filter().trim().toLowerCase();
+    const kind = this.kind() ?? 'all';
+    const live = this.liveByName();
+    return this.pipes().filter((p) => {
+      if (kind === 'custom' && p.builtin) return false;
+      if (kind === 'builtin' && !p.builtin) return false;
+      if (kind === 'impure' && p.isPure) return false;
+      if (kind === 'live' && !live.has(p.name)) return false;
+      return (
+        !q ||
+        p.name.toLowerCase().includes(q) ||
+        p.className.toLowerCase().includes(q) ||
+        p.file.toLowerCase().includes(q)
+      );
+    });
+  });
+
   private unsubscribe?: () => void;
 
   constructor() {
-    effect(() => {
-      const q = this.filter().toLowerCase();
-      const all = this.pipes();
-      this.filtered.set(
-        q
-          ? all.filter(
-              (p) =>
-                p.name.toLowerCase().includes(q) ||
-                p.className.toLowerCase().includes(q) ||
-                p.file.toLowerCase().includes(q),
-            )
-          : all,
-      );
-    });
-
     effect(() => {
       const client = this.rpc();
       if (client) {
@@ -569,13 +1095,17 @@ export class PipesInspector {
       }
     });
 
-    this.destroyRef.onDestroy(() => this.unsubscribe?.());
+    this.destroyRef.onDestroy(() => {
+      this.unsubscribe?.();
+      this.highlight(null);
+    });
   }
 
   async refresh() {
     const client = this.rpc();
     if (!client) return;
     this.loading.set(true);
+    this.loadFailed.set(false);
     try {
       const my = client.scope('ng-devtools');
       const pipes = (await my.rpc.call('get-pipes')) as PipeInfo[];
@@ -586,7 +1116,7 @@ export class PipesInspector {
         this.selected.set(refreshed ?? null);
       }
     } catch {
-      // RPC not available
+      this.loadFailed.set(true);
     } finally {
       this.loading.set(false);
     }
@@ -638,7 +1168,7 @@ export class PipesInspector {
   }
 
   liveFor(name: string): LivePipeInfo | undefined {
-    return this.live().find((p) => p.name === name);
+    return this.liveByName().get(name);
   }
 
   describe(value: unknown): string {
@@ -659,5 +1189,40 @@ export class PipesInspector {
 
   select(pipe: PipeInfo) {
     this.selected.set(this.isSelected(pipe) ? null : pipe);
+  }
+
+  clearFilters() {
+    this.filter.set('');
+    this.kind.set('all');
+  }
+
+  highlightPipe(live: LivePipeInfo | undefined) {
+    this.highlight(live?.components.find((c) => c.targets?.length)?.targets?.[0]);
+  }
+
+  highlight(target: PipeTarget | null | undefined) {
+    const client = this.rpc();
+    if (!client) return;
+    void client
+      .scope('ng-devtools')
+      .rpc.call('request-page-highlight', target ?? null)
+      .catch(() => {});
+  }
+
+  onListKey(event: KeyboardEvent) {
+    const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
+    if (!keys.includes(event.key)) return;
+    const rows = Array.from(
+      this.host.nativeElement.querySelectorAll<HTMLButtonElement>('[data-pipe-row]'),
+    );
+    if (!rows.length) return;
+    const at = rows.indexOf(document.activeElement as HTMLButtonElement);
+    let next = at;
+    if (event.key === 'ArrowDown') next = Math.min(at + 1, rows.length - 1);
+    else if (event.key === 'ArrowUp') next = Math.max(at - 1, 0);
+    else if (event.key === 'Home') next = 0;
+    else next = rows.length - 1;
+    event.preventDefault();
+    rows[next]?.focus();
   }
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ANALOG_META_DESCRIPTION,
   analogMetaOf,
@@ -49,7 +49,8 @@ describe('Analog runtime reader', () => {
     };
     const top = { routeConfig: { path: 'products' }, data: {}, firstChild: layout };
     const root = { routeConfig: null, data: {}, firstChild: top };
-    const { chain, data } = chainOf(root);
+    const { chain, data, loadFrom } = chainOf(root);
+    expect(loadFrom).toBe(1);
     expect(chain.map((c) => `${c.path} ${c.file}`)).toEqual([
       '/products /src/app/pages/products.page.ts',
       '/products/:id /src/app/pages/products/[id].page.ts',
@@ -76,11 +77,18 @@ describe('Analog runtime reader', () => {
       hydrationErrorOf([new Error('NG0500: During hydration Angular expected <div>')]),
     ).toContain('NG0500');
     expect(hydrationErrorOf(['NG04002: Cannot match any routes'])).toBeNull();
+    expect(hydrationErrorOf(['NG05104: Root element was not found'])).toBeNull();
+    expect(hydrationErrorOf(['NG0505: no hydration info in server response'])).toContain('NG0505');
   });
 
   it('builds a report from the router behind window.ng', () => {
     document.body.innerHTML =
-      '<app-root ng-version="22" ng-server-context="ssr-analog"><p ngh="0"></p></app-root><script id="ng-state"></script>';
+      '<app-root ng-version="22" ng-server-context="ssr-analog"><p ngh="0"></p><span></span></app-root><script id="shop-state" type="application/json">{}</script>';
+    const p = document.querySelector('p') as unknown as Record<string, unknown>;
+    p['__ngDebugHydrationInfo__'] = { status: 'hydrated' };
+    (document.querySelector('span') as unknown as Record<string, unknown>)[
+      '__ngDebugHydrationInfo__'
+    ] = { status: 'hydrated' };
     const leaf = {
       routeConfig: analogRoute('', '/src/app/pages/about.md'),
       data: {},
@@ -106,7 +114,7 @@ describe('Analog runtime reader', () => {
       url: '/about',
       analog: true,
       serverContext: 'ssr-analog',
-      hydrated: 1,
+      hydrated: 2,
       transferState: true,
       hydrationErrors: ['NG0500: x'],
       configPaths: ['/about'],
@@ -123,7 +131,12 @@ describe('Analog runtime reader', () => {
       routerState: { snapshot: { root: { routeConfig: null, data: {}, firstChild: null } } },
     };
     const ng = { getInjector: () => ({}), ɵgetRouterInstance: () => router };
-    expect(collectAnalog(ng, 'p', [])!.analog).toBe(false);
+    const scanner = vi.fn(() => ({ hydrated: 5 }));
+    expect(collectAnalog(ng, 'p', [], scanner)).toMatchObject({ analog: false, hydrated: 0 });
+    expect(scanner).not.toHaveBeenCalled();
+    router.config.push(analogRoute('x', '/src/app/pages/x.page.ts') as never);
+    expect(collectAnalog(ng, 'p', [], scanner)).toMatchObject({ analog: true, hydrated: 5 });
+    expect(scanner).toHaveBeenCalledTimes(1);
     expect(
       hasAnalogMeta([{ path: 'x', _loadedRoutes: [analogRoute('', '/src/app/pages/x.page.ts')] }]),
     ).toBe(true);

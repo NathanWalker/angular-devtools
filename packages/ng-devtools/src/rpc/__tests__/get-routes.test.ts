@@ -16,7 +16,15 @@ describe('get-routes', () => {
   it('reads an eager component', async () => {
     const routes = await routesFor(`[{ path: 'about', component: AboutComponent }]`);
     expect(routes).toEqual([
-      { path: 'about', component: 'AboutComponent', hasChildren: false, file: 'src/app.routes.ts' },
+      {
+        path: 'about',
+        fullPath: '/about',
+        kind: 'page',
+        component: 'AboutComponent',
+        hasChildren: false,
+        file: 'src/app.routes.ts',
+        line: 1,
+      },
     ]);
   });
 
@@ -60,29 +68,41 @@ describe('get-routes', () => {
     expect(routes).toEqual([
       {
         path: '',
+        fullPath: '/',
+        kind: 'redirect',
         redirectTo: 'home',
         hasChildren: false,
         file: 'src/app.routes.ts',
+        line: 2,
       },
       {
         path: 'home',
+        fullPath: '/home',
+        kind: 'page',
         component: 'HomeComponent',
         title: 'Home',
         hasChildren: false,
         file: 'src/app.routes.ts',
+        line: 3,
       },
       {
         path: 'dashboard',
+        fullPath: '/dashboard',
+        kind: 'page',
         component: 'DashboardComponent',
         title: 'Dashboard',
         hasChildren: true,
         file: 'src/app.routes.ts',
+        line: 4,
       },
       {
         path: 'stats',
+        fullPath: '/dashboard/stats',
+        kind: 'page',
         component: 'StatsComponent',
         hasChildren: false,
         file: 'src/app.routes.ts',
+        line: 8,
       },
     ]);
   });
@@ -109,17 +129,23 @@ describe('get-routes', () => {
     expect(routes).toEqual([
       {
         path: 'about',
+        fullPath: '/about',
+        kind: 'redirect',
         title: 'It\'s "special"',
         redirectTo: 'my/"path"',
         hasChildren: false,
         file: 'src/app.routes.ts',
+        line: 2,
       },
       {
         path: 'home',
+        fullPath: '/home',
+        kind: 'redirect',
         title: 'Line1\nLine2',
         redirectTo: 'Price ${amount}',
         hasChildren: false,
         file: 'src/app.routes.ts',
+        line: 3,
       },
     ]);
   });
@@ -139,28 +165,40 @@ describe('get-routes', () => {
     expect(routes).toEqual([
       {
         path: 'admin',
+        fullPath: '/admin',
+        kind: 'group',
         title: 'Admin Panel',
         hasChildren: true,
         file: 'src/app.routes.ts',
+        line: 2,
       },
       {
         path: '',
+        fullPath: '/admin',
+        kind: 'redirect',
         redirectTo: 'overview',
         hasChildren: false,
         file: 'src/app.routes.ts',
+        line: 6,
       },
       {
         path: 'overview',
+        fullPath: '/admin/overview',
+        kind: 'page',
         component: 'AdminOverview',
         title: 'Overview',
         hasChildren: false,
         file: 'src/app.routes.ts',
+        line: 7,
       },
       {
         path: '**',
+        fullPath: '/**',
+        kind: 'wildcard',
         redirectTo: '',
         hasChildren: false,
         file: 'src/app.routes.ts',
+        line: 10,
       },
     ]);
   });
@@ -313,6 +351,102 @@ describe('get-routes', () => {
       ['admin', true],
       ['users', false],
       ['about', false],
+    ]);
+  });
+
+  it('carries the parent path into children and lazily loaded route files', async () => {
+    const dir = fixtureDir('ng-devtools-routes-');
+    mkdirSync(join(dir, 'src', 'examples'), { recursive: true });
+    mkdirSync(join(dir, 'src', 'admin'), { recursive: true });
+    writeFileSync(
+      join(dir, 'src', 'app.routes.ts'),
+      `export const routes: Routes = [
+        { path: '', component: Home },
+        {
+          path: 'examples',
+          loadChildren: () => import('./examples/examples.routes').then((m) => m.examplesRoutes),
+        },
+        { path: 'admin', loadChildren: () => import('./admin/routes') },
+        { path: '**', redirectTo: '' },
+      ];`,
+    );
+    writeFileSync(
+      join(dir, 'src', 'examples', 'examples.routes.ts'),
+      `export const examplesRoutes: Routes = [
+        { path: '', component: Overview },
+        { path: 'signals', component: Signals, children: [{ path: 'detail', component: Detail }] },
+      ];`,
+    );
+    writeFileSync(
+      join(dir, 'src', 'admin', 'routes.ts'),
+      `export default [{ path: 'users', component: Users }];`,
+    );
+    const routes = await scan(getRoutes, dir);
+    expect(routes.map((r) => [r.fullPath, r.kind, r.file])).toEqual([
+      ['/', 'page', 'src/app.routes.ts'],
+      ['/examples', 'group', 'src/app.routes.ts'],
+      ['/admin', 'group', 'src/app.routes.ts'],
+      ['/**', 'wildcard', 'src/app.routes.ts'],
+      ['/examples', 'page', 'src/examples/examples.routes.ts'],
+      ['/examples/signals', 'page', 'src/examples/examples.routes.ts'],
+      ['/examples/signals/detail', 'page', 'src/examples/examples.routes.ts'],
+      ['/admin/users', 'page', 'src/admin/routes.ts'],
+    ]);
+  });
+
+  it('prefixes a forChild routing module with the path that loads its NgModule', async () => {
+    const dir = fixtureDir('ng-devtools-routes-');
+    mkdirSync(join(dir, 'src', 'app', 'admin'), { recursive: true });
+    writeFileSync(
+      join(dir, 'src', 'app', 'app-routing.module.ts'),
+      `@NgModule({ imports: [RouterModule.forRoot([
+        { path: 'admin', loadChildren: () => import('./admin/admin.module').then((m) => m.AdminModule) },
+      ])] })
+      export class AppRoutingModule {}`,
+    );
+    writeFileSync(
+      join(dir, 'src', 'app', 'admin', 'admin.module.ts'),
+      `@NgModule({ imports: [AdminRoutingModule] }) export class AdminModule {}`,
+    );
+    writeFileSync(
+      join(dir, 'src', 'app', 'admin', 'admin-routing.module.ts'),
+      `@NgModule({ imports: [RouterModule.forChild([{ path: 'users', component: Users }])] })
+      export class AdminRoutingModule {}`,
+    );
+    const routes = await scan(getRoutes, dir);
+    expect(routes.map((r) => r.fullPath)).toEqual(['/admin/users', '/admin']);
+  });
+
+  it('reads guards and resolvers by name', async () => {
+    const routes = await routesFor(`[
+      {
+        path: 'trips',
+        component: Trips,
+        canMatch: [featureOn],
+        canActivate: [signedInGuard, roleGuard('admin'), () => inject(Auth).ok()],
+        resolve: { trip: tripResolver, user: () => inject(User).current() },
+      },
+    ]`);
+    expect(routes[0].guards).toEqual({
+      canMatch: ['featureOn'],
+      canActivate: ['signedInGuard', 'roleGuard', 'inline'],
+    });
+    expect(routes[0].resolvers).toEqual(['trip: tripResolver', 'user: inline']);
+  });
+
+  it('tells navigable pages from redirects, wildcards and groups', async () => {
+    const routes = await routesFor(`[
+      { path: '', redirectTo: 'home', pathMatch: 'full' },
+      { path: 'home', loadComponent: () => import('./home') },
+      { path: 'settings', children: [{ path: 'profile', component: Profile }] },
+      { path: '**', component: NotFound },
+    ]`);
+    expect(routes.map((r) => [r.fullPath, r.kind])).toEqual([
+      ['/', 'redirect'],
+      ['/home', 'page'],
+      ['/settings', 'group'],
+      ['/settings/profile', 'page'],
+      ['/**', 'wildcard'],
     ]);
   });
 });

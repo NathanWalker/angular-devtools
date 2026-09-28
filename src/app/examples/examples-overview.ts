@@ -22,7 +22,12 @@ interface ExampleLink {
         @for (example of examples; track example.path) {
           <li>
             <a [routerLink]="['/examples', example.path]">
-              <span class="tab">{{ example.tab }}</span>
+              <span class="top">
+                <span class="tab">{{ example.tab }}</span>
+                <svg class="arrow" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path d="M5 12h14M13 6l6 6-6 6" />
+                </svg>
+              </span>
               <span class="title">{{ example.title }}</span>
               <span class="blurb">{{ example.blurb }}</span>
             </a>
@@ -35,7 +40,7 @@ interface ExampleLink {
     section {
       display: grid;
       gap: 20px;
-      padding: 24px 0 48px;
+      padding: 24px 0 64px;
     }
     .lead {
       margin: 0;
@@ -44,8 +49,8 @@ interface ExampleLink {
     }
     .grid {
       display: grid;
-      gap: 24px;
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+      gap: 16px;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
       margin: 0;
       padding: 0;
       list-style: none;
@@ -59,25 +64,32 @@ interface ExampleLink {
       align-content: start;
       gap: 8px;
       height: 100%;
-      padding: 18px;
+      box-sizing: border-box;
+      padding: 20px;
       border: 1px solid var(--line);
-      border-radius: 10px;
+      border-radius: var(--radius, 12px);
       background: var(--surface);
+      box-shadow: var(--shadow-sm);
       text-decoration: none;
       overflow: hidden;
+      transition:
+        border-color 0.15s var(--ease, ease),
+        box-shadow 0.15s var(--ease, ease),
+        transform 0.15s var(--ease, ease);
     }
     a::before {
       content: '';
       position: absolute;
       inset: 0 0 auto;
       height: 3px;
-      background: var(--angular-gradient);
+      background: var(--brand-gradient);
       opacity: 0;
-      transition: opacity 0.15s;
+      transition: opacity 0.15s var(--ease, ease);
     }
     a:hover {
       border-color: var(--line-strong);
-      box-shadow: 0 2px 10px var(--shadow);
+      box-shadow: 0 6px 20px var(--shadow);
+      transform: translateY(-1px);
     }
     a:hover::before,
     a:focus-visible::before {
@@ -87,25 +99,54 @@ interface ExampleLink {
       outline: 2px solid var(--brand);
       outline-offset: 2px;
     }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 4px;
+    }
     .tab {
-      justify-self: start;
-      align-self: start;
-      padding: 1px 8px;
-      border: 1px solid var(--line);
-      border-radius: 4px;
-      background: var(--subtle);
-      color: var(--muted);
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: var(--brand-soft);
+      color: var(--brand-strong);
       font-size: 12px;
-      font-weight: 500;
+      font-weight: 600;
+      line-height: 1.5;
       letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+    .arrow {
+      flex: none;
+      fill: none;
+      stroke: var(--muted);
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      transition:
+        transform 0.15s var(--ease, ease),
+        stroke 0.15s var(--ease, ease);
+    }
+    a:hover .arrow,
+    a:focus-visible .arrow {
+      stroke: var(--brand);
+      transform: translateX(2px);
     }
     .title {
       color: var(--ink);
+      font-size: 16px;
       font-weight: 600;
+      line-height: 1.35;
     }
     .blurb {
       color: var(--muted);
       font-size: 14px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      a:hover {
+        transform: none;
+      }
     }
   `,
 })

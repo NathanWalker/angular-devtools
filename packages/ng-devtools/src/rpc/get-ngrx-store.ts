@@ -8,6 +8,7 @@ import {
   lineCounter,
   maskRegexes,
   maskStrings,
+  matchDelimiter,
   sourceRoots,
   stripComments,
 } from './source-scan.ts';
@@ -28,6 +29,17 @@ const NgrxStoreEntrySchema = v.object({
   file: v.string(),
   line: v.number(),
   detail: v.optional(v.string()),
+  members: v.optional(
+    v.object({
+      state: v.optional(v.array(v.string())),
+      computed: v.optional(v.array(v.string())),
+      methods: v.optional(v.array(v.string())),
+      props: v.optional(v.array(v.string())),
+      hooks: v.optional(v.array(v.string())),
+      entities: v.optional(v.array(v.string())),
+      rxMethods: v.optional(v.array(v.string())),
+    }),
+  ),
 });
 
 export const getNgrxStore = defineRpcFunction({
@@ -38,7 +50,7 @@ export const getNgrxStore = defineRpcFunction({
   returns: describable(v.array(NgrxStoreEntrySchema)),
   agent: {
     description:
-      'Scan source files for NgRx store patterns: actions, reducers, effects, selectors, features, and store setup. Returns name, kind, file, and line number. Call this to understand the NgRx state management architecture.',
+      'Scan source files for NgRx declarations: @ngrx/store actions, reducers, effects, selectors, features and store setup, and @ngrx/signals signalStore, signalState and signalMethod. Each entry has name, kind, file and line. A signalStore entry also lists its members (withState keys, withComputed, withMethods, withProps, withHooks, withEntities and rxMethod names) in `members` and `detail`. Read the ng-devtools:ngrx-store resource for the live state and change log.',
     title: 'List NgRx store entries from source',
   },
   setup: (ctx) => ({
@@ -61,6 +73,17 @@ interface NgrxStoreEntry {
   file: string;
   line: number;
   detail?: string;
+  members?: SignalStoreMembers;
+}
+
+export interface SignalStoreMembers {
+  state?: string[];
+  computed?: string[];
+  methods?: string[];
+  props?: string[];
+  hooks?: string[];
+  entities?: string[];
+  rxMethods?: string[];
 }
 
 const NGRX_PATTERNS: { pattern: RegExp; kind: NgrxStoreEntry['kind'] }[] = [
@@ -93,12 +116,11 @@ const NGRX_PATTERNS: { pattern: RegExp; kind: NgrxStoreEntry['kind'] }[] = [
 
   // NgRx Signals
   { pattern: /(?:export\s+)?const\s+(\w+)\s*=\s*signalStore\s*\(/g, kind: 'signal-store' },
-  { pattern: /(?:export\s+)?const\s+(\w+)\s*=\s*signalState\s*[<(]/g, kind: 'signal-state' },
-  { pattern: /export\s+const\s+(\w+)\s*=\s*signalMethod\s*[<(]/g, kind: 'signal-method' },
-  { pattern: /(\w+)\s*:\s*signalMethod\s*[<(]/g, kind: 'signal-method' },
+  { pattern: /(\w+)\s*[=:]\s*signalState\s*[<(]/g, kind: 'signal-state' },
+  { pattern: /(\w+)\s*[=:]\s*signalMethod\s*[<(]/g, kind: 'signal-method' },
 ];
 
-function scanNgrxStore(cwd: string): NgrxStoreEntry[] {
+export function scanNgrxStore(cwd: string): NgrxStoreEntry[] {
   const entries: NgrxStoreEntry[] = [];
   for (const root of sourceRoots(cwd)) walk(root, cwd, entries);
   // Deduplicate by name+file+line (guards against overlapping patterns)
@@ -149,7 +171,8 @@ function walk(dir: string, cwd: string, out: NgrxStoreEntry[]) {
         !raw.includes('createSelector') &&
         !raw.includes('createFeature') &&
         !raw.includes('signalStore') &&
-        !raw.includes('signalState')
+        !raw.includes('signalState') &&
+        !raw.includes('signalMethod')
       ) {
         continue;
       }
@@ -175,16 +198,156 @@ function walk(dir: string, cwd: string, out: NgrxStoreEntry[]) {
               ? match[0].replace(/\s*\($/, '')
               : name;
 
-          out.push({
-            name: displayName,
-            kind,
-            file: relPath,
-            line: lineNum,
-          });
+          const entry: NgrxStoreEntry = { name: displayName, kind, file: relPath, line: lineNum };
+          if (kind === 'signal-store') {
+            const open = content.indexOf('(', match.index + match[0].length - 1);
+            const members = signalStoreMembers(content, raw, open);
+            if (members) {
+              entry.members = members;
+              entry.detail = describeMembers(members);
+            }
+          }
+          out.push(entry);
         }
       }
     } catch {
       // skip unreadable files
     }
   }
+}
+
+const FEATURES: Record<string, keyof SignalStoreMembers> = {
+  withState: 'state',
+  withComputed: 'computed',
+  withMethods: 'methods',
+  withProps: 'props',
+  withHooks: 'hooks',
+  withEntities: 'entities',
+};
+
+function splitTop(text: string): { text: string; start: number }[] {
+  const parts: { text: string; start: number }[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    else if (ch === ',' && depth === 0) {
+      parts.push({ text: text.slice(start, i), start });
+      start = i + 1;
+    }
+  }
+  if (text.slice(start).trim()) parts.push({ text: text.slice(start), start });
+  return parts;
+}
+
+function objectKeys(content: string, open: number): { key: string; value: string }[] {
+  const close = matchDelimiter(content, open, '{', '}');
+  const keys: { key: string; value: string }[] = [];
+  for (const part of splitTop(content.slice(open + 1, close))) {
+    const text = part.text.trim();
+    if (text.startsWith('...')) continue;
+    const match =
+      /^(?:async\s+)?(?:(?:get|set)\s+(?=[\w$]))?\*?\s*([A-Za-z_$][\w$]*)\s*(?=[:(<]|$)/.exec(text);
+    if (match) keys.push({ key: match[1], value: text.slice(match[0].length) });
+  }
+  return keys;
+}
+
+function resultObject(content: string, start: number, end: number): number {
+  let i = start;
+  while (i < end && /\s/.test(content[i])) i++;
+  if (content[i] === '{') return i;
+  const arrow = content.indexOf('=>', i);
+  if (arrow < 0 || arrow >= end) return -1;
+  let j = arrow + 2;
+  while (j < end && /\s/.test(content[j])) j++;
+  if (content[j] === '(') {
+    j++;
+    while (j < end && /\s/.test(content[j])) j++;
+    return content[j] === '{' ? j : -1;
+  }
+  if (content[j] !== '{') return -1;
+  const body = content.slice(j, end);
+  const ret = /\breturn\s*\{/.exec(body);
+  return ret ? j + ret.index + ret[0].length - 1 : -1;
+}
+
+function stateKeys(content: string, start: number, end: number): string[] {
+  const at = resultObject(content, start, end);
+  if (at >= 0) return objectKeys(content, at).map((k) => k.key);
+  const name = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(content.slice(start, end))?.[1];
+  if (!name) return [];
+  const decl = new RegExp(
+    `\\b(?:const|let|var)\\s+${name.replace(/\$/g, '\\$')}\\s*(?::[^=]+)?=\\s*\\{`,
+  ).exec(content);
+  return decl ? objectKeys(content, decl.index + decl[0].length - 1).map((k) => k.key) : [];
+}
+
+function entityNames(raw: string, start: number, end: number, generic: string): string[] {
+  const text = raw.slice(start, end);
+  const entity = /entity\s*:\s*type\s*<\s*([\w$.]+)/.exec(text)?.[1] ?? generic;
+  const collection = /collection\s*:\s*['"`]([\w$-]+)['"`]/.exec(text)?.[1];
+  const label = entity || 'entity';
+  return [collection ? `${collection}: ${label}` : label];
+}
+
+export function signalStoreMembers(
+  content: string,
+  raw: string,
+  open: number,
+): SignalStoreMembers | undefined {
+  if (open < 0 || content[open] !== '(') return undefined;
+  const close = matchDelimiter(content, open, '(', ')');
+  const members: SignalStoreMembers = {};
+  const add = (key: keyof SignalStoreMembers, names: string[]) => {
+    if (!names.length) return;
+    const list = (members[key] ??= []);
+    for (const name of names) if (!list.includes(name)) list.push(name);
+  };
+  for (const part of splitTop(content.slice(open + 1, close))) {
+    const base = open + 1 + part.start;
+    const feature = /^\s*(with\w+)\s*(?:<([^()]*)>)?\s*\(/.exec(part.text);
+    const kind = feature && FEATURES[feature[1]];
+    if (!feature || !kind) continue;
+    const argOpen = base + feature[0].length - 1;
+    const argClose = matchDelimiter(content, argOpen, '(', ')');
+    if (kind === 'state') {
+      add('state', stateKeys(content, argOpen + 1, argClose));
+    } else if (kind === 'entities') {
+      add('entities', entityNames(raw, argOpen + 1, argClose, (feature[2] ?? '').trim()));
+    } else {
+      const at = resultObject(content, argOpen + 1, argClose);
+      if (at < 0) continue;
+      const keys = objectKeys(content, at);
+      add(
+        kind,
+        keys.map((k) => k.key),
+      );
+      if (kind === 'methods') {
+        add(
+          'rxMethods',
+          keys.filter((k) => /^\s*:\s*rxMethod\b/.test(k.value)).map((k) => k.key),
+        );
+      }
+    }
+  }
+  return Object.keys(members).length ? members : undefined;
+}
+
+const MEMBER_LABELS: [keyof SignalStoreMembers, string][] = [
+  ['state', 'state'],
+  ['computed', 'computed'],
+  ['methods', 'methods'],
+  ['rxMethods', 'rxMethod'],
+  ['props', 'props'],
+  ['hooks', 'hooks'],
+  ['entities', 'entities'],
+];
+
+export function describeMembers(members: SignalStoreMembers): string {
+  return MEMBER_LABELS.filter(([key]) => members[key]?.length)
+    .map(([key, label]) => `${label}: ${members[key]!.join(', ')}`)
+    .join('; ');
 }

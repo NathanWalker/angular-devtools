@@ -6,7 +6,12 @@ import { App } from './app/app';
 bootstrapApplication(App, appConfig)
   .then((ref) => {
     if (typeof ngDevMode === 'undefined' || ngDevMode) {
-      return ref.whenStable().then(() => import('@santoshyadavdev/ng-devtools/overlay'));
+      return ref
+        .whenStable()
+        .then(() =>
+          Promise.all([import('@santoshyadavdev/ng-devtools/overlay'), import('@ngrx/signals')]),
+        )
+        .then(([devtools, { patchState }]) => devtools.registerNgrxSignals({ patchState }));
     }
     return undefined;
   })

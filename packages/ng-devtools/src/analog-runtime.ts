@@ -1,3 +1,6 @@
+import { hasStateScript, scanHydration } from './http-hydration.ts';
+import { createHydrationScanner } from './http-overlay.ts';
+
 type AnyRecord = Record<string, any>;
 
 export const ANALOG_META_DESCRIPTION = '@analogjs/router Analog Route Metadata Key';
@@ -14,6 +17,7 @@ export interface AnalogRuntimeReport {
   analog: boolean;
   chain: AnalogPageInfo[];
   load?: { preview: string; bytes: number; keys: string[] };
+  loadFrom?: number;
   serverContext?: string;
   hydrated: number;
   transferState: boolean;
@@ -23,6 +27,8 @@ export interface AnalogRuntimeReport {
 
 const MAX_PREVIEW = 1000;
 const MAX_PATHS = 500;
+const MAX_ERRORS = 20;
+const HEARTBEAT_MS = 8000;
 const SECRET = /pass|pwd|secret|token|api.?key|card|cvv|cvc|ssn|iban|otp|session|cookie|auth/i;
 
 function read<T>(fn: () => T, fallback: T): T {
@@ -66,9 +72,23 @@ function redact(value: unknown, depth = 0): unknown {
   return out;
 }
 
-export function chainOf(root: AnyRecord | null): { chain: AnalogPageInfo[]; data: unknown } {
+function isEmptyObject(value: unknown): boolean {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value as object).length === 0
+  );
+}
+
+export function chainOf(root: AnyRecord | null): {
+  chain: AnalogPageInfo[];
+  data: unknown;
+  loadFrom?: number;
+} {
   const chain: AnalogPageInfo[] = [];
   let data: unknown;
+  let loadFrom: number | undefined;
   const segments: string[] = [];
   for (let node = root, guard = 0; node && guard < 40; guard++) {
     const config = read(() => node!['routeConfig'] as AnyRecord | null, null);
@@ -78,11 +98,14 @@ export function chainOf(root: AnyRecord | null): { chain: AnalogPageInfo[]; data
     if (meta) {
       chain.push({ path: `/${segments.join('/')}`, ...fileOfEndpoint(meta.endpointKey) });
       const load = read(() => node!['data']?.['load'], undefined);
-      if (load !== undefined) data = load;
+      if (load !== undefined && (loadFrom === undefined || !isEmptyObject(load))) {
+        data = load;
+        loadFrom = chain.length - 1;
+      }
     }
     node = read(() => node!['firstChild'] as AnyRecord | null, null);
   }
-  return { chain, data };
+  return { chain, data, loadFrom };
 }
 
 export function configPathsOf(
@@ -132,7 +155,7 @@ export function hydrationErrorOf(args: unknown[]): string | null {
   const text = args
     .map((arg) => (arg instanceof Error ? arg.message : typeof arg === 'string' ? arg : ''))
     .join(' ');
-  const match = text.match(/NG0?5\d{2}[^\n]*/);
+  const match = text.match(/\bNG05\d\d\b[^\n]*/);
   return match ? match[0].slice(0, 300) : null;
 }
 
@@ -162,15 +185,28 @@ export function hasAnalogMeta(routes: unknown, depth = 0): boolean {
   );
 }
 
+type HydrationScanner = (counters: Record<string, unknown> | undefined) => { hydrated: number };
+
+function hydratedNodes(scanner?: HydrationScanner): number {
+  const counters = (globalThis as { ngDevMode?: unknown }).ngDevMode;
+  const record =
+    counters && typeof counters === 'object' ? (counters as Record<string, unknown>) : undefined;
+  const scanned = scanner ? scanner(record).hydrated : scanHydration(document).hydrated;
+  if (scanned) return scanned;
+  const counted = record?.['hydratedNodes'];
+  return typeof counted === 'number' ? counted : 0;
+}
+
 export function collectAnalog(
   ng: AnyRecord | undefined,
   pageId: string,
   hydrationErrors: string[],
+  scanner?: HydrationScanner,
 ): AnalogRuntimeReport | null {
   const router = routerOf(ng);
   if (!router) return null;
   const root = read(() => router['routerState']['snapshot']['root'] as AnyRecord, null);
-  const { chain, data } = chainOf(root);
+  const { chain, data, loadFrom } = chainOf(root);
   const paths = configPathsOf(read(() => router['config'], []));
   const analog = chain.length > 0 || hasAnalogMeta(read(() => router['config'], null));
   const rootEl = document.querySelector('[ng-version]');
@@ -179,15 +215,18 @@ export function collectAnalog(
     url: read(() => String(router['url']), location.pathname),
     analog,
     chain,
-    hydrated: document.querySelectorAll('[ngh]').length,
-    transferState: !!document.getElementById('ng-state'),
-    hydrationErrors: hydrationErrors.slice(-20),
+    hydrated: analog ? hydratedNodes(scanner) : 0,
+    transferState: hasStateScript(document),
+    hydrationErrors: hydrationErrors.slice(-MAX_ERRORS),
     configPaths: paths,
   };
   const context = rootEl?.getAttribute('ng-server-context');
   if (context) report.serverContext = context;
   const load = loadSummary(data);
-  if (load) report.load = load;
+  if (load) {
+    report.load = load;
+    if (loadFrom !== undefined) report.loadFrom = loadFrom;
+  }
   return report;
 }
 
@@ -197,22 +236,28 @@ interface Rpc {
 
 export function attachAnalog(my: Rpc, pageId: string, getNg: () => AnyRecord | undefined) {
   const hydrationErrors: string[] = [];
+  const scanner = createHydrationScanner();
   let last = '';
+  let lastAt = 0;
   let subscription: { unsubscribe(): void } | null = null;
   const original = console.error;
   const patched = function (this: unknown, ...args: unknown[]) {
     const error = read(() => hydrationErrorOf(args), null);
-    if (error && !hydrationErrors.includes(error)) hydrationErrors.push(error);
+    if (error && !hydrationErrors.includes(error)) {
+      hydrationErrors.push(error);
+      if (hydrationErrors.length > MAX_ERRORS) hydrationErrors.shift();
+    }
     return original.apply(this, args as []);
   };
   console.error = patched;
 
   const push = () => {
-    const report = read(() => collectAnalog(getNg(), pageId, hydrationErrors), null);
+    const report = read(() => collectAnalog(getNg(), pageId, hydrationErrors, scanner), null);
     if (!report || !report.analog) return;
     const text = JSON.stringify(report);
-    if (text === last) return;
+    if (text === last && Date.now() - lastAt < HEARTBEAT_MS) return;
     last = text;
+    lastAt = Date.now();
     void my.rpc.call('push-analog', report).catch(() => {});
   };
 

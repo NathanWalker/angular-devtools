@@ -6,6 +6,11 @@ export interface NgDebugApi {
   getComponent(el: Element): unknown;
   getOwningComponent?(el: Element): unknown;
   getDirectives?(el: Element): unknown[];
+  getHostElement?(component: object): Element | null;
+}
+
+export function stripBundlerPrefix(name: string): string {
+  return name.replace(/^_(?=[A-Z])/, '');
 }
 
 function read<T>(fn: () => T, fallback: T): T {
@@ -30,6 +35,57 @@ function isPipeDef(value: unknown): value is PipeDefShape {
   return (
     typeof def.name === 'string' && typeof def.pure === 'boolean' && typeof def.type === 'function'
   );
+}
+
+const TVIEW = 1;
+const PARENT = 3;
+const CONTEXT = 8;
+const LCONTAINER_TYPE = 1;
+const COMPONENT_VIEW = 1;
+const DECLARATION_COMPONENT_VIEW = 15;
+
+function isLView(value: unknown): value is AnyRecord[] {
+  if (!Array.isArray(value)) return false;
+  const tView = value[TVIEW] as { data?: unknown; type?: unknown; blueprint?: unknown } | null;
+  return (
+    !!tView &&
+    typeof tView === 'object' &&
+    Array.isArray(tView.data) &&
+    Array.isArray(tView.blueprint) &&
+    typeof tView.type === 'number'
+  );
+}
+
+function isLContainer(value: unknown): value is AnyRecord[] {
+  return Array.isArray(value) && value[LCONTAINER_TYPE] === true;
+}
+
+export function childViewsOf(lView: AnyRecord[]): AnyRecord[][] {
+  const children: AnyRecord[][] = [];
+  for (let i = 0; i < lView.length; i++) {
+    const slot = lView[i];
+    if (slot === lView || !Array.isArray(slot) || slot[PARENT] !== lView) continue;
+    if (isLContainer(slot)) {
+      for (let j = 0; j < slot.length; j++) {
+        const view: unknown = slot[j];
+        if (view !== lView && isLView(view) && (view[PARENT] === slot || view[PARENT] === lView)) {
+          children.push(view);
+        }
+      }
+    } else if (isLView(slot)) {
+      children.push(slot);
+    }
+  }
+  return children;
+}
+
+function ownerOf(view: AnyRecord[], inherited: unknown): unknown {
+  const declaring = read(() => view[DECLARATION_COMPONENT_VIEW], undefined);
+  const source = isLView(declaring) ? declaring : view;
+  const type = read(() => (source[TVIEW] as { type?: number }).type, undefined);
+  if (type !== COMPONENT_VIEW) return inherited;
+  const context = source[CONTEXT];
+  return context && typeof context === 'object' ? context : inherited;
 }
 
 /** The LView an element belongs to, via the same `__ngContext__` monkey-patch
@@ -70,7 +126,7 @@ export function pipeSlotsIn(lView: AnyRecord[]): PipeSlot[] {
     if (!instance || typeof instance !== 'object') continue;
     slots.push({
       name: def.name,
-      className: def.type.name || 'Pipe',
+      className: stripBundlerPrefix(def.type.name || 'Pipe'),
       isPure: def.pure,
       instance,
       index: i,
@@ -85,38 +141,60 @@ export interface PipeUsage {
   className: string;
   isPure: boolean;
   instance: AnyRecord;
+  index: number;
   lView: AnyRecord[];
   /** The nearest component instance, for attributing the usage in the UI. */
   component: unknown;
 }
 
-/** Walks `elements`, finds every distinct view reachable from them, and
- * returns every pipe instance in use. Calling `ng.getOwningComponent`/
- * `ng.getComponent` is what upgrades `__ngContext__` so `lViewOf` can read
- * it — this mirrors `forms.ts`'s `findForms` DOM walk. */
-export function findPipeUsages(ng: NgDebugApi, elements: Iterable<Element>): PipeUsage[] {
-  const seenLViews = new Set<AnyRecord[]>();
+export interface PipeScan {
+  usages: PipeUsage[];
+  /** The elements that led to a view not reachable from an earlier one: enough
+   * to find every view again without walking the whole DOM. */
+  entries: Element[];
+}
+
+/** Starts from each element's view and walks down through child component and
+ * embedded views, so views holding only text nodes (which Angular never
+ * patches with `__ngContext__`) are found too. Usages are attributed to the
+ * component whose template declares them. */
+export function scanPipeViews(ng: NgDebugApi, elements: Iterable<Element>): PipeScan {
+  const seen = new Set<AnyRecord[]>();
   const usages: PipeUsage[] = [];
+  const entries: Element[] = [];
   for (const el of elements) {
-    const component =
-      read(() => ng.getComponent(el), null) ??
-      read(() => ng.getOwningComponent?.(el) ?? null, null);
+    const owning = read(() => ng.getOwningComponent?.(el) ?? null, null);
+    const component = owning ?? read(() => ng.getComponent(el) ?? null, null);
     if (component === null || component === undefined) continue;
-    const lView = lViewOf(el);
-    if (!lView || seenLViews.has(lView)) continue;
-    seenLViews.add(lView);
-    for (const slot of pipeSlotsIn(lView)) {
-      usages.push({
-        name: slot.name,
-        className: slot.className,
-        isPure: slot.isPure,
-        instance: slot.instance,
-        lView,
-        component,
-      });
+    const root = lViewOf(el);
+    if (!root || seen.has(root)) continue;
+    entries.push(el);
+    const stack: [AnyRecord[], unknown][] = [[root, ownerOf(root, owning)]];
+    while (stack.length) {
+      const [lView, owner] = stack.pop()!;
+      if (seen.has(lView)) continue;
+      seen.add(lView);
+      for (const slot of pipeSlotsIn(lView)) {
+        usages.push({
+          name: slot.name,
+          className: slot.className,
+          isPure: slot.isPure,
+          instance: slot.instance,
+          index: slot.index,
+          lView,
+          component: owner ?? component,
+        });
+      }
+      for (const child of read(() => childViewsOf(lView), [])) {
+        stack.push([child, ownerOf(child, owner)]);
+      }
     }
   }
-  return usages;
+  return { usages, entries };
+}
+
+export function findPipeUsages(ng: NgDebugApi, elements: Iterable<Element>): PipeUsage[] {
+  return scanPipeViews(ng, elements).usages;
 }
 
 export interface PipeCall {
@@ -214,6 +292,20 @@ export interface PipeBinding {
   isPure: boolean;
   instance: AnyRecord;
   lView: AnyRecord[];
+  /** The pipe's LView slot, to tell apart several uses of one pipe in a template. */
+  index?: number;
+}
+
+function ordinalOf(slot: PipeBinding): number {
+  if (slot.index === undefined) return 0;
+  const data = (slot.lView[TVIEW] as { data?: unknown[] } | null)?.data;
+  if (!Array.isArray(data)) return 0;
+  let ordinal = 0;
+  for (let i = 0; i < slot.index; i++) {
+    const def = data[i];
+    if (isPipeDef(def) && def.name === slot.name) ordinal++;
+  }
+  return ordinal;
 }
 
 export interface StaleCheck {
@@ -248,9 +340,13 @@ export function staleCheckFor(slot: PipeBinding): StaleCheck | null {
     if (typeof templateFn !== 'function' || typeof bindingRoot !== 'number') return null;
     const src = templateFn.toString();
     const escapedName = slot.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const create = new RegExp(`\\w+\\(\\s*(\\d+)\\s*,\\s*['"\`]${escapedName}['"\`]\\s*\\)`).exec(
-      src,
-    );
+    const creates = new RegExp(`\\w+\\(\\s*(\\d+)\\s*,\\s*['"\`]${escapedName}['"\`]\\s*\\)`, 'g');
+    const ordinal = ordinalOf(slot);
+    let create: RegExpExecArray | null = null;
+    for (let i = 0; i <= ordinal; i++) {
+      create = creates.exec(src);
+      if (!create) return null;
+    }
     if (!create) return null;
     const bind = new RegExp(
       `[\\w$\\u0275]*pipeBind\\w*\\(\\s*${create[1]}\\s*,\\s*(\\d+)\\s*[,)]`,

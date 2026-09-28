@@ -1,3 +1,4 @@
+export { registerNgrxSignals } from './ngrx-register.ts';
 // In-page floating devtools popup. Renders an iframe pointing at the devtools SPA.
 
 let popupRoot: HTMLElement | null = null;
@@ -53,8 +54,28 @@ function saveState(state: PopupState) {
   } catch {}
 }
 
+const HUB_BASE = '/__devframes/';
+
+async function hubAvailable(): Promise<boolean> {
+  try {
+    const response = await fetch(`${HUB_BASE}__connection.json`, { cache: 'no-store' });
+    return response.ok && (response.headers.get('content-type') ?? '').includes('json');
+  } catch {
+    return false;
+  }
+}
+
+let shown: Promise<void> | undefined;
+
+export function showDevtools(): Promise<void> {
+  shown ??= hubAvailable().then((hub) => {
+    createDevtoolsPopup(hub ? { src: HUB_BASE } : {});
+  });
+  return shown;
+}
+
 function getBaseURL(): string {
-  const paths = ['/__ng-devtools/', '/__devframe/', '/'];
+  const paths = ['/__ng-devtools/', '/__devframes/ng-devtools/', '/__devframe/', '/'];
   for (const base of paths) {
     try {
       const xhr = new XMLHttpRequest();
@@ -72,7 +93,7 @@ function getBaseURL(): string {
   return '/__ng-devtools/';
 }
 
-export function createDevtoolsPopup() {
+export function createDevtoolsPopup(options: { src?: string } = {}) {
   if (popupRoot) return handle;
 
   const state = loadState();
@@ -106,7 +127,7 @@ export function createDevtoolsPopup() {
 
   const title = document.createElement('span');
   title.classList.add('title');
-  title.textContent = 'Angular DevTools';
+  title.textContent = 'Remember, we need to find a new name. Help us pls';
 
   const dockGroup = document.createElement('div');
   dockGroup.classList.add('dock-group');
@@ -162,11 +183,8 @@ export function createDevtoolsPopup() {
       height: 44px;
       border-radius: 50%;
       border: none;
-      background: var(
-        --ng-devtools-accent,
-        linear-gradient(135deg, #e40035 0%, #f60a48 25%, #dc087d 50%, #9717e7 75%, #6c00f5 100%)
-      );
-      color: var(--ng-devtools-accent-ink, #fff);
+      background: var(--ng-devtools-accent, #f5a524);
+      color: var(--ng-devtools-accent-ink, #1c1300);
       cursor: pointer;
       touch-action: none;
       display: flex;
@@ -261,7 +279,7 @@ export function createDevtoolsPopup() {
       font-family: system-ui, sans-serif;
       font-size: 13px;
       font-weight: 600;
-      color: var(--ng-devtools-title, #a78bfa);
+      color: var(--ng-devtools-title, #f5a524);
       flex: 1;
     }
     .dock-group {
@@ -279,7 +297,7 @@ export function createDevtoolsPopup() {
       line-height: 1;
     }
     .dock-btn:hover, .close-btn:hover { background: #27272a; color: #e4e4e7; }
-    .dock-btn.active { color: var(--ng-devtools-title, #a78bfa); }
+    .dock-btn.active { color: var(--ng-devtools-title, #f5a524); }
     .close-btn { font-size: 13px; }
     .frame {
       flex: 1;
@@ -332,6 +350,7 @@ export function createDevtoolsPopup() {
   // Scoped to the popup's own chrome: a listener on the window would take
   // Escape away from the host application.
   const onEscape = (event: Event) => {
+    if (event.defaultPrevented) return;
     if ((event as KeyboardEvent).key === 'Escape' && isOpen) togglePanel();
   };
   popupRoot.addEventListener('keydown', onEscape);
@@ -339,13 +358,36 @@ export function createDevtoolsPopup() {
   // A key pressed inside the frame is delivered to the frame's own document
   // and never reaches the host, so Escape would not close the panel while the
   // devtools have focus. The frame is same origin, so it can be listened to.
-  iframe.addEventListener('load', () => {
-    try {
-      iframe.contentDocument?.addEventListener('keydown', onEscape);
-    } catch {
-      // a cross origin frame cannot be reached, and Escape stays host only
-    }
-  });
+  const hookedFrames = new WeakSet<HTMLIFrameElement>();
+  const hookedDocs = new WeakSet<Document>();
+  const hookFrame = (frame: HTMLIFrameElement) => {
+    if (hookedFrames.has(frame)) return;
+    hookedFrames.add(frame);
+    const attach = () => {
+      try {
+        const doc = frame.contentDocument;
+        if (!doc || hookedDocs.has(doc)) return;
+        hookedDocs.add(doc);
+        doc.addEventListener('keydown', onEscape);
+        doc.querySelectorAll('iframe').forEach(hookFrame);
+        new MutationObserver((records) => {
+          for (const record of records) {
+            record.addedNodes.forEach((node) => {
+              if (node.nodeType !== Node.ELEMENT_NODE) return;
+              const el = node as Element;
+              if (el.nodeName === 'IFRAME') hookFrame(el as HTMLIFrameElement);
+              else el.querySelectorAll('iframe').forEach(hookFrame);
+            });
+          }
+        }).observe(doc, { childList: true, subtree: true });
+      } catch {
+        // a cross origin frame cannot be reached, and Escape stays host only
+      }
+    };
+    frame.addEventListener('load', attach);
+    attach();
+  };
+  hookFrame(iframe);
 
   function applyDock() {
     panel.className = `panel${isOpen ? ' open' : ''} dock-${state.docked}`;
@@ -371,7 +413,9 @@ export function createDevtoolsPopup() {
     // Closing hides the panel, so focus would fall to the body. Only take it
     // back when it was inside the popup: the host page may own it.
     if (!isOpen && popupRoot?.contains(document.activeElement)) fab.focus();
-    if (isOpen && !iframe.src) {
+    if (isOpen && !iframe.src && options.src) {
+      iframe.src = `${location.origin}${options.src}`;
+    } else if (isOpen && !iframe.src) {
       const base = getBaseURL();
       const origin = location.origin;
       let pageId = '';
@@ -542,5 +586,5 @@ export function createDevtoolsPopup() {
 
 // Auto-create when loaded as script
 if (typeof document !== 'undefined') {
-  createDevtoolsPopup();
+  void showDevtools();
 }

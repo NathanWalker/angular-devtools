@@ -5,11 +5,19 @@ import { FORMS_STYLES, formsCall, plain, type FormLintFinding } from './forms-ty
 @Component({
   selector: 'app-forms-submit',
   template: `
-    <h3>Submit</h3>
-    <pre class="explain">{{ submit() || 'Loading…' }}</pre>
-    <h3>Payload</h3>
-    <pre class="explain">{{ payload() || 'Loading…' }}</pre>
-    <div>
+    <section class="block" aria-labelledby="forms-submit-title">
+      <h3 id="forms-submit-title" class="section-label">Submit</h3>
+      <pre class="explain" [attr.aria-busy]="submit() ? null : 'true'">{{
+        submit() || 'Loading…'
+      }}</pre>
+    </section>
+    <section class="block" aria-labelledby="forms-payload-title">
+      <h3 id="forms-payload-title" class="section-label">Payload</h3>
+      <pre class="explain" [attr.aria-busy]="payload() ? null : 'true'">{{
+        payload() || 'Loading…'
+      }}</pre>
+    </section>
+    <div class="fixture">
       <button type="button" class="small" (click)="copyFixture()">Copy test fixture</button>
       <span class="status" role="status">{{ message() }}</span>
     </div>
@@ -18,15 +26,24 @@ import { FORMS_STYLES, formsCall, plain, type FormLintFinding } from './forms-ty
     ${FORMS_STYLES}
     :host {
       display: grid;
+      gap: 16px;
+      min-width: 0;
+      animation: enter 0.35s var(--ease) both;
+    }
+    .block {
+      display: grid;
       gap: 8px;
+      min-width: 0;
     }
-    h3 {
-      margin: 4px 0 0;
-      color: #d4d4d8;
-      font-size: 13px;
+    .explain {
+      max-height: 420px;
+      overflow: auto;
     }
-    .status {
-      margin-left: 8px;
+    .fixture {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
     }
   `,
 })
@@ -79,26 +96,54 @@ export class FormsSubmit {
   selector: 'app-forms-lint',
   template: `
     @if (findings() === null) {
-      <p class="muted">Checking…</p>
+      <div class="empty-state" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <p>Checking the form for problems…</p>
+      </div>
     } @else if (!findings()!.length) {
-      <p class="muted">No problems found. For generic accessibility, run axe on the page.</p>
+      <div class="empty-state">
+        <span class="ok-icon" aria-hidden="true">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        </span>
+        <p class="empty-title">No problems found</p>
+        <p>For generic accessibility checks, run axe on the page.</p>
+      </div>
     } @else {
+      <p class="summary">
+        <span class="tabular">{{ findings()!.length }}</span>
+        {{ findings()!.length === 1 ? 'finding' : 'findings' }}
+      </p>
       <ul class="findings">
         @for (f of findings(); track $index) {
-          <li>
-            <span
-              class="tag"
-              [attr.data-tone]="
-                f.severity === 'info' ? '' : f.severity === 'error' ? 'bad' : 'warn'
-              "
-              >{{ f.severity }}</span
-            >
-            <code>{{ f.rule }}</code>
-            @if (f.path) {
-              <span class="muted">at {{ f.path }}</span>
-            }
-            <div>{{ f.message }}</div>
-            <div class="muted">Fix: {{ f.fix }}</div>
+          <li [attr.data-severity]="f.severity">
+            <div class="meta">
+              <span
+                class="tag severity"
+                [attr.data-tone]="
+                  f.severity === 'info' ? '' : f.severity === 'error' ? 'bad' : 'warn'
+                "
+                >{{ f.severity }}</span
+              >
+              <code class="rule">{{ f.rule }}</code>
+              @if (f.path) {
+                <span class="muted path"
+                  >at <code>{{ f.path }}</code></span
+                >
+              }
+            </div>
+            <p class="message">{{ f.message }}</p>
+            <p class="fix"><span class="fix-label">Fix</span> {{ f.fix }}</p>
           </li>
         }
       </ul>
@@ -106,22 +151,101 @@ export class FormsSubmit {
   `,
   styles: `
     ${FORMS_STYLES}
+    :host {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+    .ok-icon {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      margin-bottom: 4px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--ok) 12%, transparent);
+      color: var(--ok);
+    }
+    .summary {
+      margin: 0;
+      color: var(--text-2);
+      font-size: 12.5px;
+    }
+    .tabular {
+      color: var(--text-strong);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
     .findings {
       display: grid;
       gap: 8px;
       margin: 0;
       padding: 0;
       list-style: none;
+      color: var(--text);
       font-size: 13px;
-      color: #e4e4e7;
+      animation: enter 0.35s var(--ease) both;
     }
     .findings li {
-      padding: 8px;
-      border: 1px solid #27272a;
-      border-radius: 6px;
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      padding: 12px 16px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      box-shadow: inset 3px 0 0 var(--border-strong);
+      transition: border-color 150ms var(--ease);
     }
-    code {
-      color: #c4b5fd;
+    .findings li[data-severity='error'] {
+      box-shadow: inset 3px 0 0 var(--danger);
+    }
+    .findings li[data-severity='warning'] {
+      box-shadow: inset 3px 0 0 var(--warn);
+    }
+    .findings li:hover {
+      border-color: var(--border-strong);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    .severity {
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .rule {
+      color: var(--text-strong);
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .path {
+      font-size: 12.5px;
+      overflow-wrap: anywhere;
+    }
+    .path code {
+      color: #fde68a;
+    }
+    .message,
+    .fix {
+      margin: 0;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .fix {
+      color: var(--text-2);
+      font-size: 12.5px;
+    }
+    .fix-label {
+      margin-right: 4px;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
     }
   `,
 })

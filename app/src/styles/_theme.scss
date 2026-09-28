@@ -1,0 +1,35 @@
+@use 'sass:map';
+@use 'palette' as p;
+
+$accent: amber !default;
+
+$radius: 14px;
+$radius-sm: 9px;
+$ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+:root {
+  color-scheme: dark;
+
+  @each $name, $value in p.$neutrals {
+    --#{$name}: #{$value};
+  }
+
+  --accent: #{p.accent($accent, base)};
+  --accent-hover: #{p.accent($accent, hover)};
+  --accent-ink: #{p.accent($accent, ink)};
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 45%, transparent);
+
+  @each $name, $value in p.$status {
+    --#{$name}: #{$value};
+  }
+
+  --radius: #{$radius};
+  --radius-sm: #{$radius-sm};
+  --control-h: 34px;
+  --header-h: 45px;
+  --shadow: 0 10px 30px -16px rgba(0, 0, 0, 0.8);
+  --ease: #{$ease};
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

@@ -16,9 +16,11 @@ import {
 
 export interface SourceRoute {
   path: string;
+  fullPath?: string;
   component?: string;
   redirectTo?: string;
   file: string;
+  line?: number;
 }
 
 export interface MatchResult {
@@ -171,13 +173,19 @@ function effectiveGuards(node: RouteNode, parents: RouteNode[]): string[] {
 }
 
 function sourceFor(node: RouteNode, sources: SourceRoute[]): string | undefined {
+  const same = (s: SourceRoute) =>
+    s.fullPath === node.fullPath &&
+    (s.redirectTo !== undefined) === (node.redirectTo !== undefined);
+  const bare = sources.filter((s) => same(s) && !s.component);
   const hit =
+    sources.find((s) => same(s) && s.component === node.component) ??
+    (node.children?.length ? bare[0] : bare[bare.length - 1]) ??
     sources.find((s) => s.path === node.path && s.component && s.component === node.component) ??
     sources.find(
       (s) => s.path === node.path && s.redirectTo !== undefined && s.redirectTo === node.redirectTo,
     ) ??
     sources.find((s) => s.path === node.path);
-  return hit?.file;
+  return hit && (hit.line ? `${hit.file}:${hit.line}` : hit.file);
 }
 
 function nodeLine(

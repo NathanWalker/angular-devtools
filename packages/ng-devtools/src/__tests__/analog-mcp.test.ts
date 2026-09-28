@@ -3,6 +3,13 @@ import { createHostContext } from 'devframe/node';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import ngDevtools from '../devframe.ts';
 import { clearCalls, recordCall, setDevOrigin } from '../analog-server-log.ts';
+import {
+  analogEndpoint,
+  loadEndpointUrl,
+  resolveAnalogReport,
+  type AnalogState,
+} from '../rpc/analog-tools.ts';
+import { scanAnalog } from '../rpc/analog-scan.ts';
 import type { AnalogRuntimeReport } from '../analog-runtime.ts';
 import { BASE_FILES, BROKEN_FILES, makeProject } from './analog-fixture.ts';
 
@@ -105,7 +112,7 @@ describe('Analog MCP tools', () => {
     const explained = await call('analog-explain-url', { url: '/products/1' });
     expect(explained).toContain('`/src/app/pages/products.page.ts`');
     expect(explained).toContain('Params: {"id":"1"}');
-    expect(explained).toContain('/api/_analog/pages/products/:id');
+    expect(explained).toContain('`/api/_analog/pages/products/1`');
     expect(explained).toContain('Live page:');
     expect(await call('analog-explain-url', { url: '/nope' })).toContain('matches no file route');
   });
@@ -289,5 +296,95 @@ describe('Analog MCP tools', () => {
     await push('push-analog', { ...report, load: { preview: '{}', bytes: 2 } });
     await push('push-analog', { ...report, serverContext: 1 });
     expect(await call('analog-current-page')).toContain('No Analog page has reported yet');
+  });
+
+  it('checks page and server files against the project', async () => {
+    const project = scanAnalog(
+      makeProject(BASE_FILES, {
+        'src/app/pages/blog.page.analog': '<template><p>blog</p></template>',
+        'src/app/pages/blog.server.ts': 'export const load = async () => ({});\n',
+      }),
+    );
+    const resolved = resolveAnalogReport(project, {
+      ...report,
+      chain: [
+        {
+          path: '/products',
+          file: '/src/app/pages/products.page.ts',
+          serverFile: '/src/app/pages/products.server.ts',
+        },
+      ],
+      loadFrom: 0,
+    });
+    expect(resolved.chain[0]).toEqual({
+      path: '/products',
+      file: '/src/app/pages/products.page.ts',
+    });
+    expect(resolved.load).toBeUndefined();
+    const kept = resolveAnalogReport(project, { ...report, loadFrom: 1 });
+    expect(kept.chain[1].serverFile).toBe('/src/app/pages/products/[id].server.ts');
+    expect(kept.load).toBeDefined();
+    const blog = resolveAnalogReport(project, {
+      ...report,
+      chain: [
+        {
+          path: '/blog',
+          file: '/src/app/pages/blog.page.ts',
+          serverFile: '/src/app/pages/blog.server.ts',
+        },
+      ],
+      loadFrom: 0,
+    });
+    expect(blog.chain[0].file).toBe('/src/app/pages/blog.page.analog');
+    expect(blog.load).toBeDefined();
+  });
+
+  it('builds load endpoints the way Analog does', () => {
+    expect(analogEndpoint('/src/app/pages/index.page.ts')).toBe('/pages/index');
+    expect(analogEndpoint('/src/app/pages/products/[id].page.ts')).toBe('/pages/products/[id]');
+    expect(analogEndpoint('/src/app/pages/(auth)/login.page.ts')).toBe('/pages/(auth)/login');
+    expect(analogEndpoint('/src/app/pages/(home).page.ts')).toBe('/pages/-home-');
+    expect(analogEndpoint('/src/app/pages/blog.[slug].page.analog')).toBe('/pages/blog/[slug]');
+    expect(analogEndpoint('/src/app/pages/docs/[...slug].page.ts')).toBe('/pages/docs/**');
+    expect(analogEndpoint('/src/app/pages/shop/[[...path]].page.ag')).toBe('/pages/shop/**');
+    expect(loadEndpointUrl('/src/app/pages/products/[id].page.ts', 'api', { id: '7' })).toBe(
+      '/api/_analog/pages/products/7',
+    );
+    expect(loadEndpointUrl('/src/app/pages/docs/[...slug].page.ts', 'api', { '**': 'a/b' })).toBe(
+      '/api/_analog/pages/docs/a/b',
+    );
+  });
+
+  it('forgets closed pages, clears calls and shares duplicate loads', async () => {
+    const { ctx, push } = await boot(makeProject(BASE_FILES));
+    const state = () =>
+      (
+        ctx.rpc as unknown as {
+          sharedState: { get: (name: string) => Promise<{ value: () => AnalogState }> };
+        }
+      ).sharedState
+        .get('ng-devtools:analog')
+        .then((s) => s.value());
+    await push('push-analog', report);
+    expect((await state()).pages).toHaveLength(1);
+    await push('forget-analog-page', 'pg1');
+    expect((await state()).pages).toHaveLength(0);
+    const base = { method: 'GET', status: 200, ms: 3, url: '/api/_analog/pages/products/1' };
+    recordCall({ ...base, at: 1000, kind: 'load', route: '/products/1', from: 'ssr' });
+    recordCall({
+      ...base,
+      at: 1100,
+      kind: 'page',
+      route: '/products/1',
+      from: 'browser',
+      render: 'ssr',
+    });
+    recordCall({ ...base, at: 1200, kind: 'load', route: '/products/1', from: 'browser' });
+    expect((await state()).duplicates).toEqual([
+      { route: '/products/1', ssrAt: 1000, browserAt: 1200 },
+    ]);
+    await push('analog-clear-calls', undefined);
+    expect((await state()).calls).toEqual([]);
+    expect((await state()).duplicates).toEqual([]);
   });
 });

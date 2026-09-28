@@ -13,7 +13,7 @@ const PHASES = ['recognize', 'guards', 'resolve', 'activate'] as const;
 const PHASE_COLORS: Record<string, string> = {
   recognize: '#60a5fa',
   guards: '#f59e0b',
-  resolve: '#a78bfa',
+  resolve: '#2dd4bf',
   activate: '#34d399',
 };
 
@@ -21,15 +21,8 @@ const PHASE_COLORS: Record<string, string> = {
   selector: 'app-route-timeline',
   template: `
     <div class="toolbar">
-      <label class="check">
-        <input
-          type="checkbox"
-          [checked]="page().instrumented"
-          (change)="toggleInstrument($event)"
-        />
-        Record each guard and resolver
-      </label>
       <input
+        #filterInput
         class="field"
         type="text"
         aria-label="Filter navigations by URL"
@@ -45,17 +38,30 @@ const PHASE_COLORS: Record<string, string> = {
         />
         Only problems
       </label>
-      <button type="button" class="small" (click)="exportJson()">Export JSON</button>
+      <label class="check">
+        <input
+          type="checkbox"
+          [checked]="page().instrumented"
+          (change)="toggleInstrument($event)"
+        />
+        Record each guard and resolver
+      </label>
+      <button type="button" class="small export" (click)="exportJson()">Export JSON</button>
     </div>
     @if (message()) {
-      <p class="muted" role="status">{{ message() }}</p>
+      <p class="message" role="status">{{ message() }}</p>
     }
-    <div class="legend" aria-hidden="true">
-      @for (phase of phases; track phase) {
-        <span><i [style.background]="color(phase)"></i>{{ phase }}</span>
-      }
-    </div>
     @if (items().length) {
+      <div class="meta-row">
+        <span class="muted count"
+          >{{ items().length }} of {{ page().navigations.length }} navigation(s)</span
+        >
+        <div class="legend" aria-hidden="true">
+          @for (phase of phases; track phase) {
+            <span><i [style.background]="color(phase)"></i>{{ phase }}</span>
+          }
+        </div>
+      </div>
       <ol class="navs">
         @for (nav of items(); track nav.id) {
           <li>
@@ -63,28 +69,30 @@ const PHASE_COLORS: Record<string, string> = {
               @if (!nav.beforeConnect) {
                 <time>{{ time(nav.startedAt) }}</time>
               }
-              <span class="muted">#{{ nav.id }}</span>
-              <code>{{ nav.url }}</code>
+              <span class="id">#{{ nav.id }}</span>
+              <code class="url">{{ nav.url }}</code>
               @if (nav.finalUrl && nav.finalUrl !== nav.url) {
-                <span aria-hidden="true">→</span>
+                <span class="arrow" aria-hidden="true">→</span>
                 <span class="visually-hidden">redirected to</span>
-                <code>{{ nav.finalUrl }}</code>
+                <code class="url">{{ nav.finalUrl }}</code>
               }
-              <span class="badge" [attr.data-tone]="tone(nav.outcome)">{{ nav.outcome }}</span>
-              @if (nav.beforeConnect) {
-                <span class="muted">{{
-                  nav.endedAt === undefined && nav.outcome !== 'pending'
-                    ? 'before DevTools connected'
-                    : 'started before DevTools connected'
-                }}</span>
-              } @else if (nav.phases?.['total'] !== undefined) {
-                <span class="muted">{{ nav.phases?.['total'] }}ms</span>
-              } @else if (nav.endedAt !== undefined) {
-                <span class="muted">{{ nav.endedAt - nav.startedAt }}ms</span>
-              }
-              @if (nav.probe) {
-                <span class="tag">probe</span>
-              }
+              <span class="meta">
+                <span class="badge" [attr.data-tone]="tone(nav.outcome)">{{ nav.outcome }}</span>
+                @if (nav.beforeConnect) {
+                  <span class="muted">{{
+                    nav.endedAt === undefined && nav.outcome !== 'pending'
+                      ? 'before DevTools connected'
+                      : 'started before DevTools connected'
+                  }}</span>
+                } @else if (nav.phases?.['total'] !== undefined) {
+                  <span class="muted ms">{{ nav.phases?.['total'] }}ms</span>
+                } @else if (nav.endedAt !== undefined) {
+                  <span class="muted ms">{{ nav.endedAt - nav.startedAt }}ms</span>
+                }
+                @if (nav.probe) {
+                  <span class="tag">probe</span>
+                }
+              </span>
             </div>
             @if (bars(nav).length) {
               <div class="bar" role="img" [attr.aria-label]="barLabel(nav)">
@@ -180,7 +188,7 @@ const PHASE_COLORS: Record<string, string> = {
               }
               @if (nav.reason || nav.code) {
                 <dt>Reason</dt>
-                <dd class="reason">{{ [nav.code, nav.reason].filter(Boolean).join(': ') }}</dd>
+                <dd class="reason">{{ reasonText(nav) }}</dd>
               }
               @if (nav.errorCode) {
                 <dt>Error</dt>
@@ -217,74 +225,180 @@ const PHASE_COLORS: Record<string, string> = {
         }
       </ol>
     } @else {
-      <p class="muted">
-        No navigations since DevTools connected; earlier ones are not visible. Click a link in the
-        app.
-      </p>
+      @if (page().navigations.length) {
+        <div class="empty">
+          <p class="empty-title">No navigations match the current filters.</p>
+          <p class="muted">
+            {{ page().navigations.length }} navigation(s) are hidden. Clear the filters to see them.
+          </p>
+          <button type="button" class="small" (click)="clearFilters(); filterInput.focus()">
+            Clear filters
+          </button>
+        </div>
+      } @else {
+        <div class="empty">
+          <p class="empty-title">No navigations since DevTools connected.</p>
+          <p class="muted">Earlier ones are not visible. Click a link in the app to record one.</p>
+        </div>
+      }
     }
   `,
   styles: `
     ${SHARED_STYLES}
     :host {
       display: grid;
-      gap: 10px;
+      gap: 12px;
+      min-width: 0;
     }
     .toolbar {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px 14px;
+      gap: 8px 16px;
       align-items: center;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
       font-size: 13px;
-      color: #e4e4e7;
+    }
+    .toolbar .field {
+      flex: 1 1 200px;
+      min-width: 0;
+    }
+    .export {
+      margin-left: auto;
     }
     .check {
-      display: flex;
-      gap: 6px;
+      display: inline-flex;
+      gap: 8px;
       align-items: center;
+      min-height: 34px;
+      color: var(--text-2);
+      cursor: pointer;
+      user-select: none;
+      transition: color 0.15s var(--ease);
+    }
+    .check:hover {
+      color: var(--text);
+    }
+    .check input {
+      flex: none;
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .message {
+      margin: 0;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 16px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 4px;
+    }
+    .count {
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
     }
     .legend {
       display: flex;
-      gap: 12px;
-      font-size: 12px;
-      color: #a1a1aa;
+      flex-wrap: wrap;
+      gap: 6px 16px;
+      color: var(--text-3);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
     .legend i {
       display: inline-block;
-      width: 10px;
-      height: 10px;
-      margin-right: 4px;
-      border-radius: 2px;
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
     }
     .navs {
-      list-style: none;
-      margin: 0;
-      padding: 0;
       display: grid;
       gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
     }
     .navs > li {
-      padding: 10px;
-      border: 1px solid #27272a;
-      border-radius: 6px;
+      min-width: 0;
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
       font-size: 13px;
+      animation: enter 0.35s var(--ease) both;
+      transition: border-color 0.15s var(--ease);
+    }
+    .navs > li:hover {
+      border-color: var(--border-strong);
     }
     .head {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 6px 8px;
       align-items: center;
+      min-width: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .head .url {
+      min-width: 0;
+      color: var(--text-strong);
+      font-weight: 500;
+    }
+    .id {
+      color: var(--text-3);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .arrow {
+      color: var(--text-3);
+    }
+    .meta {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      align-items: center;
+      margin-left: auto;
+    }
+    .ms {
+      font-family: var(--font-mono);
+      font-size: 12px;
     }
     time {
-      color: #a1a1aa;
+      color: var(--text-3);
+      font-family: var(--font-mono);
       font-size: 12px;
+      font-variant-numeric: tabular-nums;
     }
     .bar {
       display: flex;
+      gap: 2px;
       height: 6px;
-      margin: 8px 0 4px;
-      border-radius: 3px;
+      margin: 12px 0 4px;
       overflow: hidden;
-      background: #27272a;
+      border-radius: 99px;
+      background: var(--surface-3);
     }
     .bar span {
       display: block;
@@ -292,27 +406,42 @@ const PHASE_COLORS: Record<string, string> = {
     }
     .details {
       display: grid;
-      grid-template-columns: max-content 1fr;
-      gap: 3px 12px;
-      margin: 6px 0 0;
-      font-size: 12px;
+      grid-template-columns: max-content minmax(0, 1fr);
+      align-items: baseline;
+      gap: 6px 16px;
+      margin: 12px 0 0;
+      font-size: 12.5px;
+      line-height: 1.5;
     }
-    dt {
-      color: #a1a1aa;
+    .details:empty {
+      display: none;
     }
-    dd {
-      margin: 0;
-      color: #e4e4e7;
-      overflow-wrap: anywhere;
+    .details dt {
+      letter-spacing: 0.06em;
     }
     .reason,
     .bad {
-      color: #fecaca;
+      color: var(--danger);
     }
     .actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
-      margin-top: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    @media (max-width: 480px) {
+      .details {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 2px;
+      }
+      .details dd + dt {
+        margin-top: 6px;
+      }
+      .export {
+        margin-left: 0;
+      }
     }
   `,
 })
@@ -337,6 +466,15 @@ export class RouteTimeline {
           (!this.onlyProblems() || !['succeeded', 'pending'].includes(nav.outcome)),
       );
   });
+
+  reasonText(nav: NavigationRecord) {
+    return [nav.code, nav.reason].filter(Boolean).join(': ');
+  }
+
+  clearFilters() {
+    this.filter.set('');
+    this.onlyProblems.set(false);
+  }
 
   tone(outcome: string) {
     return tone(outcome);

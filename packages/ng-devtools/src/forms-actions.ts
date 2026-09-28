@@ -49,6 +49,7 @@ export interface FormActionRequest {
   mode?: 'code' | 'user';
   confirm?: boolean;
   force?: boolean;
+  coerce?: boolean;
   submit?: boolean;
   snapshot?: string;
   selector?: string;
@@ -185,7 +186,7 @@ export function isFormAction(value: unknown): value is FormActionRequest {
     typeof request.action === 'string' &&
     (FORM_ACTIONS as readonly string[]).includes(request.action) &&
     (request.formId === undefined ||
-      (typeof request.formId === 'string' && request.formId.length < 80)) &&
+      (typeof request.formId === 'string' && request.formId.length < 200)) &&
     (request.path === undefined ||
       (typeof request.path === 'string' && request.path.length < 500)) &&
     (request.selector === undefined ||
@@ -195,6 +196,75 @@ export function isFormAction(value: unknown): value is FormActionRequest {
         request.values !== null &&
         Object.keys(request.values).length <= 200))
   );
+}
+
+function parseJson(text: string): { value: unknown } | null {
+  try {
+    return { value: JSON.parse(text) };
+  } catch {
+    return null;
+  }
+}
+
+export function coerceToCurrent(
+  text: string,
+  current: unknown,
+  element?: Element | null,
+): { value: unknown } | { error: string } {
+  const trimmed = text.trim();
+  if (current === null || current === undefined) {
+    if (trimmed === 'null') return { value: null };
+    const type =
+      typeof HTMLInputElement !== 'undefined' && element instanceof HTMLInputElement
+        ? element.type
+        : '';
+    if (type === 'number' || type === 'range') {
+      return trimmed === '' ? { value: null } : coerceToCurrent(text, 0);
+    }
+    if (type === 'checkbox') return coerceToCurrent(text, false);
+    const json = /^("[\s\S]*"|\{[\s\S]*\}|\[[\s\S]*\])$/.test(trimmed) ? parseJson(trimmed) : null;
+    return json ?? { value: text };
+  }
+  if (typeof current === 'string') {
+    const quoted = /^".*"$/s.test(trimmed) ? parseJson(trimmed) : null;
+    return { value: typeof quoted?.value === 'string' ? quoted.value : text };
+  }
+  if (typeof current === 'number') {
+    if (trimmed === 'null') return { value: null };
+    const number = Number(trimmed);
+    return trimmed !== '' && !Number.isNaN(number)
+      ? { value: number }
+      : { error: `holds a number; "${clipText(text)}" is not a number` };
+  }
+  if (typeof current === 'boolean') {
+    if (/^(true|false)$/i.test(trimmed)) return { value: trimmed.toLowerCase() === 'true' };
+    return { error: 'holds a boolean; type true or false' };
+  }
+  if (typeof current === 'bigint') {
+    try {
+      return { value: BigInt(trimmed) };
+    } catch {
+      return { error: `holds a bigint; "${clipText(text)}" is not an integer` };
+    }
+  }
+  if (current instanceof Date) {
+    const date = new Date(trimmed);
+    return Number.isNaN(date.getTime())
+      ? { error: `holds a Date; "${clipText(text)}" is not a date` }
+      : { value: date };
+  }
+  const parsed = parseJson(trimmed);
+  if (current && typeof current === 'object') {
+    if (!parsed || !parsed.value || typeof parsed.value !== 'object') {
+      return { error: `holds ${Array.isArray(current) ? 'an array' : 'an object'}; pass JSON` };
+    }
+    return parsed;
+  }
+  return parsed ?? { value: text };
+}
+
+function clipText(text: string): string {
+  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
 }
 
 function fail(error: string): FormActionResult {
@@ -548,14 +618,24 @@ async function perform(
   };
   switch (request.action) {
     case 'set-value': {
-      const problem = writeValue(
-        ctx,
-        found,
-        path,
-        request.value,
-        request.mode ?? 'code',
-        !!request.force,
-      );
+      let value = request.value;
+      if (request.coerce && typeof value === 'string') {
+        const current = node();
+        const raw = current ? rawValue(found, current) : undefined;
+        const coerced = coerceToCurrent(
+          value,
+          raw,
+          raw === null || raw === undefined ? elementFor(ctx, found, path) : null,
+        );
+        if ('error' in coerced) {
+          return {
+            ...fail(`${path || '(form)'} ${coerced.error}.`),
+            skipped: [{ path, reason: coerced.error }],
+          };
+        }
+        value = coerced.value;
+      }
+      const problem = writeValue(ctx, found, path, value, request.mode ?? 'code', !!request.force);
       return problem
         ? { ...fail(`${path || '(form)'} ${problem}.`), skipped: [{ path, reason: problem }] }
         : { ok: true, message: `Set ${path || '(form)'}.` };

@@ -11,7 +11,9 @@ import {
   controlFacts,
   directiveBinding,
   fieldBinding,
+  fieldPath,
   isProbing,
+  metadataValues,
   signalErrorOrigins,
   signalFacts,
   submitSetup,
@@ -77,6 +79,14 @@ export interface FormFieldNode {
   dom?: DomFacts;
   redacted?: RedactReason;
   pendingSince?: number;
+  name?: string;
+  metadata?: unknown[];
+}
+
+export interface FormErrorSummary {
+  path: string;
+  kind: string;
+  message: string;
 }
 
 export interface CollectedForm {
@@ -88,6 +98,7 @@ export interface CollectedForm {
   submitted?: boolean;
   submit?: SubmitSetup;
   submitDom?: SubmitDom;
+  errorSummary?: FormErrorSummary[];
   root: FormFieldNode;
 }
 
@@ -124,6 +135,7 @@ export interface FormsDebugApi {
   getComponent(el: Element): unknown;
   getDirectives(el: Element): unknown[];
   getOwningComponent(el: Element): unknown;
+  getListeners?(el: Element): { name: string; type?: string; callback?: unknown }[];
 }
 
 export interface FoundForm {
@@ -134,11 +146,13 @@ export interface FoundForm {
   directive?: AnyRecord;
   element?: Element;
   formElement?: Element;
+  submitListener?: boolean;
 }
 
 export interface FoundForms {
   forms: FoundForm[];
   elements: WeakMap<object, Element>;
+  hosts?: Element[];
 }
 
 const MAX_DEPTH = 8;
@@ -157,6 +171,31 @@ const baselines = new WeakMap<object, string>();
 let nextUid = 0;
 let secrets: SecretSet | null = null;
 let formSecrets = new Map<string, SecretSet>();
+let collectRound = 0;
+let collecting = false;
+const viewDrift = new WeakMap<object, { round: number; key: string }>();
+const modelDrift = new WeakMap<object, { round: number; key: string }>();
+
+function steady(
+  seen: WeakMap<object, { round: number; key: string }>,
+  target: object,
+  key: string | undefined,
+): boolean {
+  if (key === undefined) {
+    if (collecting) seen.delete(target);
+    return false;
+  }
+  if (!collecting) return true;
+  const previous = seen.get(target);
+  seen.set(target, { round: collectRound, key });
+  return !!previous && previous.key === key && previous.round === collectRound - 1;
+}
+
+function keepViewDrift(target: object, dom: DomFacts, binding: BindingInfo | undefined) {
+  const native = binding?.kind === 'native' || binding?.kind === 'signal-field';
+  const key = native && dom.drift !== undefined ? JSON.stringify(dom.drift) : undefined;
+  if (!steady(viewDrift, target, key)) delete dom.drift;
+}
 
 function uidOf(target: object): string {
   let uid = uids.get(target);
@@ -469,7 +508,12 @@ export function serializeControl(
     if (facts.pending) {
       node.uncommitted = secret ? REDACTED : serializeFormValue(facts.pending.value);
     }
-    if (facts.model) {
+    const unbound = !!element?.hasAttribute('ngmodel');
+    const driftKey =
+      facts.model && !unbound
+        ? (JSON.stringify(serializeFormValue(facts.model)) ?? 'undefined')
+        : undefined;
+    if (facts.model && steady(modelDrift, control, driftKey)) {
       node.modelDrift = secret
         ? { model: REDACTED, viewModel: REDACTED }
         : {
@@ -488,6 +532,7 @@ export function serializeControl(
         secret,
         hasErrors: node.errors.length > 0,
       });
+      keepViewDrift(control, node.dom, node.binding);
     }
     return node;
   }
@@ -529,12 +574,47 @@ function fieldErrors(
 ): FormFieldError[] {
   const errors = read(() => state['errors']() as AnyRecord[], []);
   const origins = errors.length ? read(() => signalErrorOrigins(state), new Map()) : new Map();
-  return errors.map((error) => {
-    const message = typeof error['message'] === 'string' ? error['message'] : undefined;
-    return withOrigin(
-      toError(String(error['kind']), withoutValues(errorParams(error), secret), type, message),
-      origins.get(error),
-    );
+  return errors.map((error) => withOrigin(signalError(error, type, secret), origins.get(error)));
+}
+
+function issuePath(issue: AnyRecord): string | undefined {
+  const parts = read(() => (Array.isArray(issue['path']) ? (issue['path'] as unknown[]) : []), []);
+  const keys = parts.map((part) =>
+    part && typeof part === 'object' ? String((part as AnyRecord)['key']) : String(part),
+  );
+  return keys.length ? keys.join('.') : undefined;
+}
+
+function signalError(
+  error: AnyRecord,
+  type: FormFieldNode['type'],
+  secret: boolean,
+): FormFieldError {
+  const kind = String(read(() => error['kind'], 'error'));
+  const issue =
+    kind === 'standardSchema' ? read(() => error['issue'] as AnyRecord | null, null) : null;
+  const own = read(() => error['message'], undefined);
+  const fromIssue = read(() => issue?.['message'], undefined);
+  const message =
+    typeof own === 'string' && own
+      ? own
+      : typeof fromIssue === 'string' && fromIssue
+        ? fromIssue
+        : undefined;
+  let params = withoutValues(errorParams(error), secret);
+  const path = issue ? issuePath(issue) : undefined;
+  if (path) params = { ...params, path };
+  return toError(kind, params, type, message);
+}
+
+export function errorSummaryOf(root: AnyRecord): FormErrorSummary[] {
+  const errors = read(() => root['errorSummary']() as AnyRecord[], []);
+  return errors.slice(0, 50).map((error) => {
+    const target = read(() => error['fieldTree']() as AnyRecord, null);
+    const path = target ? fieldPath(target) : '';
+    const secret = path.split('.').some((key) => isSecretKey(key));
+    const { kind, message } = signalError(error, 'control', secret);
+    return { path, kind, message };
   });
 }
 
@@ -621,6 +701,14 @@ export function serializeField(
   };
   if (reason && !parentSecret) node.redacted = reason;
   if (element) node.binding = read(() => fieldBinding(state), { kind: 'none' as const });
+  const name = read(() => state['name']() as unknown, undefined);
+  if (typeof name === 'string' && name) node.name = name;
+  const metadata = read(() => metadataValues(state), []);
+  if (metadata.length) {
+    node.metadata = secret
+      ? metadata.map(() => REDACTED)
+      : metadata.map((v) => serializeFormValue(v));
+  }
   const reasons = read(() => state['disabledReasons']() as AnyRecord[], []);
   if (reasons.length) {
     node.disabledReasons = reasons.map((r) =>
@@ -650,6 +738,7 @@ export function serializeField(
         secret,
         hasErrors: node.errors.length > 0,
       });
+      keepViewDrift(state, node.dom, node.binding);
     }
     return node;
   }
@@ -676,16 +765,29 @@ export function serializeField(
   return node;
 }
 
-const formIds = new WeakMap<object, string>();
-let nextFormId = 0;
+export function formIdFor(label: string): string {
+  const id = label
+    .replace(/ #(\d+)$/, '~$1')
+    .replace(/[@\s]+/g, '_')
+    .slice(0, 120);
+  return id || 'form';
+}
 
-export function formIdFor(root: object): string {
-  let id = formIds.get(root);
-  if (!id) {
-    id = `form-${++nextFormId}`;
-    formIds.set(root, id);
-  }
-  return id;
+export function createFormIds(pageId: string) {
+  const assigned = new WeakMap<object, string>();
+  const used = new Set<string>();
+  return (forms: FoundForm[], labels: Map<object, string>): WeakMap<object, string> => {
+    for (const form of forms) {
+      if (assigned.has(form.root)) continue;
+      const base = formIdFor(labels.get(form.root) ?? 'form');
+      const stem = base.replace(/~\d+$/, '');
+      let id = `${base}@${pageId}`;
+      for (let n = 2; used.has(id); n++) id = `${stem}~${n}@${pageId}`;
+      used.add(id);
+      assigned.set(form.root, id);
+    }
+    return assigned;
+  };
 }
 
 function ownerName(owner: unknown): string {
@@ -729,6 +831,23 @@ export function findForms(ng: FormsDebugApi, elements: Iterable<Element>): Found
   const byRoot = new Map<object, FoundForm>();
   const controlElements = new WeakMap<object, Element>();
   const components = new Set<unknown>();
+  const hosts: Element[] = [];
+  const listensForSubmit = (el: Element) =>
+    !(typeof HTMLFormElement !== 'undefined' && el instanceof HTMLFormElement) &&
+    read(
+      () =>
+        (ng.getListeners?.(el) ?? []).some((listener, _index, all) =>
+          listener.name === 'ngSubmit'
+            ? listener.type !== 'dom'
+            : listener.name === 'submit' &&
+              listener.type !== 'output' &&
+              (typeof (listener.callback as AnyRecord | undefined)?.['__ngNextListenerFn__'] ===
+                'function' ||
+                all.filter((other) => other.name === 'submit' && other.type !== 'output').length >
+                  1),
+        ),
+      false,
+    );
 
   const add = (found: FoundForm) => {
     const existing = byRoot.get(found.root);
@@ -740,12 +859,14 @@ export function findForms(ng: FormsDebugApi, elements: Iterable<Element>): Found
     existing.directive ??= found.directive;
     existing.element ??= found.element;
     existing.formElement ??= found.formElement;
+    existing.submitListener ||= found.submitListener;
   };
 
   for (const el of elements) {
     const component = read(() => ng.getComponent(el), null);
     if (component) components.add(component);
     const directives = read(() => ng.getDirectives(el) ?? [], [] as unknown[]);
+    if (component || directives.length) hosts.push(el);
     const selectorSets = directives.map(selectorsOf);
     let owner: unknown;
     const ownerOf = () => (owner ??= read(() => ng.getOwningComponent(el) ?? null, null));
@@ -760,7 +881,16 @@ export function findForms(ng: FormsDebugApi, elements: Iterable<Element>): Found
         const state = isFieldTree(tree) ? tree() : read(() => dir['state']() as AnyRecord, null);
         const root = read(() => state?.['structure'].root as AnyRecord, null);
         const element = selectors.has('formRoot') ? el : undefined;
-        if (root) add({ kind: 'signal', root, owner: ownerOf(), element, formElement: element });
+        if (root) {
+          add({
+            kind: 'signal',
+            root,
+            owner: ownerOf(),
+            element,
+            formElement: element,
+            submitListener: element ? listensForSubmit(element) : undefined,
+          });
+        }
         return;
       }
       const ownControl = read(() => dir['control'] as unknown, undefined);
@@ -790,6 +920,7 @@ export function findForms(ng: FormsDebugApi, elements: Iterable<Element>): Found
         directive: isRootDirective ? dir : undefined,
         element: el,
         formElement: isRootDirective ? el : undefined,
+        submitListener: isRootDirective ? listensForSubmit(el) : undefined,
       });
     });
   }
@@ -806,7 +937,7 @@ export function findForms(ng: FormsDebugApi, elements: Iterable<Element>): Found
     if (form.kind === 'signal') for (const control of compatControls(form.root)) owned.add(control);
   }
   const forms = Array.from(byRoot.values()).filter((form) => !owned.has(form.root));
-  return { forms, elements: controlElements };
+  return { forms, elements: controlElements, hosts };
 }
 
 function fallbackName(found: FoundForm): string {
@@ -818,50 +949,87 @@ function fallbackName(found: FoundForm): string {
   return attr ? `${base}#${attr}` : base;
 }
 
-export function collectForms(
-  { forms, elements }: FoundForms,
-  idOf: (root: object) => string = formIdFor,
-): CollectedForm[] {
+export function formLabels(forms: FoundForm[]): Map<object, string> {
   const seen = new Map<string, number>();
-  const kept = new Map<string, SecretSet>();
-  const collected = forms.map((found) => {
+  const labels = new Map<object, string>();
+  for (const found of forms) {
     const property = found.property ?? propertyHolding(found);
-    const owner = ownerName(found.owner);
-    let label = `${owner}.${property ?? fallbackName(found)}`;
+    const label = `${ownerName(found.owner)}.${property ?? fallbackName(found)}`;
     const count = (seen.get(label) ?? 0) + 1;
     seen.set(label, count);
-    if (count > 1) label = `${label} #${count}`;
-    const id = idOf(found.root);
-    secrets = new SecretSet();
-    kept.set(id, secrets);
-    let root: FormFieldNode;
-    try {
-      root =
-        found.kind === 'signal'
-          ? serializeField(found.root, elements, property ?? '')
-          : serializeControl(found.root, elements, property ?? '');
-      if (secrets.size) redactTree(root, secrets);
-    } finally {
-      secrets = null;
+    labels.set(found.root, count > 1 ? `${label} #${count}` : label);
+  }
+  return labels;
+}
+
+export function collectForms(
+  { forms, elements }: FoundForms,
+  idOf?: (root: object, label: string) => string,
+): CollectedForm[] {
+  const kept = new Map<string, SecretSet>();
+  const labels = formLabels(forms);
+  collectRound++;
+  collecting = true;
+  try {
+    const collected = forms.map((found) => collectOne(found, elements, labels, kept, idOf));
+    formSecrets = kept;
+    return collected;
+  } finally {
+    collecting = false;
+  }
+}
+
+function collectOne(
+  found: FoundForm,
+  elements: WeakMap<object, Element>,
+  labels: Map<object, string>,
+  kept: Map<string, SecretSet>,
+  idOf?: (root: object, label: string) => string,
+): CollectedForm {
+  const property = found.property ?? propertyHolding(found);
+  const owner = ownerName(found.owner);
+  const label = labels.get(found.root) ?? `${owner}.${property ?? fallbackName(found)}`;
+  const id = idOf ? idOf(found.root, label) : formIdFor(label);
+  const set = new SecretSet();
+  secrets = set;
+  kept.set(id, set);
+  let root: FormFieldNode;
+  let errorSummary: FormErrorSummary[] = [];
+  try {
+    root =
+      found.kind === 'signal'
+        ? serializeField(found.root, elements, property ?? '')
+        : serializeControl(found.root, elements, property ?? '');
+    if (found.kind === 'signal') errorSummary = read(() => errorSummaryOf(found.root), []);
+    if (set.size) {
+      redactTree(root, set);
+      errorSummary = errorSummary.map((entry) => ({
+        ...entry,
+        message: set.redact(entry.message),
+      }));
     }
-    const form: CollectedForm = {
-      id,
-      kind: found.kind,
-      owner,
-      property,
-      label,
-      submitted:
-        found.kind === 'signal'
-          ? undefined
-          : read(() => found.directive?.['submitted'] as boolean | undefined, undefined),
-      root,
-    };
-    if (found.kind === 'signal') form.submit = read(() => submitSetup(found.root), undefined);
-    if (found.formElement) form.submitDom = read(() => submitDom(found.formElement!), undefined);
-    return form;
-  });
-  formSecrets = kept;
-  return collected;
+  } finally {
+    secrets = null;
+  }
+  const form: CollectedForm = {
+    id,
+    kind: found.kind,
+    owner,
+    property,
+    label,
+    submitted:
+      found.kind === 'signal'
+        ? undefined
+        : read(() => found.directive?.['submitted'] as boolean | undefined, undefined),
+    root,
+  };
+  if (found.kind === 'signal') form.submit = read(() => submitSetup(found.root), undefined);
+  if (errorSummary.length) form.errorSummary = errorSummary;
+  if (found.formElement) {
+    const context = { valid: root.status === 'VALID', submitListener: found.submitListener };
+    form.submitDom = read(() => submitDom(found.formElement!, context), undefined);
+  }
+  return form;
 }
 
 export function forgetFormSecrets(formIds: Iterable<string>) {

@@ -8,6 +8,11 @@ export default defineConfig({
   base: './',
   root: import.meta.dirname,
   build: { outDir: '../dist/devtools-ui', emptyOutDir: true },
+  css: {
+    preprocessorOptions: {
+      scss: { loadPaths: [join(import.meta.dirname, 'src/styles')] },
+    },
+  },
   optimizeDeps: {
     entries: [],
     exclude: [
@@ -19,7 +24,10 @@ export default defineConfig({
     ],
   },
   plugins: [
-    angular({ tsconfig: join(import.meta.dirname, 'tsconfig.json') }),
+    angular({
+      tsconfig: join(import.meta.dirname, 'tsconfig.json'),
+      inlineStylesExtension: 'scss',
+    }),
     devframeViteBridge(ngDevtools, { base: '/__ng-devtools/', auth: false }),
   ],
 });

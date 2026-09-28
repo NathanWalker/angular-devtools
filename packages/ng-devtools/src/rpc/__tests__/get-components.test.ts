@@ -106,4 +106,22 @@ describe('get-components', () => {
     expect(component.inputs).toEqual(['name']);
     expect(component.outputs).toEqual(['saved']);
   });
+
+  it('records components without a selector by class name, with kind and line', async () => {
+    const found = await componentsFor(`
+      import { Component, Directive } from '@angular/core';
+
+      @Component({ template: '<p>routed</p>' })
+      export class _TripPage {}
+
+      @Directive()
+      export abstract class Base {}
+
+      class Helper {}
+    `);
+    expect(found).toEqual([
+      expect.objectContaining({ selector: '', className: '_TripPage', kind: 'component', line: 5 }),
+      expect.objectContaining({ selector: '', className: 'Base', kind: 'directive', line: 8 }),
+    ]);
+  });
 });

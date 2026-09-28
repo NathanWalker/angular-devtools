@@ -1,4 +1,6 @@
-import type { AnalogCall } from '../analog-server-log.ts';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import type { AnalogCall, DuplicateLoad } from '../analog-server-log.ts';
 import { duplicateLoads } from '../analog-server-log.ts';
 import type { AnalogRuntimeReport } from '../analog-runtime.ts';
 import {
@@ -13,6 +15,7 @@ import {
 export interface AnalogState {
   pages: AnalogRuntimeReport[];
   calls: AnalogCall[];
+  duplicates: DuplicateLoad[];
   reportedAt: number;
 }
 
@@ -56,6 +59,8 @@ export function isAnalogReport(value: unknown): value is AnalogRuntimeReport {
         optionalString(c['serverFile']),
     ) &&
     optionalString(r.serverContext) &&
+    (r.loadFrom === undefined ||
+      (typeof r.loadFrom === 'number' && Number.isInteger(r.loadFrom) && r.loadFrom >= 0)) &&
     typeof r.hydrated === 'number' &&
     typeof r.transferState === 'boolean' &&
     isStrings(r.hydrationErrors, 50) &&
@@ -78,6 +83,64 @@ export function mergeAnalogReport(
     MAX_PAGES,
   );
   return { ...state, pages, reportedAt: now };
+}
+
+const PAGE_EXTENSIONS = ['.page.ts', '.page.analog', '.page.ag'];
+
+/**
+ * The browser only knows the endpoint key Analog derives from each page file,
+ * so the page file and its .server.ts are checked against the project here.
+ */
+export function resolveAnalogReport(
+  project: AnalogProject,
+  report: AnalogRuntimeReport,
+): AnalogRuntimeReport {
+  if (!project.analog) return report;
+  const servers = new Set(project.serverFiles);
+  const files = new Set(project.files);
+  const exists = (file: string) =>
+    files.has(file) || servers.has(file) || existsSync(join(project.root, file));
+  const chain = report.chain.map((item) => {
+    if (!item.serverFile?.endsWith('.server.ts')) return item;
+    const base = item.serverFile.slice(0, -'.server.ts'.length);
+    const next = { ...item };
+    const page = PAGE_EXTENSIONS.map((ext) => base + ext).find(exists);
+    if (page) next.file = page;
+    if (!exists(item.serverFile)) delete next.serverFile;
+    return next;
+  });
+  const out: AnalogRuntimeReport = { ...report, chain };
+  const source = report.loadFrom !== undefined ? chain[report.loadFrom] : undefined;
+  if (source ? !source.serverFile : !chain.some((c) => c.serverFile)) {
+    delete out.load;
+    delete out.loadFrom;
+  }
+  return out;
+}
+
+/** Analog's own endpoint for a page file (see toRoutes in @analogjs/router). */
+export function analogEndpoint(file: string): string {
+  return file
+    .replace(/\.page\.(ts|analog|ag)$/, '')
+    .replace(/\[\[\.\.\..+\]\]/, '**')
+    .replace(/\[\.{3}.+\]/, '**')
+    .replace(/^(.*?)\/pages/, '/pages')
+    .replace(/\./g, '/')
+    .replace(/\/\((.*?)\)$/, '/-$1-');
+}
+
+/** The URL the browser fetches load() data from, with params filled in. */
+export function loadEndpointUrl(
+  file: string,
+  apiPrefix: string,
+  params: Record<string, string> = {},
+): string {
+  let path = `/${apiPrefix}/_analog${analogEndpoint(file)}`.replace(/\/{2,}/g, '/');
+  for (const [name, value] of Object.entries(params)) {
+    if (name !== '**') path = path.replace(`[${name}]`, value);
+  }
+  const rest = params['**'] ?? Object.values(params).at(-1) ?? '';
+  return path.replace('**', rest);
 }
 
 function kindLabel(route: AnalogRoute): string {
@@ -132,9 +195,9 @@ export function analogExplainUrlText(
     });
     if (Object.keys(match.params).length) lines.push(`Params: ${JSON.stringify(match.params)}`);
     const leaf = match.chain[match.chain.length - 1];
-    if (leaf.serverFile) {
+    if (leaf.serverFile && leaf.file) {
       lines.push(
-        `Data: ${code(leaf.serverFile)} load() runs on the server and is fetched from /${project.config.apiPrefix}/_analog/pages${leaf.fullPath}.`,
+        `Data: ${code(leaf.serverFile)} load() runs on the server and is fetched from ${code(loadEndpointUrl(leaf.file, project.config.apiPrefix, match.params))}.`,
       );
     }
   } else {

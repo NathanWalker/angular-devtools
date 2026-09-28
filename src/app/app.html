@@ -1,20 +1,50 @@
 <a class="skip-link" href="#main" (click)="skipToMain($event)">Skip to content</a>
-<nav class="navbar" aria-label="Primary">
-  <a class="brand" routerLink="/">Angular DevTools</a>
-  <div class="nav-links">
-    <a
-      routerLink="/"
-      routerLinkActive="active"
-      ariaCurrentWhenActive="page"
-      [routerLinkActiveOptions]="{ exact: true }"
-      >Home</a
+<header class="navbar">
+  <a class="brand" routerLink="/" aria-label="Angular Travel, home">
+    <svg class="mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
+      <circle cx="16" cy="16" r="15" fill="var(--accent)" />
+      <path d="M16 6.5 20 16l-4 9.5L12 16z" fill="var(--accent-ink)" />
+      <path d="M16 6.5 20 16h-8z" fill="#fff" opacity="0.85" />
+    </svg>
+    <span class="brand-name">Angular <strong>Travel</strong></span>
+  </a>
+  <nav class="nav-links" aria-label="Primary">
+    <a routerLink="/destinations" routerLinkActive="active" ariaCurrentWhenActive="page"
+      >Destinations</a
     >
-    <a routerLink="/products" routerLinkActive="active" ariaCurrentWhenActive="page">Products</a>
-    <a routerLink="/examples" routerLinkActive="active" ariaCurrentWhenActive="page">Examples</a>
+    <a routerLink="/trips" routerLinkActive="active" ariaCurrentWhenActive="page">My Trips</a>
+    <a routerLink="/examples" routerLinkActive="active" ariaCurrentWhenActive="page"
+      >DevTools Lab</a
+    >
     <a routerLink="/about" routerLinkActive="active" ariaCurrentWhenActive="page">About</a>
+  </nav>
+  <div class="actions">
+    <a class="saved" routerLink="/destinations" [queryParams]="{ saved: 1 }">
+      <svg class="heart" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path
+          d="M12 20.5s-7.5-4.6-7.5-10.1A4.4 4.4 0 0 1 12 7.6a4.4 4.4 0 0 1 7.5 2.8c0 5.5-7.5 10.1-7.5 10.1Z"
+        />
+      </svg>
+      <span class="label">Saved</span>
+      <span class="count" [class.empty]="!store.savedCount()">{{ store.savedCount() }}</span>
+    </a>
+    @if (account.signedIn()) {
+      <button type="button" class="account" (click)="signOut()">Sign Out</button>
+    } @else {
+      <a class="account" routerLink="/sign-in">Sign In</a>
+    }
+    <app-theme-toggle />
   </div>
-  <app-theme-toggle />
-</nav>
+</header>
 <main id="main" tabindex="-1">
   <router-outlet />
 </main>
+<footer class="footer">
+  <p>
+    Angular Travel is a demo app for the devtools. Nothing here is real, and no card is charged.
+  </p>
+  <p>
+    Photos from <a href="https://unsplash.com" rel="noopener">Unsplash</a>, credited in
+    <code>public/destinations/CREDITS.md</code>.
+  </p>
+</footer>

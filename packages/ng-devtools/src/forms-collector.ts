@@ -5,7 +5,8 @@ import {
   diffForms,
   findFieldElement,
   findForms,
-  formIdFor,
+  createFormIds,
+  formLabels,
   propertyHolding,
   serializeControl,
   watchControlEvents,
@@ -34,6 +35,7 @@ import {
   type RenderCounter,
 } from './forms-instrument.ts';
 import { redactMessage } from './forms-privacy.ts';
+import { fieldPath, probeEveryTime } from './forms-read.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -78,7 +80,7 @@ function isFieldTarget(target: unknown): target is { formId: string; path: strin
   return (
     typeof t?.formId === 'string' &&
     typeof t.path === 'string' &&
-    t.formId.length < 50 &&
+    t.formId.length < 200 &&
     t.path.length < 500
   );
 }
@@ -114,7 +116,18 @@ export function attachForms(
   getNg: () => any,
   highlight: { show(el: HTMLElement): void; clear(): void },
 ): FormsCollector {
-  const idOf = (root: object) => `${formIdFor(root)}@${pageId}`;
+  const assignIds = createFormIds(pageId);
+  let ids = new WeakMap<object, string>();
+  const idOf = (root: object) => ids.get(root) ?? `form@${pageId}`;
+  let hosts: Element[] | null = null;
+  let hostsStale = true;
+  const observer =
+    typeof MutationObserver === 'function'
+      ? new MutationObserver(() => {
+          hostsStale = true;
+        })
+      : null;
+  observer?.observe(document.documentElement, { childList: true, subtree: true });
   let lastForms: CollectedForm[] = [];
   let lastPayload = '';
   let lastPushAt = 0;
@@ -205,13 +218,20 @@ export function attachForms(
         continue;
       }
       live.add(form.root);
-      if (watched.has(form.root)) continue;
       const formId = idOf(form.root);
+      const existing = watched.get(form.root);
+      if (existing?.formId === formId) continue;
+      if (existing) {
+        existing.stop();
+        watched.delete(form.root);
+      }
       const stop = watchControlEvents(
         form.root,
         formId,
         (event) => {
-          if (event.type !== 'touched' && event.type !== 'dirty') recordFormEvent(event);
+          if (event.type !== 'touched' && event.type !== 'dirty') {
+            recordFormEvent({ ...event, formId: idOf(form.root) });
+          }
           schedulePush();
         },
         {
@@ -237,10 +257,20 @@ export function attachForms(
   }
 
   function wrapSignalSubmit(form: FoundForm) {
-    const flag = read(() => form.root['submitState']['selfSubmitting'] as AnyRecord, null);
+    const visit = (node: AnyRecord, depth: number) => {
+      wrapSubmitFlag(form.root, node);
+      if (depth >= 8) return;
+      const children = read(() => node['structure'].materializedChildren() as AnyRecord[], []);
+      for (const child of children.slice(0, 200)) visit(child, depth + 1);
+    };
+    visit(form.root, 0);
+  }
+
+  function wrapSubmitFlag(root: AnyRecord, node: AnyRecord) {
+    const flag = read(() => node['submitState']['selfSubmitting'] as AnyRecord, null);
     if (!flag || wrappedSubmits.has(flag) || typeof flag['set'] !== 'function') return;
     wrappedSubmits.add(flag);
-    const formId = idOf(form.root);
+    const path = node === root ? '' : read(() => fieldPath(node), '');
     const original = flag['set'];
     unwrapSubmits.push(() => {
       flag['set'] = original;
@@ -249,12 +279,13 @@ export function attachForms(
     let started = false;
     flag['set'] = function (this: unknown, value: boolean) {
       const result = original.call(this, value);
+      const formId = idOf(root);
       if (value) {
         started = true;
         submittingForm = formId;
         recordFormEvent({
           formId,
-          path: '',
+          path,
           type: 'submit',
           outcome: 'ran',
           timestamp: Date.now(),
@@ -263,7 +294,7 @@ export function attachForms(
         if (!started) {
           recordFormEvent({
             formId,
-            path: '',
+            path,
             type: 'submit',
             outcome: 'blocked',
             detail: 'invalid, so the action did not run',
@@ -291,11 +322,21 @@ export function attachForms(
     try {
       const ng = getNg();
       if (!ng?.getDirectives) return;
-      const found = findForms(ng, document.querySelectorAll('*'));
+      const rescan = hostsStale || !hosts || !observer;
+      const found = findForms(
+        ng,
+        rescan ? document.querySelectorAll('*') : hosts!.filter((el) => el.isConnected),
+      );
+      if (rescan) {
+        hosts = found.hosts ?? null;
+        hostsStale = false;
+      }
+      const labels = formLabels(found.forms);
+      ids = assignIds(found.forms, labels);
       foundById = new Map(found.forms.map((form) => [idOf(form.root), form]));
       fieldElements = found.elements;
       watchRoots(found.forms);
-      const forms = collectForms(found, idOf);
+      const forms = collectForms(found, (root) => idOf(root));
       const now = Date.now();
       for (const form of forms) stampPending(form.id, form.root, now);
       const streamed = new Set(Array.from(watched.values(), ({ formId }) => formId));
@@ -403,6 +444,7 @@ export function attachForms(
 
   function setInstrumented(on: boolean): FormActionResult {
     if (on && !instrumentation) {
+      probeEveryTime(true);
       instrumentation = instrumentForms(onInstrumentedCall, ownerNames);
       renders = countRenders(getNg());
       void pushForms();
@@ -414,6 +456,7 @@ export function attachForms(
       };
     }
     if (!on && instrumentation) {
+      probeEveryTime(false);
       instrumentation.stop();
       renders?.stop();
       instrumentation = null;
@@ -609,6 +652,8 @@ export function attachForms(
   return {
     push: () => void pushForms(),
     stop() {
+      observer?.disconnect();
+      probeEveryTime(false);
       clearTimeout(pushTimer);
       clearTimeout(userTimer);
       for (const type of USER_EVENTS) document.removeEventListener(type, onUserEvent, true);

@@ -47,6 +47,26 @@ export interface ControlFacts {
 }
 
 let probing = 0;
+let probeEveryCollect = false;
+
+interface Probe {
+  validator: unknown;
+  raw: unknown;
+  dirFn: unknown;
+  value: unknown;
+  rootValue: unknown;
+  at: number;
+  fresh: string[];
+  own: string[];
+  dir: string[];
+}
+
+const probes = new WeakMap<object, Probe>();
+const PROBE_TTL_MS = 5000;
+
+export function probeEveryTime(on: boolean) {
+  probeEveryCollect = on;
+}
 
 export function isProbing(): boolean {
   return probing > 0;
@@ -196,6 +216,37 @@ export function metadataKeyCount(node: AnyRecord): number {
   return read(() => Array.from(node['logicNode']['logic'].getMetadataKeys()).length, 0);
 }
 
+function isInternalMetadata(value: unknown): boolean {
+  if (typeof value === 'function') return true;
+  if (!value || typeof value !== 'object') return false;
+  const record = value as AnyRecord;
+  return (
+    'reducer' in record ||
+    typeof record['reload'] === 'function' ||
+    (typeof record['value'] === 'function' && typeof record['status'] === 'function')
+  );
+}
+
+export function metadataValues(node: AnyRecord): unknown[] {
+  const keys = read(() => Array.from(node['logicNode']['logic'].getMetadataKeys()) as object[], []);
+  if (!keys.length) return [];
+  const builtIn = new Set<unknown>(
+    ['required', 'minLength', 'maxLength', 'pattern', 'min', 'max'].map((name) =>
+      read(() => node[name], undefined),
+    ),
+  );
+  const out: unknown[] = [];
+  for (const key of keys) {
+    const entry = read(() => node['metadata'](key) as unknown, undefined);
+    if (entry === undefined || builtIn.has(entry)) continue;
+    const value =
+      typeof entry === 'function' ? read(() => (entry as () => unknown)(), undefined) : entry;
+    if (value === undefined || isInternalMetadata(value)) continue;
+    out.push(value);
+  }
+  return out;
+}
+
 export function submitSetup(root: AnyRecord): SubmitSetup {
   const options = read(
     () => root['structure']['fieldManager']['submitOptions'] as AnyRecord | undefined,
@@ -260,6 +311,49 @@ function keysOf(errors: unknown): string[] {
   return errors && typeof errors === 'object' ? Object.keys(errors) : [];
 }
 
+function probeValidators(
+  control: AnyRecord,
+  validator: unknown,
+  dirFn: unknown,
+  parseFn: unknown,
+): Probe {
+  const raw = read(() => control['_rawValidators'], null);
+  const value = read(() => control['value'], undefined);
+  const rootValue = read(() => (control['root'] as AnyRecord | undefined)?.['value'], undefined);
+  const cached = probes.get(control);
+  const now = Date.now();
+  if (
+    !probeEveryCollect &&
+    cached &&
+    now - cached.at < PROBE_TTL_MS &&
+    cached.validator === validator &&
+    cached.raw === raw &&
+    cached.dirFn === dirFn &&
+    Object.is(cached.value, value) &&
+    Object.is(cached.rootValue, rootValue)
+  ) {
+    return cached;
+  }
+  const run = (fn: unknown) =>
+    typeof fn === 'function'
+      ? keysOf(withoutEvents(() => read(() => (fn as (c: unknown) => unknown)(control), null)))
+      : [];
+  const ownFns = asList(raw).filter((fn) => fn !== dirFn && fn !== parseFn);
+  const probe: Probe = {
+    validator,
+    raw,
+    dirFn,
+    value,
+    rootValue,
+    at: now,
+    fresh: run(validator),
+    own: ownFns.flatMap(run),
+    dir: run(dirFn),
+  };
+  probes.set(control, probe);
+  return probe;
+}
+
 export function controlFacts(
   control: AnyRecord,
   dir?: AnyRecord | null,
@@ -275,17 +369,11 @@ export function controlFacts(
   const hasAsync = !!read(() => control['asyncValidator'], null);
   const status = read(() => String(control['status']), '');
   const canProbe = isLeaf && typeof validator === 'function' && status !== 'DISABLED';
-  const run = (fn: unknown) =>
-    typeof fn === 'function'
-      ? keysOf(withoutEvents(() => read(() => (fn as (c: unknown) => unknown)(control), null)))
-      : [];
-  const fresh = canProbe ? new Set(run(validator)) : null;
   const dirFn = dir ? read(() => dir['validator'], null) : null;
-  const ownFns = asList(read(() => control['_rawValidators'], null)).filter(
-    (fn) => fn !== dirFn && fn !== parseFn,
-  );
-  const ownKeys = new Set(canProbe ? ownFns.flatMap(run) : []);
-  const dirKeys = new Set(canProbe ? run(dirFn) : []);
+  const probe = canProbe ? probeValidators(control, validator, dirFn, parseFn) : null;
+  const fresh = probe ? new Set(probe.fresh) : null;
+  const ownKeys = new Set(probe?.own ?? []);
+  const dirKeys = new Set(probe?.dir ?? []);
   for (const key of errors) {
     if (parseKeys.has(key)) facts.origins[key] = { source: 'parse' };
     else if (ownKeys.has(key)) facts.origins[key] = { source: 'own' };

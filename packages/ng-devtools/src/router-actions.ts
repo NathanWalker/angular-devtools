@@ -1,7 +1,10 @@
+import { isRouterLink } from './router-links.ts';
 import {
+  EventType,
   MAX_DEPTH,
   clip,
   componentName,
+  eventsOf,
   keyName,
   nameOf,
   noteErrorHandler,
@@ -17,6 +20,7 @@ import {
   type ActiveRoute,
   type AnyRecord,
   type NavigationRecord,
+  type RouterDebugApi,
 } from './router.ts';
 
 export interface PreloadRecord {
@@ -70,12 +74,58 @@ function describeElement(element: Element): string {
   return `${element.tagName.toLowerCase()}${text ? ` "${text}"` : ''}`;
 }
 
+export function routerLinkOf(target: Element | null, ng?: RouterDebugApi): Element | null {
+  if (!ng?.getDirectives) {
+    return read(() => target?.closest?.('[routerlink], [routerLink]') ?? null, null);
+  }
+  let element = target;
+  for (let depth = 0; element && depth < 20; depth++, element = element.parentElement) {
+    const current = element;
+    if (read(() => (ng.getDirectives?.(current) ?? []).some(isRouterLink), false)) return current;
+  }
+  return null;
+}
+
+const INSTRUMENT_KEY = 'ng-devtools-router-instrument';
+
+export function storedInstrumented(): boolean {
+  try {
+    return sessionStorage.getItem(INSTRUMENT_KEY) !== '0';
+  } catch {
+    return false;
+  }
+}
+
+export function storeInstrumented(on: boolean) {
+  try {
+    sessionStorage.setItem(INSTRUMENT_KEY, on ? '1' : '0');
+  } catch {
+    return;
+  }
+}
+
+export function onGuardsCheckStart(router: AnyRecord, run: () => void): () => void {
+  const events = eventsOf(router);
+  const subscription = read(
+    () =>
+      events?.['subscribe']((event: AnyRecord) => {
+        if (read(() => event['type'] === EventType.GuardsCheckStart, false)) run();
+      }) as { unsubscribe(): void } | undefined,
+    undefined,
+  );
+  return () => subscription?.unsubscribe();
+}
+
 /**
  * Records who starts each navigation (a RouterLink click, or the code that
  * called navigate/navigateByUrl) and keeps calls that throw before a
  * navigation starts as failed records. Returns the uninstall function.
  */
-export function captureCallers(router: AnyRecord, navigations: NavigationRecord[]): () => void {
+export function captureCallers(
+  router: AnyRecord,
+  navigations: NavigationRecord[],
+  ng?: RouterDebugApi,
+): () => void {
   const originals: Record<string, AnyRecord> = {};
   let fromClick = false;
   let depth = 0;
@@ -105,8 +155,7 @@ export function captureCallers(router: AnyRecord, navigations: NavigationRecord[
     };
   }
   const onClick = (event: Event) => {
-    const target = event.target as Element | null;
-    const link = target?.closest?.('a, button, [routerlink], [routerLink]');
+    const link = routerLinkOf(event.target as Element | null, ng);
     if (!link) return;
     fromClick = true;
     setCaller(`RouterLink ${describeElement(link)}`, true);
@@ -201,37 +250,54 @@ export function capturePreloads(
   };
 }
 
-function sameKind(
+function baseObservable(source: AnyRecord): (new (fn: unknown) => AnyRecord) | null {
+  let proto = read(() => Object.getPrototypeOf(source) as AnyRecord | null, null);
+  for (let depth = 0; proto && proto !== Object.prototype && depth < 16; depth++) {
+    const parent = Object.getPrototypeOf(proto);
+    if (
+      parent === Object.prototype &&
+      Object.prototype.hasOwnProperty.call(proto, '_trySubscribe') &&
+      typeof proto['subscribe'] === 'function' &&
+      typeof proto['constructor'] === 'function'
+    ) {
+      return proto['constructor'] as new (fn: unknown) => AnyRecord;
+    }
+    proto = parent;
+  }
+  return null;
+}
+
+function rebuild(
   source: AnyRecord,
   subscribe: (observer: AnyRecord) => { unsubscribe(): void },
-): AnyRecord {
-  const Ctor = read(() => source['constructor'] as new (fn: unknown) => AnyRecord, null);
-  if (typeof Ctor === 'function' && typeof source['pipe'] === 'function') {
-    return new Ctor((subscriber: AnyRecord) => {
-      const subscription = subscribe(subscriber);
-      return () => subscription.unsubscribe();
-    });
-  }
-  const interop: AnyRecord = { subscribe };
-  const symbol =
-    (typeof Symbol === 'function' && (Symbol as AnyRecord)['observable']) || '@@observable';
-  interop[symbol] = () => interop;
-  return interop;
+  onTeardown?: () => void,
+): AnyRecord | null {
+  const Base = read(() => baseObservable(source), null);
+  if (!Base) return null;
+  return new Base((subscriber: AnyRecord) => {
+    const subscription = subscribe(subscriber);
+    return () => {
+      subscription.unsubscribe();
+      onTeardown?.();
+    };
+  });
 }
 
 function observe(source: AnyRecord, onComplete: () => void, onError: () => void): AnyRecord {
-  return sameKind(source, (observer) =>
-    source['subscribe']({
-      next: (value: unknown) => observer['next']?.(value),
-      error: (error: unknown) => {
-        onError();
-        observer['error']?.(error);
-      },
-      complete: () => {
-        onComplete();
-        observer['complete']?.();
-      },
-    }),
+  return (
+    rebuild(source, (observer) =>
+      source['subscribe']({
+        next: (value: unknown) => observer['next']?.(value),
+        error: (error: unknown) => {
+          onError();
+          observer['error']?.(error);
+        },
+        complete: () => {
+          onComplete();
+          observer['complete']?.();
+        },
+      }),
+    ) ?? source
   );
 }
 
@@ -254,7 +320,9 @@ function describeResult(result: unknown, router: AnyRecord): string {
   return result === undefined ? 'undefined' : typeof result;
 }
 
-function track(result: unknown, record: (value: unknown, threw?: unknown) => void): unknown {
+type Recorder = (value: unknown, threw?: unknown, outcome?: string) => void;
+
+function track(result: unknown, record: Recorder): unknown {
   if (result && typeof (result as AnyRecord)['then'] === 'function') {
     return (result as Promise<unknown>).then(
       (value) => {
@@ -268,23 +336,33 @@ function track(result: unknown, record: (value: unknown, threw?: unknown) => voi
     );
   }
   if (result && typeof (result as AnyRecord)['subscribe'] === 'function') {
-    let last: unknown;
     const source = result as AnyRecord;
-    return sameKind(source, (observer) =>
-      source['subscribe']({
-        next: (value: unknown) => {
-          last = value;
-          observer['next']?.(value);
-        },
-        error: (error: unknown) => {
-          record(undefined, error);
-          observer['error']?.(error);
-        },
-        complete: () => {
-          record(last);
-          observer['complete']?.();
-        },
-      }),
+    let done = false;
+    const once: Recorder = (value, threw, outcome) => {
+      if (done) return;
+      done = true;
+      record(value, threw, outcome);
+    };
+    return (
+      rebuild(
+        source,
+        (observer) =>
+          source['subscribe']({
+            next: (value: unknown) => {
+              once(value);
+              observer['next']?.(value);
+            },
+            error: (error: unknown) => {
+              once(undefined, error);
+              observer['error']?.(error);
+            },
+            complete: () => {
+              once(undefined, undefined, 'completed without a value');
+              observer['complete']?.();
+            },
+          }),
+        () => once(undefined, undefined, 'cancelled before a value'),
+      ) ?? source
     );
   }
   record(result);
@@ -305,12 +383,12 @@ function wrapFunction(
 ): AnyRecord {
   const wrapped = function (this: unknown, ...args: unknown[]) {
     const started = performance.now();
-    const record = (value: unknown, threw?: unknown) =>
+    const record: Recorder = (value, threw, outcome) =>
       noteRun(navigations, {
         ...label,
         result: threw
           ? `threw ${redactMessage(String((threw as AnyRecord)?.['message'] ?? threw))}`
-          : describeResult(value, router),
+          : (outcome ?? describeResult(value, router)),
         ms: Math.round(performance.now() - started),
       });
     try {
@@ -525,7 +603,11 @@ function probe(router: AnyRecord, navigations: NavigationRecord[], url: string):
         if (record) record.probe = true;
         resolve(
           matched
-            ? { matched: true, route: matched }
+            ? {
+                matched: true,
+                route: matched,
+                note: 'The URL was recognized and canMatch guards ran. The probe stopped there, so canActivate, canActivateChild, canDeactivate and resolvers did not run.',
+              }
             : {
                 matched: false,
                 reason:

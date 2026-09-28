@@ -5,13 +5,17 @@ import {
   SHARED_STYLES,
   routerAction,
   routerCall,
+  sourceLocation,
+  sourceOf,
   type RouteNode,
   type RouterPage,
+  type SourceRoute,
 } from './router-types';
 
 interface NodeRow {
   node: RouteNode;
   depth: number;
+  source?: string;
 }
 
 interface MatchResult {
@@ -36,20 +40,22 @@ interface MatchResult {
         [value]="testUrl()"
         (input)="testUrl.set($any($event.target).value)"
       />
-      <button type="submit" class="small">Predict</button>
+      <button type="submit" class="small primary">Predict</button>
       <button type="button" class="small" (click)="probe()">Probe in app</button>
     </form>
     @if (match(); as result) {
-      <div class="result" role="status">
+      <div class="result" role="status" [attr.data-matched]="result.matched">
         @if (result.matched) {
-          Matches {{ chainText(result) }}
+          <span class="badge" data-tone="good">match</span>
+          Matches <code class="chain">{{ chainText(result) }}</code>
           @if (hasKeys(result.params)) {
             with <code>{{ result.params | json }}</code>
           }
         } @else {
+          <span class="badge" data-tone="bad">no match</span>
           Matches no route (NG04002).
           @if (result.nearest.length) {
-            Nearest: {{ result.nearest.join(', ') }}
+            Nearest: <code>{{ result.nearest.join(', ') }}</code>
           }
         }
         @for (note of result.notes; track note) {
@@ -58,30 +64,52 @@ interface MatchResult {
       </div>
     }
     @if (message()) {
-      <p class="muted" role="status">{{ message() }}</p>
+      <p class="message" role="status">{{ message() }}</p>
     }
 
-    <input
-      class="field filter"
-      type="text"
-      aria-label="Filter routes"
-      placeholder="Filter by path or component"
-      [value]="filter()"
-      (input)="filter.set($any($event.target).value)"
-    />
+    <div class="filter-row">
+      <input
+        #filterInput
+        class="field filter"
+        type="text"
+        aria-label="Filter routes"
+        placeholder="Filter by path, component or file"
+        [value]="filter()"
+        (input)="filter.set($any($event.target).value)"
+      />
+      @if (page().config) {
+        <p class="muted summary">
+          Generation {{ page().generation }} · {{ rows().length }} route(s). Lazy routes show their
+          children once loaded.
+        </p>
+      }
+    </div>
     @if (!page().config) {
-      <p class="muted">
-        {{
-          page().setup?.mode === 'events-only'
-            ? 'This build has no debug utils, so the live config cannot be read.'
-            : 'The page has not reported its route config yet.'
-        }}
-      </p>
+      <div class="empty">
+        <p class="empty-title">
+          {{
+            page().setup?.mode === 'events-only'
+              ? 'This build has no debug utils, so the live config cannot be read.'
+              : 'The page has not reported its route config yet.'
+          }}
+        </p>
+        <p class="muted">
+          {{
+            page().setup?.mode === 'events-only'
+              ? 'Run the app with the development build to inspect the live config.'
+              : 'It appears once the router initializes. Navigate in the app if it stays empty.'
+          }}
+        </p>
+      </div>
+    } @else if (!rows().length) {
+      <div class="empty">
+        <p class="empty-title">No routes match the filter.</p>
+        <p class="muted">Try a shorter path or a component name.</p>
+        <button type="button" class="small" (click)="filter.set(''); filterInput.focus()">
+          Clear filter
+        </button>
+      </div>
     } @else {
-      <p class="muted">
-        Generation {{ page().generation }} · {{ rows().length }} route(s). Lazy routes show their
-        children once loaded.
-      </p>
       <div class="table-scroll" role="region" aria-label="Live route config" tabindex="0">
         <table>
           <thead>
@@ -96,7 +124,7 @@ interface MatchResult {
           <tbody>
             @for (row of rows(); track row.node.id) {
               <tr [class.active]="isActive(row.node)">
-                <td class="path" [style.padding-left.px]="12 + row.depth * 16">
+                <td class="path" [style.padding-left.px]="14 + row.depth * 16">
                   {{ row.node.fullPath }}
                   @if (isActive(row.node)) {
                     <span class="tag">active</span>
@@ -107,10 +135,18 @@ interface MatchResult {
                   @if (row.node.outlet) {
                     <span class="tag">outlet {{ row.node.outlet }}</span>
                   }
+                  @if (row.source) {
+                    <span class="src"
+                      ><span class="visually-hidden">declared in </span>{{ row.source }}</span
+                    >
+                  }
                 </td>
                 <td>
                   @if (row.node.redirectTo !== undefined) {
-                    redirect → <code>{{ row.node.redirectTo }}</code>
+                    <span class="redirect"
+                      >redirect <span aria-hidden="true">→</span>
+                      <code>{{ row.node.redirectTo }}</code></span
+                    >
                   } @else {
                     {{
                       row.node.component ??
@@ -125,38 +161,51 @@ interface MatchResult {
                   @for (resolver of row.node.resolvers ?? []; track resolver) {
                     <span class="tag">resolve {{ resolver }}</span>
                   }
+                  @if (!guardList(row.node).length && !row.node.resolvers?.length) {
+                    <span class="nil" aria-hidden="true">–</span
+                    ><span class="visually-hidden">none</span>
+                  }
                 </td>
-                <td>{{ row.node.title ?? '' }}</td>
+                <td>
+                  @if (row.node.title) {
+                    {{ row.node.title }}
+                  } @else {
+                    <span class="nil" aria-hidden="true">–</span
+                    ><span class="visually-hidden">none</span>
+                  }
+                </td>
                 <td class="actions">
-                  @if (canNavigate(row.node)) {
-                    @for (param of params(row.node); track param) {
-                      <input
-                        class="field param"
-                        type="text"
-                        [attr.aria-label]="param + ' for ' + row.node.fullPath"
-                        [placeholder]="param"
-                        (input)="setParam(row.node.id, param, $any($event.target).value)"
-                      />
+                  <div class="actions-inner">
+                    @if (canNavigate(row.node)) {
+                      @for (param of params(row.node); track param) {
+                        <input
+                          class="field param"
+                          type="text"
+                          [attr.aria-label]="param + ' for ' + row.node.fullPath"
+                          [placeholder]="param"
+                          (input)="setParam(row.node.id, param, $any($event.target).value)"
+                        />
+                      }
+                      <button
+                        type="button"
+                        class="small"
+                        (click)="navigate(row.node)"
+                        [attr.aria-label]="'Navigate to ' + row.node.fullPath"
+                      >
+                        Go
+                      </button>
                     }
-                    <button
-                      type="button"
-                      class="small"
-                      (click)="navigate(row.node)"
-                      [attr.aria-label]="'Navigate to ' + row.node.fullPath"
-                    >
-                      Go
-                    </button>
-                  }
-                  @if (row.node.kind === 'lazy' && row.node.lazy === 'unloaded') {
-                    <button
-                      type="button"
-                      class="small"
-                      (click)="resolveLazy(row.node)"
-                      [attr.aria-label]="'Read lazy routes of ' + row.node.fullPath"
-                    >
-                      Read lazy
-                    </button>
-                  }
+                    @if (row.node.kind === 'lazy' && row.node.lazy === 'unloaded') {
+                      <button
+                        type="button"
+                        class="small"
+                        (click)="resolveLazy(row.node)"
+                        [attr.aria-label]="'Read lazy routes of ' + row.node.fullPath"
+                      >
+                        Read lazy
+                      </button>
+                    }
+                  </div>
                 </td>
               </tr>
             }
@@ -169,46 +218,142 @@ interface MatchResult {
     ${SHARED_STYLES}
     :host {
       display: grid;
-      gap: 10px;
+      gap: 12px;
+      min-width: 0;
     }
     .test {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       align-items: center;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      color: var(--text);
       font-size: 13px;
-      color: #e4e4e7;
+    }
+    .test label {
+      margin-right: 4px;
+      color: var(--text-3);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .test input {
+      flex: 1 1 200px;
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
     }
     .result {
-      padding: 8px 10px;
-      border: 1px solid #27272a;
-      border-radius: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      align-items: center;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
       font-size: 13px;
-      color: #e4e4e7;
+      line-height: 1.5;
+      animation: enter 0.35s var(--ease) both;
+    }
+    .result[data-matched='true'] {
+      box-shadow: inset 3px 0 0 var(--ok);
+    }
+    .result[data-matched='false'] {
+      box-shadow: inset 3px 0 0 var(--danger);
+    }
+    .result .muted {
+      flex-basis: 100%;
+      font-size: 12px;
+    }
+    .chain {
+      color: var(--accent);
+    }
+    .message {
+      margin: 0;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      align-items: center;
     }
     .filter {
-      max-width: 320px;
+      flex: 0 1 320px;
+      min-width: 0;
     }
-    .path {
-      font-family: monospace;
-      color: var(--accent);
-      white-space: nowrap;
+    .summary {
+      flex: 1 1 240px;
+      margin: 0;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    td {
+      vertical-align: middle;
+    }
+    .redirect {
+      color: var(--text-2);
+    }
+    .src {
+      display: block;
+      margin-top: 2px;
+      color: var(--text-2);
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      overflow-wrap: anywhere;
     }
     tr.active td {
-      background: #1c1917;
+      background: var(--accent-soft);
+      color: var(--text-strong);
+    }
+    tr.active:hover td {
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+    }
+    tr.active td:first-child {
+      box-shadow: inset 3px 0 0 var(--accent);
     }
     .actions {
+      width: 1%;
+      padding-top: 6px;
+      padding-bottom: 6px;
       white-space: nowrap;
     }
+    .actions-inner {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      justify-content: flex-end;
+    }
     .param {
-      width: 80px;
-      margin-right: 4px;
+      width: 96px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    @media (max-width: 480px) {
+      .filter {
+        flex-basis: 100%;
+      }
     }
   `,
 })
 export class RouteTree {
   page = input.required<RouterPage>();
   rpc = input<DevframeRpcClient | null>(null);
+  sources = input<SourceRoute[]>([]);
 
   readonly filter = signal('');
   readonly testUrl = signal('');
@@ -220,15 +365,19 @@ export class RouteTree {
 
   readonly rows = computed(() => {
     const needle = this.filter().toLowerCase();
+    const sources = this.sources();
     const rows: NodeRow[] = [];
     const visit = (nodes: RouteNode[], depth: number) => {
       for (const node of nodes) {
+        const found = sourceOf(node, sources);
+        const source = found && sourceLocation(found);
         if (
           !needle ||
           node.fullPath.toLowerCase().includes(needle) ||
-          !!node.component?.toLowerCase().includes(needle)
+          !!node.component?.toLowerCase().includes(needle) ||
+          !!source?.toLowerCase().includes(needle)
         ) {
-          rows.push({ node, depth });
+          rows.push({ node, depth, source });
         }
         if (node.children) visit(node.children, depth + 1);
       }
@@ -294,8 +443,8 @@ export class RouteTree {
     }
     this.message.set(
       result['matched']
-        ? `The app matched ${url} (see the probe entry in Navigations).`
-        : `The app did not match ${url}: ${String(result['reason'] ?? '')}`,
+        ? `The app recognized ${url} and its canMatch guards passed. The probe stopped before canActivate guards and resolvers, so those did not run. See the probe entry in Navigations.`
+        : `The app could not recognize ${url}: ${String(result['reason'] ?? '')}`,
     );
   }
 

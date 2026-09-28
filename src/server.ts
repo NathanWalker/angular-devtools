@@ -6,8 +6,7 @@ import {
 } from '@angular/ssr/node';
 import express from 'express';
 import { join } from 'node:path';
-import { initDevframe } from 'devframe/initiate';
-import ngDevtools from '@santoshyadavdev/ng-devtools/devframe';
+import { initNgDevtoolsHub } from '@santoshyadavdev/ng-devtools/hub';
 
 const browserDistFolder = join(import.meta.dirname, '../browser');
 
@@ -15,9 +14,8 @@ const app = express();
 const angularApp = new AngularNodeAppEngine();
 
 const auth = process.env['NG_DEVTOOLS_AUTH'] === 'true';
-const devtools = initDevframe(ngDevtools, {
-  base: '/__ng-devtools/',
-  ws: false,
+const devtools = initNgDevtoolsHub({
+  ws: { sidecar: true },
   auth,
   allowedOrigins: false,
 });

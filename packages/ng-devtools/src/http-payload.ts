@@ -1,9 +1,13 @@
+import type { HydrationMismatch } from './http-hydration.ts';
 import type { HydrationStats } from './types.ts';
+
+export type PayloadSource = 'http' | 'analog' | 'hydration';
 
 export interface PayloadEntry {
   key: string;
   /** Present when the entry is an HttpClient transfer-cache response. */
   http?: { url?: string; status?: number; statusText?: string; responseType?: string };
+  source?: PayloadSource;
   size: number;
   value: unknown;
 }
@@ -48,10 +52,15 @@ export function sanitizePayload(input: unknown): PayloadSummary {
     const key = str(e.key, 500);
     if (key === undefined) continue;
     const h = e.http && typeof e.http === 'object' ? (e.http as Record<string, unknown>) : null;
+    const source =
+      e.source === 'http' || e.source === 'analog' || e.source === 'hydration'
+        ? e.source
+        : undefined;
     entries.push({
       key,
       size: num(e.size) ?? 0,
       value: clip(e.value),
+      ...(source && { source }),
       ...(h && {
         http: {
           url: str(h['url'], 2000),
@@ -75,16 +84,41 @@ export function sanitizeHydration(input: unknown): HydrationStats | null {
   if (!input || typeof input !== 'object') return null;
   const h = input as { [K in keyof HydrationStats]?: unknown };
   if (typeof h.enabled !== 'boolean') return null;
+  const n =
+    h.nodes && typeof h.nodes === 'object' ? (h.nodes as Record<string, unknown>) : undefined;
+  const mismatches: HydrationMismatch[] = [];
+  for (const raw of Array.isArray(h.mismatches) ? h.mismatches.slice(0, 20) : []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const m = raw as Record<string, unknown>;
+    const component = str(m['component'], 200);
+    if (!component) continue;
+    mismatches.push({
+      component,
+      expected: str(m['expected'], 500),
+      actual: str(m['actual'], 500),
+    });
+  }
   return {
     enabled: h.enabled,
     hydratedComponents: num(h.hydratedComponents),
     hydratedNodes: num(h.hydratedNodes),
     componentsSkippedHydration: num(h.componentsSkippedHydration),
     deferBlocksWithIncrementalHydration: num(h.deferBlocksWithIncrementalHydration),
+    ...(n && {
+      nodes: {
+        hydrated: num(n['hydrated']) ?? 0,
+        skipped: num(n['skipped']) ?? 0,
+        mismatched: num(n['mismatched']) ?? 0,
+      },
+    }),
+    mismatches,
     skipHydrationHosts: strings(h.skipHydrationHosts, 200),
     warnings: strings(h.warnings, 1000),
+    warningsCaptured: h.warningsCaptured === true,
   };
 }
+
+const HYDRATION_KEYS = new Set(['__nghData__', '__nghDeferData__']);
 
 /** Reads the TransferState script (`<script id="{appId}-state">`) that SSR embeds. */
 export function decodePayload(doc: Document, appId = 'ng'): PayloadSummary {
@@ -102,9 +136,23 @@ export function decodePayload(doc: Document, appId = 'ng'): PayloadSummary {
   if (!data || typeof data !== 'object') return { found: true, size: text.length, entries: [] };
   const entries = Object.entries(data as Record<string, unknown>).map(([key, raw]) => {
     const entry: PayloadEntry = { key, size: JSON.stringify(raw)?.length ?? 0, value: raw };
-    if (raw && typeof raw === 'object' && 'b' in raw && ('s' in raw || 'u' in raw)) {
+    if (HYDRATION_KEYS.has(key)) {
+      entry.source = 'hydration';
+    } else if (
+      key.startsWith('analog_') &&
+      raw &&
+      typeof raw === 'object' &&
+      'body' in raw &&
+      ('status' in raw || 'url' in raw)
+    ) {
+      const r = raw as { body: unknown; status?: number; statusText?: string; url?: string };
+      entry.http = { url: r.url, status: r.status, statusText: r.statusText };
+      entry.source = 'analog';
+      entry.value = r.body;
+    } else if (raw && typeof raw === 'object' && 'b' in raw && ('s' in raw || 'u' in raw)) {
       const r = raw as { b: unknown; s?: number; st?: string; u?: string; rt?: string };
       entry.http = { url: r.u, status: r.s, statusText: r.st, responseType: r.rt };
+      entry.source = 'http';
       entry.value = r.b;
     }
     entry.value = clip(entry.value);

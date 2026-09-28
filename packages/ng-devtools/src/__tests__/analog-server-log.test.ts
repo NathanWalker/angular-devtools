@@ -6,6 +6,7 @@ import {
   clearCalls,
   duplicateLoads,
   isSecretKey,
+  loadRoute,
   previewOf,
   recentCalls,
   redactMessage,
@@ -130,14 +131,49 @@ describe('Analog server call log', () => {
 
   it('finds loads fetched on the server and again in the browser', () => {
     const base = { method: 'GET', url: '', status: 200, ms: 1, kind: 'load' as const };
+    const page = { ...base, kind: 'page' as const, from: 'browser' as const };
     const list: AnalogCall[] = [
       { ...base, id: 1, at: 1000, route: '/a', from: 'ssr' },
-      { ...base, id: 2, at: 1500, route: '/a', from: 'browser' },
-      { ...base, id: 3, at: 2000, route: '/b', from: 'ssr' },
-      { ...base, id: 4, at: 60_000, route: '/b', from: 'browser' },
-      { ...base, id: 5, at: 61_000, route: '/c', from: 'devtools' },
+      { ...page, id: 2, at: 1100, route: '/a', render: 'ssr' },
+      { ...base, id: 3, at: 1500, route: '/a', from: 'browser' },
+      { ...base, id: 4, at: 1600, route: '/a', from: 'browser' },
+      { ...base, id: 5, at: 2000, route: '/b', from: 'ssr' },
+      { ...page, id: 6, at: 2100, route: '/b', render: 'ssr' },
+      { ...base, id: 7, at: 60_000, route: '/b', from: 'browser' },
+      { ...base, id: 8, at: 61_000, route: '/c', from: 'ssr' },
+      { ...page, id: 9, at: 61_100, route: '/c', render: 'ssr' },
+      { ...base, id: 10, at: 61_200, route: '/d', from: 'browser' },
+      { ...base, id: 11, at: 61_300, route: '/c', from: 'browser' },
+      { ...base, id: 12, at: 70_000, route: '/e', from: 'ssr' },
+      { ...page, id: 13, at: 70_100, route: '/e', render: 'client' },
+      { ...base, id: 14, at: 70_200, route: '/e', from: 'browser' },
+      { ...base, id: 15, at: 71_000, route: '/f', from: 'devtools' },
     ];
     expect(duplicateLoads(list)).toEqual([{ route: '/a', ssrAt: 1000, browserAt: 1500 }]);
+  });
+
+  it('only pairs loads that belong to the rendered page or its parents', () => {
+    const base = { method: 'GET', url: '', status: 200, ms: 1, kind: 'load' as const };
+    const page = { ...base, kind: 'page' as const, from: 'browser' as const };
+    const list: AnalogCall[] = [
+      { ...base, id: 1, at: 1000, route: '/a', from: 'ssr' },
+      { ...base, id: 2, at: 1010, route: '/products', from: 'ssr' },
+      { ...page, id: 3, at: 1100, route: '/products/1', render: 'ssr' },
+      { ...base, id: 4, at: 1200, route: '/a', from: 'browser' },
+    ];
+    expect(duplicateLoads(list)).toEqual([]);
+    const parent: AnalogCall[] = [
+      ...list.slice(0, 3),
+      { ...base, id: 5, at: 1200, route: '/products', from: 'browser' },
+    ];
+    expect(duplicateLoads(parent)).toEqual([{ route: '/products', ssrAt: 1010, browserAt: 1200 }]);
+  });
+
+  it('maps group, index and named-group endpoints back to page routes', () => {
+    expect(loadRoute('/(auth)/login')).toBe('/login');
+    expect(loadRoute('/-home-')).toBe('/');
+    expect(loadRoute('/products/index')).toBe('/products');
+    expect(loadRoute('/products/7')).toBe('/products/7');
   });
 
   it('redacts secrets in text and keys', () => {
@@ -170,7 +206,7 @@ describe('Vite plugin', () => {
     expect([res.statusCode, passed]).toEqual([404, false]);
     const local = { remoteAddress: '::ffff:127.0.0.1' };
     probe(
-      { url: '/__ng-devtools/__connection.json', socket: local },
+      { url: '/__devframes/ng-devtools/__connection.json', socket: local },
       new FakeRes(),
       () => (passed = true),
     );
@@ -178,7 +214,7 @@ describe('Vite plugin', () => {
     const remote = new FakeRes();
     passed = false;
     probe(
-      { url: '/__ng-devtools/__sse', socket: { remoteAddress: '192.168.1.20' } },
+      { url: '/__devframes/__sse', socket: { remoteAddress: '192.168.1.20' } },
       remote,
       () => (passed = true),
     );

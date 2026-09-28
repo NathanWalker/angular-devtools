@@ -8,7 +8,7 @@ const tabId = chrome.devtools.inspectedWindow.tabId;
 const LOCAL_HOSTS = ['localhost', '127.0.0.1'];
 
 // Where devframe may be mounted.
-const PATHS = ['/__ng-devtools/', '/__devframe/', '/'];
+const PATHS = ['/__ng-devtools/', '/__devframes/ng-devtools/', '/__devframe/', '/'];
 const CONNECTION_FILES = ['__devframe/__connection.json', '__connection.json'];
 const PROBE_TIMEOUT_MS = 1500;
 

@@ -9,6 +9,7 @@ import {
   untracked,
 } from '@angular/core';
 import type { DevframeRpcClient } from 'devframe/client';
+import { Select } from '../ui/select';
 
 interface AnalogRoute {
   id: string;
@@ -70,9 +71,16 @@ interface AnalogPage {
   hydrationErrors: string[];
 }
 
+interface DuplicateLoad {
+  route: string;
+  ssrAt: number;
+  browserAt: number;
+}
+
 interface AnalogState {
   pages?: AnalogPage[];
   calls?: AnalogCall[];
+  duplicates?: DuplicateLoad[];
 }
 
 interface Finding {
@@ -248,12 +256,16 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
 
 @Component({
   selector: 'app-analog-inspector',
+  imports: [Select],
   template: `
     @if (project() === null) {
-      <p class="muted pad">Reading the project…</p>
+      <div class="loading" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Reading the project…</span>
+      </div>
     } @else if (!project()!.analog) {
       <div class="empty">
-        <p>This app is not an Analog app.</p>
+        <h2 class="empty-title">This app is not an Analog app.</h2>
         <p class="muted">
           Add <code>ngDevtools()</code> from <code>@santoshyadavdev/ng-devtools/vite</code> next to
           <code>analog()</code> in vite.config.ts and run the Analog dev server.
@@ -263,7 +275,7 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
       <section class="summary" aria-label="Analog summary">
         <div class="stat">
           <span class="label">Analog</span>
-          <span class="value">{{ project()!.version }}</span>
+          <span class="value">{{ project()!.version || 'unknown' }}</span>
         </div>
         <div class="stat">
           <span class="label">Pages</span>
@@ -284,7 +296,7 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
         @if (page(); as p) {
           <div class="stat wide">
             <span class="label">Open in the browser</span>
-            <span class="value mono">{{ p.url }}</span>
+            <span class="value mono" [title]="p.url">{{ p.url }}</span>
           </div>
         }
       </section>
@@ -315,22 +327,22 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
         @switch (view()) {
           @case ('routes') {
             <div class="toolbar">
-              <form class="inline" (submit)="$event.preventDefault(); explain()">
+              <form class="inline explain" (submit)="$event.preventDefault(); explain()">
                 <label for="analog-url">Test a URL</label>
                 <input
                   id="analog-url"
-                  class="field"
+                  class="field grow mono"
                   type="text"
                   placeholder="/products/42"
                   [value]="testUrl()"
                   (input)="testUrl.set($any($event.target).value)"
                 />
-                <button type="submit" class="btn">Explain</button>
+                <button type="submit" class="btn primary">Explain</button>
               </form>
               <label class="sr-only" for="route-filter">Filter routes</label>
               <input
                 id="route-filter"
-                class="field"
+                class="field filter"
                 type="search"
                 placeholder="Filter by path or file"
                 [value]="filter()"
@@ -340,7 +352,7 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
             @if (match(); as m) {
               <div class="callout" [attr.data-tone]="m.matched ? 'good' : 'bad'" role="status">
                 @if (m.matched) {
-                  <strong>{{ testUrl() }}</strong> renders
+                  <strong class="mono">{{ testUrl() }}</strong> renders
                   <ol class="chain">
                     @for (r of m.chain; track r.id) {
                       <li>
@@ -357,8 +369,8 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                     </div>
                   }
                 } @else {
-                  <strong>{{ testUrl() }}</strong> matches no file route. Angular throws NG04002
-                  "Cannot match any routes".
+                  <strong class="mono">{{ testUrl() }}</strong> matches no file route. Angular
+                  throws NG04002 "Cannot match any routes".
                   @if (m.rejected.length) {
                     <ul class="plain">
                       @for (r of m.rejected.slice(0, 5); track $index) {
@@ -389,7 +401,7 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                       [class.dim]="row.route.kind === 'group' || row.route.kind === 'implicit'"
                     >
                       <td>
-                        <div class="route" [style.padding-left.px]="row.depth * 18">
+                        <div class="route" [style.padding-left.px]="row.depth * 16">
                           @if (row.depth) {
                             <span class="guide" aria-hidden="true">└</span>
                           }
@@ -413,9 +425,11 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                         }
                       </td>
                       <td>
-                        @for (e of serverExports(row.route); track e) {
-                          <span class="pill" data-kind="load">{{ e }}()</span>
-                        }
+                        <div class="meta">
+                          @for (e of serverExports(row.route); track e) {
+                            <span class="pill" data-kind="load">{{ e }}()</span>
+                          }
+                        </div>
                       </td>
                       <td>
                         @if (row.route.title) {
@@ -430,7 +444,13 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                     </tr>
                   } @empty {
                     <tr>
-                      <td colspan="4" class="muted">No route matches the filter.</td>
+                      <td colspan="4" class="empty-row">
+                        @if (filter().trim()) {
+                          No route matches the filter. Try part of a path or a file name.
+                        } @else {
+                          No file routes yet. Add a .page.ts file under src/app/pages.
+                        }
+                      </td>
                     </tr>
                   }
                 </tbody>
@@ -450,31 +470,41 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                 server result.
               </div>
             }
-            <fieldset class="segmented">
-              <legend class="sr-only">Show calls of kind</legend>
-              @for (k of kinds; track k) {
-                <label [class.on]="kind() === k">
-                  <input
-                    type="radio"
-                    name="analog-kind"
-                    class="sr-only"
-                    [checked]="kind() === k"
-                    (change)="kind.set(k)"
-                  />
-                  {{ kindLabel(k) }} <span class="muted">{{ kindCount(k) }}</span>
-                </label>
-              }
-            </fieldset>
+            <div class="calls-bar">
+              <fieldset class="segmented">
+                <legend class="sr-only">Show calls of kind</legend>
+                @for (k of kinds; track k) {
+                  <label [class.on]="kind() === k">
+                    <input
+                      type="radio"
+                      name="analog-kind"
+                      class="sr-only"
+                      [checked]="kind() === k"
+                      (change)="kind.set(k)"
+                    />
+                    {{ kindLabel(k) }} <span class="muted">{{ kindCount(k) }}</span>
+                  </label>
+                }
+              </fieldset>
+              <button
+                type="button"
+                class="btn ghost"
+                [disabled]="!allCalls().length"
+                (click)="clearCalls()"
+              >
+                Clear calls
+              </button>
+            </div>
             @if (calls().length) {
               <div class="table-wrap" role="region" aria-label="Server calls" tabindex="0">
                 <table>
                   <thead>
                     <tr>
-                      <th scope="col">Time</th>
+                      <th scope="col">At</th>
                       <th scope="col">Kind</th>
                       <th scope="col">Request</th>
                       <th scope="col">Status</th>
-                      <th scope="col" class="num">Time</th>
+                      <th scope="col" class="num">Duration</th>
                       <th scope="col">From</th>
                     </tr>
                   </thead>
@@ -488,15 +518,17 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                           }}</span>
                         </td>
                         <td class="request">
-                          <span class="method" [attr.data-method]="c.method">{{ c.method }}</span>
-                          <span class="mono">{{ c.url }}</span>
-                          @if (c.render) {
-                            <span
-                              class="pill"
-                              [attr.data-mode]="c.render === 'ssr' ? 'ssr' : 'client'"
-                              >{{ c.render === 'ssr' ? 'server rendered' : 'client only' }}</span
-                            >
-                          }
+                          <div class="meta">
+                            <span class="method" [attr.data-method]="c.method">{{ c.method }}</span>
+                            <span class="mono url">{{ c.url }}</span>
+                            @if (c.render) {
+                              <span
+                                class="pill"
+                                [attr.data-mode]="c.render === 'ssr' ? 'ssr' : 'client'"
+                                >{{ c.render === 'ssr' ? 'server rendered' : 'client only' }}</span
+                              >
+                            }
+                          </div>
                           @if (c.preview) {
                             <details>
                               <summary>Response</summary>
@@ -517,12 +549,21 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                 </table>
               </div>
             } @else {
-              <p class="muted">
-                No calls yet. Navigate in the app to see page renders, load() fetches and API calls.
-              </p>
+              <div class="empty-box">
+                <p class="empty-lead">
+                  @if (allCalls().length) {
+                    No calls of this kind yet.
+                  } @else {
+                    No calls yet.
+                  }
+                </p>
+                <p class="muted">
+                  Navigate in the app to see page renders, load() fetches and API calls.
+                </p>
+              </div>
             }
 
-            <h3>API routes</h3>
+            <h2>API routes</h2>
             <div class="table-wrap" role="region" aria-label="API routes" tabindex="0">
               <table>
                 <thead>
@@ -546,7 +587,7 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                           >{{ base(api.file) }}</span
                         >
                       </td>
-                      <td>
+                      <td class="actions">
                         <button
                           type="button"
                           class="btn ghost"
@@ -557,25 +598,27 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                         </button>
                       </td>
                     </tr>
+                  } @empty {
+                    <tr>
+                      <td colspan="4" class="empty-row">
+                        No API routes. Add a handler under src/server/routes to test it here.
+                      </td>
+                    </tr>
                   }
                 </tbody>
               </table>
             </div>
 
             <form class="card playground" (submit)="$event.preventDefault(); send()">
-              <h3>Request playground</h3>
+              <h2>Request playground</h2>
               <div class="row">
-                <label for="api-method" class="sr-only">Method</label>
-                <select
-                  id="api-method"
-                  class="field"
+                <app-select
+                  class="method-select"
+                  ariaLabel="Method"
+                  [options]="methodOptions"
                   [value]="method()"
-                  (change)="method.set($any($event.target).value)"
-                >
-                  @for (m of methods; track m) {
-                    <option [value]="m">{{ m }}</option>
-                  }
-                </select>
+                  (valueChange)="method.set($event ?? 'GET')"
+                />
                 <label for="api-path" class="sr-only">Path</label>
                 <input
                   id="api-path"
@@ -585,7 +628,7 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                   [value]="apiPath()"
                   (input)="apiPath.set($any($event.target).value)"
                 />
-                <button type="submit" class="btn">Send</button>
+                <button type="submit" class="btn primary">Send</button>
               </div>
               @if (method() !== 'GET') {
                 <label for="api-body">JSON body</label>
@@ -609,8 +652,10 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
               @if (response(); as r) {
                 <div class="response" role="status">
                   @if (r.error) {
-                    <span class="status" data-status="bad">Refused</span>
-                    <span>{{ r.error }}</span>
+                    <div class="row">
+                      <span class="status" data-status="bad">Refused</span>
+                      <span>{{ r.error }}</span>
+                    </div>
                   } @else {
                     <div class="row">
                       <span class="status" [attr.data-status]="statusClass(r.status ?? 0)">{{
@@ -626,11 +671,13 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
           }
 
           @case ('render') {
-            <div class="chips">
-              @for (m of modeCounts(); track m.mode) {
-                <span class="pill" [attr.data-mode]="m.mode">{{ m.label }} · {{ m.count }}</span>
-              }
-            </div>
+            @if (modeCounts().length) {
+              <div class="chips">
+                @for (m of modeCounts(); track m.mode) {
+                  <span class="pill" [attr.data-mode]="m.mode">{{ m.label }} · {{ m.count }}</span>
+                }
+              </div>
+            }
             <div class="table-wrap" role="region" aria-label="Render modes" tabindex="0">
               <table>
                 <thead>
@@ -646,23 +693,27 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                     <tr>
                       <td class="mono path">{{ row.path }}</td>
                       <td>
-                        <span class="pill" [attr.data-mode]="row.mode">{{
-                          modeLabel(row.mode)
-                        }}</span>
-                        <span class="muted small">{{ row.reason }}</span>
+                        <div class="meta">
+                          <span class="pill" [attr.data-mode]="row.mode">{{
+                            modeLabel(row.mode)
+                          }}</span>
+                          <span class="muted small">{{ row.reason }}</span>
+                        </div>
                       </td>
                       <td>
                         @if (row.last; as last) {
-                          <span class="status" [attr.data-status]="statusClass(last.status)">{{
-                            last.status
-                          }}</span>
-                          <span class="muted small"
-                            >{{ last.render === 'client' ? 'client only' : 'server rendered' }} ·
-                            {{ last.ms }} ms</span
-                          >
-                          @if (mismatch(row)) {
-                            <span class="pill" data-tone="warn">differs from config</span>
-                          }
+                          <div class="meta">
+                            <span class="status" [attr.data-status]="statusClass(last.status)">{{
+                              last.status
+                            }}</span>
+                            <span class="muted small tnum"
+                              >{{ last.render === 'client' ? 'client only' : 'server rendered' }} ·
+                              {{ last.ms }} ms</span
+                            >
+                            @if (mismatch(row)) {
+                              <span class="pill" data-tone="warn">differs from config</span>
+                            }
+                          </div>
                         } @else {
                           <span class="muted small">not requested yet</span>
                         }
@@ -676,13 +727,19 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                         }
                       </td>
                     </tr>
+                  } @empty {
+                    <tr>
+                      <td colspan="4" class="empty-row">
+                        No page routes to render yet. Add a .page.ts file under src/app/pages.
+                      </td>
+                    </tr>
                   }
                 </tbody>
               </table>
             </div>
             @if (plan(); as p) {
               <div class="card">
-                <h3>Prerender plan</h3>
+                <h2>Prerender plan</h2>
                 @if (p.dynamicConfig) {
                   <p class="muted">
                     prerender.routes is a function, so the list is known only at build time.
@@ -715,7 +772,7 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                       </dd>
                     }
                     <dt>Build output</dt>
-                    <dd>
+                    <dd class="tnum">
                       @if (p.built.length) {
                         {{ p.built.length }} page(s) in dist/analog/public
                         @if (p.notBuilt.length) {
@@ -765,7 +822,7 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                         </td>
                         <td class="mono path">{{ contentUrl(f.file) ?? '' }}</td>
                         <td class="mono">{{ f.slug }}</td>
-                        <td class="muted nowrap">{{ f.attributes['date'] || '' }}</td>
+                        <td class="muted nowrap tnum">{{ f.attributes['date'] || '' }}</td>
                         <td>
                           <span class="file"
                             ><span class="dir">{{ dir(f.file) }}</span
@@ -778,7 +835,12 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                 </table>
               </div>
             } @else {
-              <p class="muted">No markdown files under src/content.</p>
+              <div class="empty-box">
+                <p class="empty-lead">No markdown files under src/content.</p>
+                <p class="muted">
+                  Add a .md file there to see its title, slug, date and the URL it serves.
+                </p>
+              </div>
             }
           }
 
@@ -822,7 +884,10 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                 }
               </ul>
             } @else {
-              <div class="callout" data-tone="good">No Analog problems found.</div>
+              <div class="callout" data-tone="good" role="status">
+                <strong>No Analog problems found.</strong> Routes, server files, prerender config
+                and content all check out.
+              </div>
             }
           }
         }
@@ -831,119 +896,257 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
   `,
   styles: `
     :host {
-      --good: #4ade80;
-      --warn: #facc15;
-      --bad: #f87171;
+      --good: var(--ok);
+      --bad: var(--danger);
       --info: #60a5fa;
-      --line: #27272a;
-      --soft: #18181b;
+      --mono: var(--font-mono);
       display: grid;
-      gap: 14px;
-      color: #e4e4e7;
+      gap: 16px;
+      min-width: 0;
+      color: var(--text);
       font-size: 13px;
     }
-    .pad {
+    .loading {
+      display: flex;
+      gap: 12px;
+      align-items: center;
       padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text-2);
+    }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      flex: none;
+      border: 2px solid var(--border-strong);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner {
+        animation: none;
+        border-color: var(--accent-line);
+      }
+    }
+    .tnum {
+      font-variant-numeric: tabular-nums;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    .empty-row {
+      padding: 24px 16px;
+      color: var(--text-2);
+      text-align: center;
+    }
+    tbody tr:hover td.empty-row {
+      background: transparent;
+    }
+    .empty-box {
+      display: grid;
+      gap: 4px;
+      padding: 24px 16px;
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius);
+      text-align: center;
+    }
+    .empty-box p {
+      margin: 0;
+      line-height: 1.55;
+    }
+    .empty-lead {
+      color: var(--text-strong);
+      font-weight: 600;
     }
     .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px;
+      font-family: var(--mono);
+      font-size: 12.5px;
     }
     .muted {
-      color: #a1a1aa;
+      color: var(--text-2);
     }
     .small {
       font-size: 12px;
     }
-    .pill + .small,
-    .status + .small {
-      margin-left: 8px;
-    }
     .nowrap {
       white-space: nowrap;
     }
+    code {
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface-2);
+      color: var(--text-strong);
+      font-family: var(--mono);
+      font-size: 12.5px;
+    }
+
     .summary {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+      animation: enter 0.35s var(--ease) both;
     }
     .stat {
       display: grid;
-      gap: 2px;
-      padding: 10px 12px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: var(--soft);
+      gap: 6px;
+      align-content: start;
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      transition:
+        border-color 180ms var(--ease),
+        background-color 180ms var(--ease);
+    }
+    .stat:hover {
+      border-color: var(--border-strong);
     }
     .stat.wide {
       grid-column: span 2;
+      min-width: 0;
+    }
+    @media (max-width: 340px) {
+      .stat.wide {
+        grid-column: 1 / -1;
+      }
     }
     .stat .label {
-      color: #a1a1aa;
+      color: var(--text-3);
       font-size: 11px;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.08em;
     }
     .stat .value {
-      font-size: 18px;
+      color: var(--text-strong);
+      font-size: 20px;
       font-weight: 600;
+      letter-spacing: -0.01em;
+      font-variant-numeric: tabular-nums;
       overflow-wrap: anywhere;
     }
     .stat .value.mono {
-      font-size: 14px;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 24px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .stat[data-tone='warn'] .value {
       color: var(--warn);
     }
     .stat[data-tone='good'] .value {
-      color: var(--good);
+      color: var(--ok);
     }
+
     .tabs {
-      display: flex;
+      display: inline-flex;
       flex-wrap: wrap;
-      gap: 4px;
-      border-bottom: 1px solid var(--line);
+      gap: 2px;
+      justify-self: start;
+      max-width: 100%;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
     }
     [role='tab'] {
       display: inline-flex;
-      gap: 6px;
+      gap: 8px;
       align-items: center;
-      padding: 8px 12px;
+      min-height: 28px;
+      padding: 4px 12px;
       border: none;
-      border-bottom: 2px solid transparent;
-      background: none;
-      color: #d4d4d8;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text-2);
       font: inherit;
+      font-weight: 500;
       cursor: pointer;
+      transition:
+        background-color 180ms var(--ease),
+        color 180ms var(--ease),
+        box-shadow 180ms var(--ease);
+    }
+    [role='tab']:hover {
+      color: var(--text);
     }
     [role='tab'][aria-selected='true'] {
-      border-bottom-color: var(--accent);
-      color: #fafafa;
+      background: var(--surface-3);
+      color: var(--text-strong);
+      box-shadow: inset 0 0 0 1px var(--border-strong);
     }
     .count {
-      min-width: 18px;
+      min-width: 20px;
       padding: 0 6px;
-      border-radius: 999px;
-      background: #27272a;
-      color: #d4d4d8;
+      border-radius: 99px;
+      background: var(--surface-3);
+      color: var(--text-2);
       font-size: 11px;
+      font-weight: 600;
+      line-height: 18px;
       text-align: center;
+      font-variant-numeric: tabular-nums;
     }
-    .count[data-tone='warn'] {
-      background: #422006;
+    [role='tab'][aria-selected='true'] .count {
+      background: var(--border-strong);
+      color: var(--text);
+    }
+    .count[data-tone='warn'],
+    [role='tab'][aria-selected='true'] .count[data-tone='warn'] {
+      background: color-mix(in srgb, var(--warn) 12%, transparent);
       color: var(--warn);
     }
+
     .panel {
       display: grid;
-      gap: 12px;
+      gap: 16px;
       min-width: 0;
+      animation: enter 0.35s var(--ease) both;
     }
     .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 2;
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 12px;
       align-items: center;
       justify-content: space-between;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--surface) 85%, transparent);
+      backdrop-filter: blur(10px);
+    }
+    .explain {
+      flex: 1 1 320px;
+      min-width: 0;
+    }
+    .filter {
+      flex: 0 1 240px;
+      min-width: 0;
+    }
+    @media (max-width: 560px) {
+      .filter {
+        flex: 1 1 100%;
+      }
     }
     .inline,
     .row {
@@ -952,95 +1155,195 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
       gap: 8px;
       align-items: center;
     }
+    .inline > label,
+    .playground > label:not(.check) {
+      color: var(--text-3);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
     .field {
-      padding: 6px 10px;
-      border: 1px solid #3f3f46;
-      border-radius: 8px;
-      background: var(--soft);
-      color: #e4e4e7;
+      box-sizing: border-box;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background-color: var(--bg);
+      color: var(--text);
       font: inherit;
+      font-size: 13px;
+      transition:
+        border-color 180ms var(--ease),
+        box-shadow 180ms var(--ease);
+    }
+    .field.mono {
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    .field::placeholder {
+      color: var(--text-3);
+    }
+    .field:focus,
+    .field:focus-visible {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+      outline: none;
+    }
+    .method-select {
+      width: 112px;
+      font-family: var(--mono);
     }
     textarea.field {
-      width: 100%;
-      box-sizing: border-box;
-      resize: vertical;
+      height: auto;
+      padding: 8px 12px;
     }
     .grow {
-      flex: 1;
-      min-width: 180px;
+      flex: 1 1 180px;
+      min-width: 0;
     }
+
     .btn {
-      padding: 6px 12px;
-      border: 1px solid #52525b;
-      border-radius: 8px;
-      background: #27272a;
-      color: #fafafa;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      height: 34px;
+      padding: 0 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
       font: inherit;
+      font-size: 13px;
+      font-weight: 500;
       cursor: pointer;
+      transition:
+        background-color 160ms var(--ease),
+        border-color 160ms var(--ease),
+        color 160ms var(--ease);
     }
     .btn:hover {
+      background: var(--surface-3);
+      border-color: var(--border-strong);
+    }
+    .btn:active {
+      transform: translateY(1px);
+    }
+    .btn.primary {
       border-color: var(--accent);
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-weight: 600;
+    }
+    .btn.primary:hover {
+      border-color: var(--accent-hover);
+      background: var(--accent-hover);
     }
     .btn.ghost {
-      padding: 2px 10px;
-      background: transparent;
+      height: 28px;
+      padding: 0 12px;
+      font-size: 12px;
+    }
+    .btn.ghost:hover {
+      border-color: var(--accent-line);
+      color: var(--text-strong);
+    }
+    td.actions {
+      width: 1%;
+      text-align: right;
+      vertical-align: middle;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
     [role='tab']:focus-visible,
     .btn:focus-visible,
-    .field:focus-visible,
     .table-wrap:focus-visible,
     summary:focus-visible,
     .segmented label:focus-within {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
     }
+
     .callout {
-      padding: 10px 12px;
-      border: 1px solid var(--line);
-      border-left: 3px solid var(--info);
-      border-radius: 8px;
-      background: var(--soft);
+      padding: 12px 16px;
+      border: 1px solid color-mix(in srgb, var(--info) 30%, transparent);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--info) 8%, var(--surface));
       line-height: 1.6;
+      animation: enter 0.35s var(--ease) both;
     }
     .callout[data-tone='good'] {
-      border-left-color: var(--good);
+      border-color: color-mix(in srgb, var(--ok) 30%, transparent);
+      background: color-mix(in srgb, var(--ok) 12%, transparent);
     }
     .callout[data-tone='warn'] {
-      border-left-color: var(--warn);
+      border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+      background: color-mix(in srgb, var(--warn) 12%, transparent);
     }
     .callout[data-tone='bad'] {
-      border-left-color: var(--bad);
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+    }
+    .callout strong {
+      color: var(--text-strong);
+    }
+    .callout strong.mono {
+      overflow-wrap: anywhere;
     }
     .chain {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
-      margin: 6px 0 0;
+      gap: 8px;
+      margin: 8px 0 0;
       padding: 0;
       list-style: none;
     }
+    .chain li {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
     .chain li:not(:last-child)::after {
       content: '›';
-      margin-left: 6px;
-      color: #71717a;
+      margin-left: 2px;
+      color: var(--text-3);
+    }
+    .callout .chips {
+      margin-top: 8px;
     }
     .plain {
-      margin: 6px 0 0;
+      margin: 8px 0 0;
       padding-left: 18px;
     }
+    .plain li {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
     .table-wrap {
       overflow-x: auto;
-      border: 1px solid var(--line);
-      border-radius: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      animation: enter 0.35s var(--ease) both;
     }
     table {
       width: 100%;
+      min-width: 560px;
       border-collapse: collapse;
     }
     th,
     td {
-      padding: 8px 10px;
-      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
       text-align: left;
       vertical-align: top;
     }
@@ -1048,89 +1351,120 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
       border-bottom: none;
     }
     th {
-      background: var(--soft);
-      color: #a1a1aa;
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+      color: var(--text-3);
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
     }
     .num {
       text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    td.nowrap {
+      font-variant-numeric: tabular-nums;
+    }
+    tbody td {
+      transition: background-color 160ms var(--ease);
     }
     tbody tr:hover td {
-      background: #141417;
+      background: var(--surface-2);
     }
     tr.open td {
-      background: #1c1917;
+      background: var(--accent-soft);
+      color: var(--text-strong);
+    }
+    tr.open:hover td {
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
     }
     tr.open td:first-child {
-      box-shadow: inset 3px 0 0 var(--accent);
+      box-shadow: inset 2px 0 0 var(--accent);
     }
     tr.dim .path {
-      color: #a1a1aa;
+      color: var(--text-2);
     }
     .route {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 8px;
       align-items: center;
     }
     .guide {
-      color: #52525b;
+      color: var(--text-3);
+      font-family: var(--mono);
     }
     .path {
-      color: #f0abfc;
+      color: var(--text-strong);
+      overflow-wrap: anywhere;
     }
     .file {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px;
-      color: #e4e4e7;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: var(--text);
       overflow-wrap: anywhere;
     }
     .dir {
-      color: #a1a1aa;
+      color: var(--text-3);
     }
+
     .pill,
     .chip,
     .status,
     .method {
       display: inline-block;
       padding: 1px 8px;
-      border-radius: 999px;
+      border-radius: 99px;
       font-size: 11px;
+      font-weight: 500;
       line-height: 18px;
       white-space: nowrap;
     }
-    .pill,
-    .chip {
-      border: 1px solid #3f3f46;
-      color: #d4d4d8;
+    .pill {
+      border: 1px solid var(--border-strong);
+      background: var(--surface-2);
+      color: var(--text-2);
     }
     .chip {
-      border-radius: 6px;
       margin: 0 4px 4px 0;
+      padding: 3px 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    .chip.mono {
+      font-size: 12px;
     }
     .chips {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 8px;
+    }
+    .chips .pill {
+      padding: 3px 10px;
+      font-size: 12px;
     }
     .pill.live {
-      border-color: var(--accent);
-      color: #fda4af;
+      border-color: var(--accent-line);
+      background: var(--accent-soft);
+      color: var(--accent);
     }
     .pill[data-kind='layout'] {
-      border-color: #6366f1;
-      color: #c7d2fe;
+      border-color: #94a3b8;
+      color: #e2e8f0;
     }
     .pill[data-kind='markdown'] {
       border-color: #0ea5e9;
       color: #bae6fd;
     }
     .pill[data-kind='load'] {
-      border-color: #a855f7;
-      color: #e9d5ff;
+      border-color: #2dd4bf;
+      color: #99f6e4;
     }
     .pill[data-mode='ssr'] {
       border-color: #3b82f6;
@@ -1149,8 +1483,8 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
       color: #bfdbfe;
     }
     .pill[data-call='load'] {
-      border-color: #a855f7;
-      color: #e9d5ff;
+      border-color: #2dd4bf;
+      color: #99f6e4;
     }
     .pill[data-call='fn'] {
       border-color: #14b8a6;
@@ -1162,173 +1496,269 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
     }
     [data-tone='warn'].pill,
     [data-tone='warn'].chip {
-      border-color: #a16207;
-      color: #fef08a;
+      border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+      background: color-mix(in srgb, var(--warn) 12%, transparent);
+      color: var(--warn);
     }
     [data-tone='bad'].pill,
     [data-tone='bad'].chip {
-      border-color: #b91c1c;
-      color: #fecaca;
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+      color: var(--danger);
     }
     [data-tone='info'].pill {
-      border-color: #1d4ed8;
+      border-color: color-mix(in srgb, var(--info) 30%, transparent);
+      background: color-mix(in srgb, var(--info) 12%, transparent);
       color: #bfdbfe;
     }
+
     .status {
+      border: 1px solid var(--border-strong);
+      font-family: var(--mono);
       font-weight: 600;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-variant-numeric: tabular-nums;
     }
     .status[data-status='good'] {
-      background: #052e16;
-      color: #86efac;
+      border-color: color-mix(in srgb, var(--ok) 30%, transparent);
+      background: color-mix(in srgb, var(--ok) 12%, transparent);
+      color: var(--ok);
     }
     .status[data-status='warn'] {
-      background: #422006;
-      color: #fde68a;
+      border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+      background: color-mix(in srgb, var(--warn) 12%, transparent);
+      color: var(--warn);
     }
     .status[data-status='bad'] {
-      background: #450a0a;
-      color: #fecaca;
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+      color: var(--danger);
     }
     .method {
-      min-width: 44px;
-      margin-right: 6px;
-      background: #27272a;
-      color: #e4e4e7;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      min-width: 52px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-family: var(--mono);
       font-weight: 600;
       text-align: center;
     }
     .method[data-method='GET'] {
-      background: #082f49;
+      border-color: color-mix(in srgb, #7dd3fc 30%, transparent);
+      background: color-mix(in srgb, #7dd3fc 12%, transparent);
       color: #7dd3fc;
     }
     .method[data-method='POST'] {
-      background: #052e16;
+      border-color: color-mix(in srgb, var(--ok) 30%, transparent);
+      background: color-mix(in srgb, var(--ok) 12%, transparent);
       color: #86efac;
     }
     .method[data-method='PUT'],
     .method[data-method='PATCH'] {
-      background: #422006;
+      border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+      background: color-mix(in srgb, var(--warn) 12%, transparent);
       color: #fde68a;
     }
     .method[data-method='DELETE'] {
-      background: #450a0a;
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
       color: #fecaca;
     }
     .request {
       min-width: 260px;
     }
-    .request .pill {
-      margin-left: 6px;
+    .request .url {
+      color: var(--text-strong);
+      overflow-wrap: anywhere;
     }
     details {
-      margin-top: 6px;
+      margin-top: 8px;
     }
     summary {
-      cursor: pointer;
-      color: #a1a1aa;
+      width: fit-content;
+      border-radius: 6px;
+      color: var(--text-2);
       font-size: 12px;
+      cursor: pointer;
+      transition: color 160ms var(--ease);
+    }
+    summary:hover {
+      color: var(--text);
     }
     .code {
-      margin: 6px 0 0;
-      padding: 8px 10px;
+      margin: 8px 0 0;
+      padding: 10px 12px;
       max-height: 220px;
       overflow: auto;
-      border-radius: 8px;
-      background: #09090b;
-      color: #e4e4e7;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.55;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    .calls-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
     }
     .segmented {
       display: inline-flex;
       flex-wrap: wrap;
       gap: 2px;
+      justify-self: start;
       margin: 0;
       padding: 3px;
-      border: 1px solid var(--line);
+      border: 1px solid var(--border);
       border-radius: 10px;
-      background: var(--soft);
-      justify-self: start;
+      background: var(--bg);
     }
     .segmented label {
-      padding: 4px 10px;
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      padding: 5px 12px;
       border-radius: 7px;
+      background: transparent;
+      color: var(--text-2);
+      font-weight: 500;
       cursor: pointer;
+      transition:
+        background-color 180ms var(--ease),
+        color 180ms var(--ease),
+        box-shadow 180ms var(--ease);
+    }
+    .segmented label:hover {
+      color: var(--text);
+    }
+    .segmented label .muted {
+      color: var(--text-3);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
     }
     .segmented label.on {
-      background: #3f3f46;
-      color: #fafafa;
+      background: var(--surface-3);
+      color: var(--text-strong);
+      box-shadow: inset 0 0 0 1px var(--border-strong);
     }
     .segmented label.on .muted {
-      color: #d4d4d8;
+      color: var(--text-2);
     }
-    h3 {
+
+    h2 {
       display: flex;
       gap: 8px;
       align-items: center;
-      margin: 6px 0 0;
-      color: #e4e4e7;
-      font-size: 13px;
+      margin: 8px 0 0;
+      color: var(--text-3);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
     }
     .card {
       display: grid;
-      gap: 8px;
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: var(--soft);
+      gap: 12px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      animation: enter 0.35s var(--ease) both;
     }
-    .card h3 {
+    .card h2 {
       margin: 0;
     }
     .check {
       display: flex;
-      gap: 6px;
+      gap: 8px;
       align-items: center;
+      color: var(--text-2);
+      cursor: pointer;
+    }
+    .check input {
+      width: 15px;
+      height: 15px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+    .check input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
     .response {
       display: grid;
-      gap: 6px;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+    .response .code {
+      margin: 0;
     }
     .facts {
       display: grid;
       grid-template-columns: max-content 1fr;
-      gap: 6px 14px;
+      gap: 10px 16px;
       margin: 0;
     }
     .facts dt {
-      color: #a1a1aa;
+      padding-top: 3px;
+      color: var(--text-3);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
     }
     .facts dd {
       margin: 0;
     }
+
     .findings {
       display: grid;
-      gap: 8px;
+      gap: 12px;
       margin: 0;
       padding: 0;
       list-style: none;
+      animation: enter 0.35s var(--ease) both;
     }
-    .findings li {
-      padding: 10px 12px;
-      border: 1px solid var(--line);
-      border-left: 3px solid var(--info);
-      border-radius: 8px;
-      background: var(--soft);
+    .findings > li {
+      position: relative;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow:
+        inset 3px 0 0 var(--info),
+        var(--shadow);
+      transition: border-color 180ms var(--ease);
     }
-    .findings li[data-tone='bad'] {
-      border-left-color: var(--bad);
+    .findings > li:hover {
+      border-color: var(--border-strong);
     }
-    .findings li[data-tone='warn'] {
-      border-left-color: var(--warn);
+    .findings > li[data-tone='bad'] {
+      box-shadow:
+        inset 3px 0 0 var(--danger),
+        var(--shadow);
+    }
+    .findings > li[data-tone='warn'] {
+      box-shadow:
+        inset 3px 0 0 var(--warn),
+        var(--shadow);
     }
     .findings p {
-      margin: 6px 0 0;
-      line-height: 1.5;
+      margin: 8px 0 0;
+      line-height: 1.55;
+    }
+    .findings > li > p {
+      color: var(--text-2);
     }
     .finding-head {
       display: flex;
@@ -1337,47 +1767,67 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
       align-items: center;
     }
     .finding-title {
+      color: var(--text-strong);
       font-size: 14px;
-      color: #fafafa;
+      font-weight: 600;
     }
     .where {
       display: grid;
-      gap: 4px;
-      margin: 8px 0 0;
-      padding: 8px 10px;
-      border-radius: 8px;
-      background: #0f0f11;
+      gap: 6px;
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
       list-style: none;
     }
     .where li {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 12px;
     }
     .fix {
-      margin-top: 8px;
-      color: #e4e4e7;
-      line-height: 1.5;
+      margin-top: 12px;
+      color: var(--text);
+      line-height: 1.55;
     }
     .fix strong {
       display: block;
-      margin-bottom: 2px;
-      color: var(--good);
+      margin-bottom: 4px;
+      color: var(--ok);
       font-size: 11px;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.08em;
     }
     .rule {
       display: block;
-      margin-top: 8px;
-      color: #a1a1aa;
+      margin-top: 12px;
+      color: var(--text-3);
+      font-size: 12px;
     }
-    .findings > li > p {
-      color: #d4d4d8;
-    }
+
     .empty {
-      padding: 32px;
+      display: grid;
+      gap: 8px;
+      justify-items: center;
+      padding: 40px 24px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
       text-align: center;
+      animation: enter 0.35s var(--ease) both;
+    }
+    .empty p {
+      margin: 0;
+      max-width: 520px;
+      line-height: 1.6;
+    }
+    .empty-title {
+      margin: 0;
+      color: var(--text-strong);
+      font-size: 15px;
+      font-weight: 600;
     }
     .sr-only {
       position: absolute;
@@ -1394,6 +1844,7 @@ export class AnalogInspector {
 
   readonly kinds: Kind[] = ['all', 'page', 'load', 'fn', 'api'];
   readonly methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  readonly methodOptions = this.methods.map((m) => ({ value: m, label: m }));
   readonly view = signal<View>('routes');
   readonly project = signal<AnalogProject | null>(null);
   readonly state = signal<AnalogState>({});
@@ -1438,18 +1889,9 @@ export class AnalogInspector {
         !!r.route.file?.toLowerCase().includes(needle),
     );
   });
-  readonly duplicates = computed(() => {
-    const seen = new Map<string, number>();
-    const out = new Set<string>();
-    for (const c of this.allCalls()) {
-      if (c.kind !== 'load') continue;
-      const route = c.url.replace(/^.*\/_analog\/pages/, '').replace(/\/index$/, '') || '/';
-      if (c.from === 'ssr') seen.set(route, c.at);
-      else if (c.from === 'browser' && (seen.get(route) ?? -Infinity) > c.at - 15_000)
-        out.add(route);
-    }
-    return Array.from(out);
-  });
+  readonly duplicates = computed(() =>
+    Array.from(new Set((this.state().duplicates ?? []).map((d) => d.route))),
+  );
   readonly modeCounts = computed(() =>
     (['ssr', 'ssg', 'client'] as const)
       .map((mode) => ({
@@ -1513,9 +1955,12 @@ export class AnalogInspector {
   }
 
   private async load(client: DevframeRpcClient) {
-    this.project.set(await call<AnalogProject>(client, 'analog-project'));
+    const project = await call<AnalogProject>(client, 'analog-project');
+    if (this.destroyRef.destroyed) return;
+    this.project.set(project);
     try {
       const shared = await client.scope('ng-devtools').rpc.sharedState('analog');
+      if (this.destroyRef.destroyed) return;
       const apply = (value: unknown) => this.state.set((value as AnalogState) ?? {});
       apply(shared.value());
       this.unsubscribe?.();
@@ -1523,6 +1968,7 @@ export class AnalogInspector {
     } catch {
       this.state.set({});
     }
+    if (this.destroyRef.destroyed) return;
     await this.refresh(this.view());
   }
 
@@ -1637,6 +2083,10 @@ export class AnalogInspector {
     this.apiPath.set(api.path.replace(/:(\w+)/g, '1').replace('**', 'x'));
     this.response.set(null);
     queueMicrotask(() => document.getElementById('api-path')?.focus());
+  }
+
+  async clearCalls() {
+    await call(this.rpc(), 'analog-clear-calls');
   }
 
   async explain() {

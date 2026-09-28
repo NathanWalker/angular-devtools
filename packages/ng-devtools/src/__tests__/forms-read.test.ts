@@ -19,7 +19,7 @@ import {
   validateTree,
 } from '@angular/forms/signals';
 import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   collectForms,
   forgetFormSecrets,
@@ -147,6 +147,21 @@ describe('reactive internals', () => {
     expect(validatorNames(email as any)).toEqual(['email']);
   });
 
+  it('re-probes a cached validator after a while, so outside state changes show as stale', () => {
+    vi.useFakeTimers();
+    try {
+      let max = 10;
+      const guests = new FormControl(5, (c) => ((c.value ?? 0) > max ? { max: true } : null));
+      expect(controlFacts(guests as any).stale).toBeUndefined();
+      max = 3;
+      expect(controlFacts(guests as any).stale).toBeUndefined();
+      vi.advanceTimersByTime(6000);
+      expect(controlFacts(guests as any).stale).toEqual(['max']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops control events caused by probing a validator', async () => {
     const group = new FormGroup({ a: new FormControl(''), noisy: new FormControl('x') });
     group.controls.noisy.setValidators(() => {
@@ -212,18 +227,22 @@ describe('real components', () => {
     expect(collected.submitDom?.reasons.join(' ')).toContain('type="button"');
   });
 
-  it('labels template validators and flags a disabled submit button', async () => {
+  it('labels template validators and flags a disabled submit button only on a valid form', async () => {
     const fixture = TestBed.createComponent(ModelForm);
     fixture.detectChanges();
     await fixture.whenStable();
     fixture.detectChanges();
-    const [collected] = collectForms(
-      findForms(ngApi(), fixture.nativeElement.querySelectorAll('*')),
-    );
+    const collect = () =>
+      collectForms(findForms(ngApi(), fixture.nativeElement.querySelectorAll('*')))[0];
+    const collected = collect();
     const city = byKey(collected.root)['city'];
     expect(city.errors[0]).toMatchObject({ kind: 'minlength', source: 'directive' });
     expect(city.validatorNames).toEqual(expect.arrayContaining(['required (template)']));
-    expect(collected.submitDom?.reasons.join(' ')).toContain('disabled');
+    expect(collected.submitDom?.reasons).toEqual([]);
+    const input = fixture.nativeElement.querySelector('input') as HTMLInputElement;
+    input.value = 'Izmir';
+    input.dispatchEvent(new Event('input'));
+    expect(collect().submitDom?.reasons.join(' ')).toContain('disabled');
   });
 });
 
@@ -336,8 +355,10 @@ describe('DOM facts', () => {
     expect(domFacts(el, { value: 'old', secret: true }).drift).toBeUndefined();
   });
 
-  it('explains why a non-form host never submits', () => {
+  it('explains why a non-form host never submits, only when something listens for submit', () => {
     document.body.innerHTML = '<div id="f"></div>';
-    expect(submitDom(document.getElementById('f')!).reasons[0]).toContain('not a <form>');
+    const host = document.getElementById('f')!;
+    expect(submitDom(host).reasons).toEqual([]);
+    expect(submitDom(host, { submitListener: true }).reasons[0]).toContain('not a <form>');
   });
 });

@@ -1,0 +1,45 @@
+@mixin focus-ring($offset: 2px) {
+  outline: 2px solid var(--accent);
+  outline-offset: $offset;
+}
+
+@mixin field-focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+@mixin panel($level: 1) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  @if $level == 1 {
+    background: var(--surface);
+  } @else {
+    background: var(--surface-#{$level});
+  }
+}
+
+@mixin label {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@mixin soft($color) {
+  border-color: color-mix(in srgb, #{$color} 30%, transparent);
+  background: color-mix(in srgb, #{$color} 12%, transparent);
+  color: #{$color};
+}
+
+@mixin truncate {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@mixin enter($duration: 0.35s) {
+  animation: enter $duration var(--ease) both;
+}

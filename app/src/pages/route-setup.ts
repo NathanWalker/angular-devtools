@@ -45,13 +45,13 @@ import { SHARED_STYLES, type RouterPage } from './router-types';
           <tbody>
             @for (option of setup.options; track option.name) {
               <tr>
-                <td>
+                <td class="name">
                   <code>{{ option.name }}</code>
                 </td>
                 <td>
                   <code>{{ option.value }}</code>
                 </td>
-                <td>
+                <td class="source">
                   <span class="badge" [attr.data-tone]="option.set ? 'warn' : ''">{{
                     option.set ? 'set' : 'default'
                   }}</span>
@@ -61,56 +61,51 @@ import { SHARED_STYLES, type RouterPage } from './router-types';
           </tbody>
         </table>
       </div>
-      <h3>Features</h3>
-      <ul class="chips">
-        @for (feature of entries(setup.features); track feature[0]) {
-          <li>
-            <span class="badge" [attr.data-tone]="feature[1] === 'off' ? '' : 'good'"
-              >{{ feature[0] }}: {{ feature[1] }}</span
-            >
-          </li>
-        }
-      </ul>
-      <h3>Strategies</h3>
-      <dl class="facts">
-        @for (strategy of entries(setup.strategies); track strategy[0]) {
-          <dt>{{ strategy[0] }}</dt>
-          <dd>
-            <code>{{ strategy[1] }}</code>
-          </dd>
-        }
-      </dl>
+      @if (entries(setup.features).length) {
+        <h3>Features</h3>
+        <ul class="chips">
+          @for (feature of entries(setup.features); track feature[0]) {
+            <li>
+              <span class="badge" [attr.data-tone]="feature[1] === 'off' ? '' : 'good'"
+                >{{ feature[0] }}: {{ feature[1] }}</span
+              >
+            </li>
+          }
+        </ul>
+      }
+      @if (entries(setup.strategies).length) {
+        <h3>Strategies</h3>
+        <dl class="facts">
+          @for (strategy of entries(setup.strategies); track strategy[0]) {
+            <dt>{{ strategy[0] }}</dt>
+            <dd>
+              <code>{{ strategy[1] }}</code>
+            </dd>
+          }
+        </dl>
+      }
     } @else {
-      <p class="muted">The page has not reported its router setup yet.</p>
+      <div class="empty">
+        <p class="empty-title">The page has not reported its router setup yet.</p>
+        <p class="muted">
+          It appears after the app finishes bootstrapping. Reload the app if it stays empty.
+        </p>
+      </div>
     }
   `,
   styles: `
     ${SHARED_STYLES}
     :host {
       display: grid;
-      gap: 12px;
+      gap: 16px;
+      min-width: 0;
     }
-    .note {
-      margin: 0;
-      padding: 8px 10px;
-      border-left: 3px solid #fef08a;
-      background: #27272a;
-      color: #e4e4e7;
-      font-size: 13px;
+    .name code {
+      color: var(--text-strong);
     }
-    .facts {
-      display: grid;
-      grid-template-columns: max-content 1fr;
-      gap: 4px 12px;
-      margin: 0;
-      font-size: 13px;
-    }
-    dt {
-      color: #a1a1aa;
-    }
-    dd {
-      margin: 0;
-      color: #e4e4e7;
+    .source {
+      width: 1%;
+      white-space: nowrap;
     }
     .chips {
       display: flex;
@@ -119,6 +114,13 @@ import { SHARED_STYLES, type RouterPage } from './router-types';
       margin: 0;
       padding: 0;
       list-style: none;
+    }
+    .chips .badge {
+      font-family: var(--font-mono);
+      font-weight: 500;
+    }
+    .facts code {
+      color: var(--text-strong);
     }
   `,
 })

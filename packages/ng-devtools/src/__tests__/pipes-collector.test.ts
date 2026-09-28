@@ -9,10 +9,10 @@ import {
   type PipeTransform,
 } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { AsyncPipe, CurrencyPipe } from '@angular/common';
+import { AsyncPipe, CurrencyPipe, UpperCasePipe } from '@angular/common';
 import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
 import { BehaviorSubject } from 'rxjs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attachPipes } from '../pipes-collector.ts';
 import type { PipePageReport } from '../rpc/pipes-tools.ts';
 
@@ -90,7 +90,9 @@ describe('pipes collector', () => {
     expect(report.instrumented).toBe(false);
     const currency = report.pipes.find((p) => p.name === 'currency')!;
     expect(currency).toMatchObject({ className: 'CurrencyPipe', isPure: true, instanceCount: 2 });
-    expect(currency.components).toEqual([{ name: 'Receipt', count: 2 }]);
+    expect(currency.components).toEqual([
+      { name: 'Receipt', count: 2, targets: [{ pageId: 'pg', id: expect.any(String) }] },
+    ]);
     expect(currency.call).toBeUndefined();
   });
 
@@ -252,6 +254,163 @@ describe('pipes collector', () => {
         .at(-1)!
         .pipes.find((p) => p.name === 'join')?.stale,
     ).toBeUndefined();
+  });
+
+  it('keeps a stale finding, with its first detection time, until the argument changes', async () => {
+    class ListView {
+      items = signal<string[]>(['a', 'b']);
+      cdr = inject(ChangeDetectorRef);
+    }
+    Component({
+      selector: 'app-list4',
+      imports: [JoinPipe],
+      template: `<p>{{ items() | join }}</p>`,
+    })(ListView);
+
+    const fixture = await mount(ListView);
+    const h = harness();
+    h.handlers.get('instrument-pipes')!(true);
+    h.collector.push();
+    await Promise.resolve();
+
+    fixture.componentInstance.items().push('c');
+    fixture.componentInstance.cdr.markForCheck();
+    fixture.detectChanges();
+    h.collector.push();
+    await Promise.resolve();
+    const staleOf = () =>
+      h
+        .reports()
+        .at(-1)!
+        .pipes.find((p) => p.name === 'join')?.stale;
+    const first = staleOf()?.detectedAt;
+    expect(first).toBeGreaterThan(0);
+
+    h.collector.resume();
+    await Promise.resolve();
+    expect(staleOf()?.detectedAt).toBe(first);
+
+    fixture.componentInstance.items.set(['d']);
+    fixture.detectChanges();
+    h.collector.resume();
+    await Promise.resolve();
+    expect(staleOf()).toBeUndefined();
+  });
+
+  it('does not push an unchanged report again before the heartbeat', async () => {
+    await mount(Receipt);
+    const h = harness();
+    h.collector.push();
+    await Promise.resolve();
+    h.collector.push();
+    await Promise.resolve();
+    expect(h.reports()).toHaveLength(1);
+  });
+
+  it('walks the whole DOM once, then only again when it changes', async () => {
+    await mount(Receipt);
+    const h = harness();
+    const spy = vi.spyOn(document, 'querySelectorAll');
+    const fullScans = () => spy.mock.calls.filter(([selector]) => selector === '*').length;
+    h.collector.push();
+    await Promise.resolve();
+    expect(fullScans()).toBe(1);
+
+    h.collector.resume();
+    await Promise.resolve();
+    expect(fullScans()).toBe(1);
+
+    class Extra {
+      label = 'late';
+    }
+    Component({
+      selector: 'app-extra',
+      imports: [UpperCasePipe],
+      template: `<i>{{ label | uppercase }}</i>`,
+    })(Extra);
+    await mount(Extra);
+    await new Promise((resolve) => setTimeout(resolve));
+    h.collector.resume();
+    await Promise.resolve();
+    expect(fullScans()).toBe(1);
+    expect(
+      h
+        .reports()
+        .at(-1)!
+        .pipes.map((p) => p.name),
+    ).toEqual(['uppercase']);
+    spy.mockRestore();
+  });
+
+  it('picks up a text-only view that appears later without walking the whole DOM', async () => {
+    class Toggle {
+      show = signal(false);
+      label = 'late';
+    }
+    Component({
+      selector: 'app-toggle',
+      imports: [UpperCasePipe],
+      template: `<p>@if (show()) {{{ label | uppercase }}}</p>`,
+    })(Toggle);
+    const fixture = await mount(Toggle);
+    const h = harness();
+    const spy = vi.spyOn(document, 'querySelectorAll');
+    h.collector.push();
+    await Promise.resolve();
+    expect(h.reports().at(-1)!.pipes).toEqual([]);
+
+    fixture.componentInstance.show.set(true);
+    fixture.detectChanges();
+    await new Promise((resolve) => setTimeout(resolve));
+    h.collector.resume();
+    await Promise.resolve();
+    expect(spy.mock.calls.filter(([selector]) => selector === '*')).toHaveLength(1);
+    expect(
+      h
+        .reports()
+        .at(-1)!
+        .pipes.map((p) => p.name),
+    ).toEqual(['uppercase']);
+    spy.mockRestore();
+  });
+
+  it('strips the bundler underscore prefix from component names', async () => {
+    class _Invoice {
+      total = 3;
+    }
+    Component({
+      selector: 'app-invoice',
+      imports: [CurrencyPipe],
+      template: `<p>{{ total | currency }}</p>`,
+    })(_Invoice);
+    await mount(_Invoice);
+    const h = harness();
+    h.collector.push();
+    await Promise.resolve();
+    const currency = h
+      .reports()
+      .at(-1)!
+      .pipes.find((p) => p.name === 'currency')!;
+    expect(currency.components.map((c) => c.name)).toEqual(['Invoice']);
+  });
+
+  it('reports no latest value for an async pipe with no source yet', async () => {
+    class Empty {
+      source$: BehaviorSubject<string> | null = null;
+    }
+    Component({
+      selector: 'app-empty',
+      imports: [AsyncPipe],
+      template: `<p>{{ source$ | async }}</p>`,
+    })(Empty);
+    await mount(Empty);
+    const h = harness();
+    h.collector.push();
+    await Promise.resolve();
+    const [usage] = h.reports().at(-1)!.async ?? [];
+    expect(usage).toMatchObject({ hasSource: false, duplicate: false });
+    expect(usage.latestValue).toBeUndefined();
+    expect(usage.target).toEqual({ pageId: 'pg', id: expect.any(String) });
   });
 
   it('does nothing harmful when Angular has no debug API on the page', async () => {

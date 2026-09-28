@@ -2,15 +2,23 @@
 // never arrived drops out of the panel (and its `| async` entries with it) fast.
 const PAGE_EXPIRES_MS = 15_000;
 const MAX_MERGED_INSTANCES = 10;
+const MAX_MERGED_TARGETS = 10;
 
 function isRecord(value: unknown): value is object {
   return !!value && typeof value === 'object';
+}
+
+/** A component host element on one page, for highlighting it there. */
+export interface PipeTarget {
+  pageId: string;
+  id: string;
 }
 
 export interface PipeComponentUsage {
   /** Owning component's class name, best-effort (falls back to "?"). */
   name: string;
   count: number;
+  targets?: PipeTarget[];
 }
 
 /** One pipe instance's most recent call, for when several usages of the same
@@ -56,6 +64,7 @@ export interface AsyncUsageInfo {
   latestValue?: string;
   /** Another `| async` usage on the page is subscribed to the same source. */
   duplicate: boolean;
+  target?: PipeTarget;
 }
 
 export interface PipesState {
@@ -73,10 +82,21 @@ export interface PipePageReport {
   instrumented?: boolean;
 }
 
+function isPipeTarget(value: unknown): value is PipeTarget {
+  if (!isRecord(value)) return false;
+  const target: Partial<PipeTarget> = value;
+  return typeof target.pageId === 'string' && typeof target.id === 'string';
+}
+
 function isPipeComponentUsage(value: unknown): value is PipeComponentUsage {
   if (!isRecord(value)) return false;
   const usage: Partial<PipeComponentUsage> = value;
-  return typeof usage.name === 'string' && typeof usage.count === 'number';
+  return (
+    typeof usage.name === 'string' &&
+    typeof usage.count === 'number' &&
+    (usage.targets === undefined ||
+      (Array.isArray(usage.targets) && usage.targets.every(isPipeTarget)))
+  );
 }
 
 function isPipeUsageInfo(value: unknown): value is PipeUsageInfo {
@@ -99,7 +119,8 @@ function isAsyncUsageInfo(value: unknown): value is AsyncUsageInfo {
     typeof usage.component === 'string' &&
     typeof usage.hasSource === 'boolean' &&
     typeof usage.duplicate === 'boolean' &&
-    (usage.latestValue === undefined || typeof usage.latestValue === 'string')
+    (usage.latestValue === undefined || typeof usage.latestValue === 'string') &&
+    (usage.target === undefined || isPipeTarget(usage.target))
   );
 }
 
@@ -130,7 +151,10 @@ function aggregatePipes(all: (PipePageReport & { reportedAt: number })[]): PipeU
       if (!existing) {
         byName.set(pipe.name, {
           ...pipe,
-          components: pipe.components.map((c) => ({ ...c })),
+          components: pipe.components.map((c) => ({
+            ...c,
+            ...(c.targets ? { targets: [...c.targets] } : {}),
+          })),
           call: pipe.call && { ...pipe.call },
         });
         if (pipe.call) callAt.set(pipe.name, page.reportedAt);
@@ -139,8 +163,23 @@ function aggregatePipes(all: (PipePageReport & { reportedAt: number })[]): PipeU
       existing.instanceCount += pipe.instanceCount;
       for (const component of pipe.components) {
         const match = existing.components.find((c) => c.name === component.name);
-        if (match) match.count += component.count;
-        else existing.components.push({ ...component });
+        if (!match) {
+          existing.components.push({
+            ...component,
+            ...(component.targets ? { targets: [...component.targets] } : {}),
+          });
+          continue;
+        }
+        match.count += component.count;
+        if (component.targets?.length) {
+          const merged = [...(match.targets ?? [])];
+          for (const target of component.targets) {
+            if (merged.length >= MAX_MERGED_TARGETS) break;
+            const seen = merged.some((m) => m.pageId === target.pageId && m.id === target.id);
+            if (!seen) merged.push(target);
+          }
+          match.targets = merged;
+        }
       }
       if (pipe.call) {
         if (!existing.call) {

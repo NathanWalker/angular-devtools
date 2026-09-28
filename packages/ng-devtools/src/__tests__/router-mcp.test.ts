@@ -302,8 +302,8 @@ describe('router MCP tools', () => {
 
   it('explain-render-mode reads the workspace server routes', async () => {
     const { push, call } = await boot();
-    await push('push-router', report({ snapshot: { ...report().snapshot, url: '/products/9' } }));
-    const text = await call('explain-render-mode', { url: '/products/9' });
+    await push('push-router', report({ snapshot: { ...report().snapshot, url: '/book/lisbon' } }));
+    const text = await call('explain-render-mode', { url: '/book/lisbon' });
     expect(text).toContain('renders with `Client`');
     expect(text).toContain('app.routes.server.ts');
   });
