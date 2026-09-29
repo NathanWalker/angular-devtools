@@ -370,7 +370,7 @@ Then open `http://localhost:9999/` for the UI, or point an MCP client at
 
 ### Example app
 
-`app-nativescript/` is a `ns create --ng` project wired up this way, with a small
+`examples/nativescript/` is a `ns create --ng` project wired up this way, with a small
 showcase component (signals, a computed, an effect and a component-level
 provider). Tested on the iOS simulator; Android has not been verified yet.
 
@@ -379,8 +379,8 @@ The app maps `@santoshyadavdev/ng-devtools/*` to the package's build output in
 
 ```sh
 pnpm devtools:build-pkg      # builds packages/ng-devtools/dist, UI included
-pnpm devtools:nativescript   # devtools server scanning app-nativescript/src
-cd app-nativescript && npm install && ns debug ios --no-hmr
+pnpm devtools:nativescript   # devtools server scanning examples/nativescript/src
+cd examples/nativescript && npm install && ns debug ios --no-hmr
 ```
 
 ## Demo App
