@@ -803,7 +803,9 @@ export class App implements OnInit, OnDestroy {
   }
 }
 
-// Chrome extension passes ?baseURL=...; embedded uses /__ng-devtools/; standalone uses default
+// Chrome extension passes ?baseURL=...; the Vite bridge mounts the connection
+// at /__ng-devtools/ beside a page served from /; the standalone server and the
+// Express mount serve it next to the page.
 function sameOrigin(value: string): boolean {
   try {
     return new URL(value, location.href).origin === location.origin;
@@ -827,7 +829,7 @@ function loopbackFromExtension(value: string): boolean {
   }
 }
 
-function detectBaseURL(): string | undefined {
+function detectBaseURL(): string | string[] | undefined {
   const params = new URLSearchParams(location.search);
   const fromQuery = params.get('baseURL');
   // Same origin only: any page can open this URL, and this value decides where
@@ -841,5 +843,5 @@ function detectBaseURL(): string | undefined {
   if (location.pathname.includes('__ng-devtools') || location.pathname.includes('__devframes/')) {
     return undefined;
   }
-  return '/__ng-devtools/';
+  return ['./', '/__ng-devtools/'];
 }
