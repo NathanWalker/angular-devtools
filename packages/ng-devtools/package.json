@@ -18,6 +18,7 @@
     "./devframe": "./src/devframe.ts",
     "./overlay": "./src/overlay.ts",
     "./popup": "./src/popup.ts",
+    "./overlay-nativescript": "./src/overlay-nativescript.ts",
     "./http": "./src/http.ts",
     "./hub": "./src/hub.ts",
     "./package.json": "./package.json",
@@ -29,6 +30,7 @@
       "./devframe": "./dist/devframe.mjs",
       "./overlay": "./dist/overlay.mjs",
       "./popup": "./dist/popup.mjs",
+      "./overlay-nativescript": "./dist/overlay-nativescript.mjs",
       "./http": "./dist/http.mjs",
       "./hub": "./dist/hub.mjs",
       "./package.json": "./package.json",
@@ -60,7 +62,8 @@
     "devframe",
     "signals",
     "dependency-injection",
-    "mcp"
+    "mcp",
+    "nativescript"
   ],
   "dependencies": {
     "@devframes/agentic": "^1.1.0",
@@ -73,12 +76,16 @@
     "valibot": "^1.5.0"
   },
   "peerDependencies": {
+    "@nativescript/core": ">=8",
     "@angular/common": ">=20",
     "@angular/core": ">=20",
     "rxjs": ">=7",
     "vite": ">=5"
   },
   "peerDependenciesMeta": {
+    "@nativescript/core": {
+      "optional": true
+    },
     "@angular/common": {
       "optional": true
     },
@@ -95,6 +102,7 @@
   "devDependencies": {
     "@angular/common": "^22.1.0",
     "@angular/core": "^22.1.0",
+    "@nativescript/core": "^9.1.0",
     "rxjs": "~7.8.0",
     "tsdown": "^0.23.0"
   },
