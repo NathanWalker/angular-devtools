@@ -368,6 +368,13 @@ npx @santoshyadavdev/ng-devtools dev --host 0.0.0.0 --no-auth
 Then open `http://localhost:9999/` for the UI, or point an MCP client at
 `http://localhost:9999/__mcp`.
 
+> [!WARNING]
+> `--host 0.0.0.0 --no-auth` exposes the devtools RPC and MCP endpoints,
+> unauthenticated, to every host that can reach your machine. Use it only on a
+> trusted network. The simulators reach the server over loopback, so drop
+> `--host 0.0.0.0` unless a physical device needs it, and prefer binding to the
+> one interface that device uses (e.g. `--host 192.168.1.20`).
+
 ### Example app
 
 `examples/nativescript/` is a `ns create --ng` project wired up this way, with a small

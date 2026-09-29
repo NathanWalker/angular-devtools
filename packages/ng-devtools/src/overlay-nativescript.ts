@@ -129,6 +129,23 @@ async function connect(baseURL: string, intervalMs: number, onDisconnected: () =
       },
     },
   });
+  try {
+    const stop = await startSession(rpc, intervalMs);
+    return () => {
+      closing = true;
+      stop();
+    };
+  } catch (error) {
+    closing = true;
+    rpc.close?.();
+    throw error;
+  }
+}
+
+async function startSession(
+  rpc: Awaited<ReturnType<typeof connectDevframe>>,
+  intervalMs: number,
+): Promise<() => void> {
   const my = rpc.scope('ng-devtools');
   const pageId = Math.random().toString(36).slice(2, 6);
 
@@ -252,7 +269,6 @@ async function connect(baseURL: string, intervalMs: number, onDisconnected: () =
   });
 
   return () => {
-    closing = true;
     clearInterval(interval);
     restoreSignalHook();
     ngrx.stop();

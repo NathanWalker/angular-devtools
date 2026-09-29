@@ -113,7 +113,7 @@ export class PersonService {
     },
   ]);
 
-  getPerson(id: number): Person {
+  getPerson(id: number): Person | undefined {
     return this.items().find((person) => person.id === id);
   }
 }
