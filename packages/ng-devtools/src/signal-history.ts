@@ -143,3 +143,37 @@ export function createSignalHistory(
 
   return { onWrite, collect, collectDelta };
 }
+
+type SignalSetHook = ((node: RawSignalNode) => void) | null;
+
+export async function installSignalWriteHook(
+  onWrite: (node: RawSignalNode) => void,
+  load: () => Promise<{ setPostSignalSetFn: (fn: SignalSetHook) => SignalSetHook }> = () =>
+    import('@angular/core/primitives/signals') as never,
+): Promise<() => void> {
+  let setHook: (fn: SignalSetHook) => SignalSetHook;
+  try {
+    ({ setPostSignalSetFn: setHook } = await load());
+  } catch {
+    // Without the hook, history falls back to poll samples only.
+    return () => {};
+  }
+  let prev: SignalSetHook = null;
+  let active = true;
+  const hook = (node: RawSignalNode) => {
+    prev?.(node);
+    if (!active) return;
+    try {
+      onWrite(node);
+    } catch {
+      return;
+    }
+  };
+  prev = setHook(hook);
+  return () => {
+    active = false;
+    const current = setHook(prev);
+    // Someone chained after us; keep theirs, our hook now just forwards.
+    if (current !== hook) setHook(current);
+  };
+}

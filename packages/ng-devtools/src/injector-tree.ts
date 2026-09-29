@@ -5,6 +5,7 @@ import type {
   InjectorTreeReport,
   ProviderInfo,
 } from './types.ts';
+import { documentTree, type HostTree } from './host-tree.ts';
 
 interface ProviderRecord {
   token: unknown;
@@ -13,10 +14,10 @@ interface ProviderRecord {
   importPath?: unknown[];
 }
 
-export interface DebugNg {
-  getInjector?(el: Element): unknown;
-  getComponent?(el: Element): unknown;
-  getDirectives?(el: Element): unknown[];
+export interface DebugNg<H = Element> {
+  getInjector?(el: H): unknown;
+  getComponent?(el: H): unknown;
+  getDirectives?(el: H): unknown[];
   ɵgetInjectorMetadata?(injector: unknown): { type: string; source: unknown } | null;
   ɵgetInjectorProviders?(injector: unknown): ProviderRecord[];
   ɵgetInjectorResolutionPath?(injector: unknown): unknown[];
@@ -76,7 +77,7 @@ function isBuiltInElementToken(record: ProviderRecord): boolean {
   return record.provider === record.token && !!token && '__NG_ELEMENT_ID__' in token;
 }
 
-function toProviders(ng: DebugNg, injector: unknown): ProviderInfo[] {
+function toProviders<H>(ng: DebugNg<H>, injector: unknown): ProviderInfo[] {
   let records: ProviderRecord[];
   try {
     records = ng.ɵgetInjectorProviders?.(injector) ?? [];
@@ -98,32 +99,6 @@ function toProviders(ng: DebugNg, injector: unknown): ProviderInfo[] {
     });
 }
 
-function selectorCache(doc: Document) {
-  const selectors = new Map<Element, string>();
-  const positions = new Map<Element, number>();
-  const top = doc.documentElement;
-  const selectorOf = (el: Element): string => {
-    if (el === top) return '';
-    const known = selectors.get(el);
-    if (known !== undefined) return known;
-    const parent = el.parentElement;
-    const tag = el.tagName.toLowerCase();
-    let out = tag;
-    if (parent) {
-      if (!positions.has(el)) {
-        let index = 0;
-        for (const child of Array.from(parent.children)) positions.set(child, ++index);
-      }
-      const prefix = selectorOf(parent);
-      const part = `${tag}:nth-child(${positions.get(el)})`;
-      out = prefix ? `${prefix} > ${part}` : part;
-    }
-    selectors.set(el, out);
-    return out;
-  };
-  return selectorOf;
-}
-
 function environmentName(injector: unknown, source: unknown): string {
   const scopes = (injector as { scopes?: Set<string> } | null)?.scopes;
   if (scopes?.has('platform')) return 'Platform';
@@ -134,7 +109,11 @@ function environmentName(injector: unknown, source: unknown): string {
 
 export const NULL_INJECTOR_ID = 'inj-null';
 
-export function injectorRef(ng: DebugNg, injector: unknown): { id: string; name: string } | null {
+export function injectorRef<H extends object = Element>(
+  ng: DebugNg<H>,
+  injector: unknown,
+  tree: HostTree<H> = documentTree(),
+): { id: string; name: string } | null {
   if (!injector || typeof injector !== 'object') return null;
   let meta: { type: string; source: unknown } | null = null;
   try {
@@ -143,19 +122,20 @@ export function injectorRef(ng: DebugNg, injector: unknown): { id: string; name:
     return null;
   }
   if (meta?.type === 'element') {
-    return meta.source instanceof Element
-      ? { id: idFor(meta.source), name: `<${meta.source.tagName.toLowerCase()}>` }
+    return tree.isHost(meta.source)
+      ? { id: idFor(meta.source), name: `<${tree.tag(meta.source)}>` }
       : null;
   }
   if (meta?.type === 'null') return { id: NULL_INJECTOR_ID, name: 'Null injector' };
   return { id: idFor(injector), name: environmentName(injector, meta?.source) };
 }
 
-export function dependenciesOf(
-  ng: DebugNg,
+export function dependenciesOf<H extends object = Element>(
+  ng: DebugNg<H>,
   injector: unknown,
   owners: Iterable<unknown>,
   withNames = false,
+  tree: HostTree<H> = documentTree(),
 ): DependencyInfo[] {
   const out: DependencyInfo[] = [];
   for (const ctor of owners) {
@@ -167,7 +147,7 @@ export function dependenciesOf(
         const flags = Object.entries(dep.flags ?? {})
           .filter(([, on]) => on)
           .map(([flag]) => flag);
-        const by = dep.providedIn ? injectorRef(ng, dep.providedIn) : null;
+        const by = dep.providedIn ? injectorRef(ng, dep.providedIn, tree) : null;
         const info: DependencyInfo = {
           from: className(ctor),
           token: tokenName(dep.token),
@@ -198,9 +178,9 @@ interface ElementEntry {
 
 export const MAX_INJECTOR_NODES = 2000;
 
-const elementEntries = new WeakMap<Element, ElementEntry>();
+const elementEntries = new WeakMap<object, ElementEntry>();
 
-function environmentsOf(ng: DebugNg, path: unknown[]): object[] {
+function environmentsOf<H>(ng: DebugNg<H>, path: unknown[]): object[] {
   return path.filter((injector) => {
     try {
       return ng.ɵgetInjectorMetadata!(injector)?.type === 'environment';
@@ -210,7 +190,11 @@ function environmentsOf(ng: DebugNg, path: unknown[]): object[] {
   }) as object[];
 }
 
-function readElement(ng: DebugNg, el: Element): ElementEntry | null {
+function readElement<H extends object>(
+  ng: DebugNg<H>,
+  el: H,
+  tree: HostTree<H>,
+): ElementEntry | null {
   const cached = elementEntries.get(el);
   if (cached) return cached;
   let component: unknown = null;
@@ -248,27 +232,27 @@ function readElement(ng: DebugNg, el: Element): ElementEntry | null {
   const info: Omit<InjectorInfo, 'selector'> = {
     id: idFor(el),
     type: 'element',
-    name: el.tagName.toLowerCase(),
+    name: tree.tag(el),
     providerCount: providers.length,
     directives: [...owners].map(className),
     path: path
-      .map((entry) => injectorRef(ng, entry)?.id ?? null)
+      .map((entry) => injectorRef(ng, entry, tree)?.id ?? null)
       .filter((id): id is string => !!id),
   };
   if (typeof componentCtor === 'function') info.component = className(componentCtor);
   const entry: ElementEntry = {
     info,
     providers,
-    dependencies: dependenciesOf(ng, injector, owners),
+    dependencies: dependenciesOf(ng, injector, owners, false, tree),
     environments: environmentsOf(ng, path),
   };
   elementEntries.set(el, entry);
   return entry;
 }
 
-export function collectInjectorTree(
-  ng: DebugNg | undefined,
-  doc: Document = document,
+export function collectInjectorTree<H extends object = Element>(
+  ng: DebugNg<H> | undefined,
+  tree: HostTree<H> = documentTree(),
 ): InjectorTreeReport & { truncated?: boolean } {
   const empty: InjectorTreeReport = { roots: [], environment: [] };
   if (!ng?.getInjector || !ng.ɵgetInjectorMetadata) return empty;
@@ -300,37 +284,40 @@ export function collectInjectorTree(
     });
   };
 
-  const selectorOf = selectorCache(doc);
-  const elementNodes = new Map<Element, InjectorTreeNode>();
   const roots: InjectorTreeNode[] = [];
+  let count = 0;
   let truncated = false;
-  const walker = doc.createTreeWalker(doc.body ?? doc.documentElement, 1);
+  // Depth first in render order; each entry carries the list its nearest
+  // injector-bearing ancestor collects children into.
+  const stack: { el: H; into: InjectorTreeNode[] }[] = tree
+    .roots()
+    .map((el) => ({ el, into: roots }))
+    .reverse();
 
-  for (
-    let el = walker.currentNode as Element | null;
-    el;
-    el = walker.nextNode() as Element | null
-  ) {
-    const entry = readElement(ng, el);
-    if (!entry) continue;
-    if (elementNodes.size >= MAX_INJECTOR_NODES) {
-      truncated = true;
-      break;
+  while (stack.length) {
+    const { el, into } = stack.pop()!;
+    let childrenInto = into;
+    const entry = readElement(ng, el, tree);
+    if (entry) {
+      if (count >= MAX_INJECTOR_NODES) {
+        truncated = true;
+        break;
+      }
+      count++;
+      noteEnvironment(entry.environments);
+      const node: InjectorTreeNode = {
+        injector: { ...entry.info, selector: tree.selector(el) },
+        providers: entry.providers,
+        children: [],
+        dependencies: entry.dependencies,
+      };
+      into.push(node);
+      childrenInto = node.children;
     }
-    noteEnvironment(entry.environments);
-
-    const node: InjectorTreeNode = {
-      injector: { ...entry.info, selector: selectorOf(el) },
-      providers: entry.providers,
-      children: [],
-      dependencies: entry.dependencies,
-    };
-    elementNodes.set(el, node);
-
-    let parent: Element | null = el.parentElement;
-    while (parent && !elementNodes.has(parent)) parent = parent.parentElement;
-    if (parent) elementNodes.get(parent)!.children.push(node);
-    else roots.push(node);
+    const children = tree.children(el);
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push({ el: children[i], into: childrenInto });
+    }
   }
 
   const environment: InjectorTreeNode[] = [];

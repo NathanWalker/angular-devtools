@@ -1,10 +1,11 @@
 import { componentHosts, hostPath, type ComponentDebugNg } from './component-tree.ts';
 import { elementById, elementId } from './element-id.ts';
+import { documentTree, type HostTree } from './host-tree.ts';
 import { className } from './injector-tree.ts';
 import { serializeNamed } from './serialize.ts';
 import type { SignalGraph, SignalGraphEdge, SignalGraphNode, SignalNodeKind } from './types.ts';
 
-export interface SignalDebugNg extends ComponentDebugNg {
+export interface SignalDebugNg<H = Element> extends ComponentDebugNg<H> {
   ɵgetSignalGraph?(injector: unknown): {
     nodes: { id: string; kind?: string; label?: string; epoch?: number; value?: unknown }[];
     edges?: SignalGraphEdge[];
@@ -25,7 +26,7 @@ function read<T>(fn: () => T, fallback: T): T {
   }
 }
 
-function isComponentHost(ng: SignalDebugNg, el: Element | null): el is Element {
+function isComponentHost<H>(ng: SignalDebugNg<H>, el: H | null): el is H {
   return !!el && !!read(() => ng.getComponent?.(el), null);
 }
 
@@ -40,50 +41,20 @@ export function toSignalTarget(request: unknown, pageId: string): SignalTarget |
   return typeof id === 'string' && id ? { id } : null;
 }
 
-function resolveTarget(target: SignalTarget, doc: Document): Element | null {
+function resolveTarget<H extends object>(target: SignalTarget, tree: HostTree<H>): H | null {
   if (!target) return null;
-  if ('id' in target) return elementById(target.id);
-  try {
-    return doc.querySelector(target.selector);
-  } catch {
-    return null;
+  if ('id' in target) {
+    const host = elementById(target.id, (h) => tree.isHost(h) && tree.connected(h));
+    return host && tree.isHost(host) ? host : null;
   }
+  return tree.find(target.selector);
 }
 
-function isPrimaryOutlet(outlet: Element): boolean {
-  const name = outlet.getAttribute('name');
-  return !name || name === 'primary';
-}
-
-function outletBefore(el: Element): Element | null {
-  const prev = el.previousElementSibling;
-  return prev && prev.tagName === 'ROUTER-OUTLET' ? prev : null;
-}
-
-export function routedComponent(ng: SignalDebugNg, doc: Document = document): Element | null {
-  let best: Element | null = null;
-  let bestDepth = -1;
-  for (const outlet of Array.from(doc.querySelectorAll('router-outlet'))) {
-    if (!isPrimaryOutlet(outlet)) continue;
-    const el = outlet.nextElementSibling;
-    if (!isComponentHost(ng, el)) continue;
-    let depth = 0;
-    let primary = true;
-    for (let node: Element | null = el; node; node = node.parentElement) {
-      const before = outletBefore(node);
-      if (!before || !isComponentHost(ng, node)) continue;
-      if (!isPrimaryOutlet(before)) {
-        primary = false;
-        break;
-      }
-      depth++;
-    }
-    if (primary && depth > bestDepth) {
-      best = el;
-      bestDepth = depth;
-    }
-  }
-  return best;
+export function routedComponent<H extends object = Element>(
+  ng: SignalDebugNg<H>,
+  tree: HostTree<H> = documentTree(),
+): H | null {
+  return tree.routed?.((host) => isComponentHost(ng, host)) ?? null;
 }
 
 function signalNodeOf(value: unknown): { kind?: string; debugName?: string } | null {
@@ -96,7 +67,10 @@ function signalNodeOf(value: unknown): { kind?: string; debugName?: string } | n
   return null;
 }
 
-function linkedSignalReaders(ng: SignalDebugNg, instance: object): Map<string, () => unknown> {
+function linkedSignalReaders<H>(
+  ng: SignalDebugNg<H>,
+  instance: object,
+): Map<string, () => unknown> {
   const readers = new Map<string, () => unknown>();
   for (const key of read(() => Object.keys(instance), [] as string[])) {
     const value = read(() => (instance as Record<string, unknown>)[key], undefined);
@@ -111,9 +85,10 @@ function linkedSignalReaders(ng: SignalDebugNg, instance: object): Map<string, (
   return readers;
 }
 
-function graphFor(
-  ng: SignalDebugNg,
-  el: Element,
+function graphFor<H extends object>(
+  ng: SignalDebugNg<H>,
+  el: H,
+  tree: HostTree<H>,
   source: NonNullable<SignalGraph['source']>,
 ): SignalGraph | null {
   const instance = read(() => ng.getComponent?.(el), null);
@@ -144,7 +119,7 @@ function graphFor(
   const edges = (raw.edges ?? []).filter(
     (e) => e.consumer < kept.length && e.producer < kept.length,
   );
-  const tag = el.tagName.toLowerCase();
+  const tag = tree.tag(el);
   return {
     nodes,
     edges,
@@ -153,31 +128,31 @@ function graphFor(
       id: elementId(el),
       name: className((instance as { constructor: new () => unknown }).constructor),
       tag,
-      path: hostPath(ng, el),
+      path: hostPath(ng, el, tree),
     },
     source,
   };
 }
 
-export function collectSignalGraph(
-  ng: SignalDebugNg | undefined,
+export function collectSignalGraph<H extends object = Element>(
+  ng: SignalDebugNg<H> | undefined,
   target: SignalTarget = null,
-  doc: Document = document,
+  tree: HostTree<H> = documentTree(),
 ): SignalGraph | null {
   if (!ng?.ɵgetSignalGraph || !ng.getInjector || !ng.getComponent) return null;
-  const picked = resolveTarget(target, doc);
+  const picked = resolveTarget(target, tree);
   if (isComponentHost(ng, picked)) {
-    const graph = graphFor(ng, picked, 'selected');
+    const graph = graphFor(ng, picked, tree, 'selected');
     if (graph) return graph;
   }
-  const routed = routedComponent(ng, doc);
+  const routed = routedComponent(ng, tree);
   if (routed) {
-    const graph = graphFor(ng, routed, 'routed');
+    const graph = graphFor(ng, routed, tree, 'routed');
     if (graph) return graph;
   }
   let empty: SignalGraph | null = null;
-  for (const host of componentHosts(ng, doc, MAX_FALLBACK_HOSTS)) {
-    const graph = graphFor(ng, host, 'root');
+  for (const host of componentHosts(ng, tree, MAX_FALLBACK_HOSTS)) {
+    const graph = graphFor(ng, host, tree, 'root');
     if (graph?.nodes.length) return graph;
     empty ??= graph;
   }

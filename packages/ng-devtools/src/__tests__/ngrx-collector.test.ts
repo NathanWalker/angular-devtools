@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { domTree } from '../host-tree.ts';
 import { createNgrxCollector } from '../ngrx-collector.ts';
 import { diff, serialize } from '../ngrx-shared.ts';
 import { mergeNgrxReport, nameStore, ngrxStateOf, type NgrxPages } from '../rpc/ngrx-tools.ts';
@@ -53,7 +54,7 @@ class App {
   }
 }
 
-function setup() {
+function setup(tree = domTree()) {
   document.body.innerHTML = '<app-root ng-version="22"></app-root>';
   const root = document.querySelector('app-root')!;
   const store = new SignalStore();
@@ -76,7 +77,7 @@ function setup() {
     ɵgetInjectorProviders: () => [],
   };
   const onChange = vi.fn();
-  const collector = createNgrxCollector(() => ng as any, onChange);
+  const collector = createNgrxCollector(() => ng as any, onChange, tree);
   return { store, app, rootEnv, collector, onChange };
 }
 
@@ -214,8 +215,9 @@ describe('ngrx collector', () => {
   });
 
   it('only rescans the page when asked to rediscover stores', () => {
-    const { store, collector } = setup();
-    const spy = vi.spyOn(document, 'createTreeWalker');
+    const tree = domTree();
+    const { store, collector } = setup(tree);
+    const spy = vi.spyOn(tree, 'roots');
     collector.collect();
     expect(spy).toHaveBeenCalledTimes(1);
     store.setQuery('a');
