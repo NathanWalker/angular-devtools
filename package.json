@@ -21,6 +21,7 @@
     "devtools:standalone": "node bin.mjs dev",
     "devtools:mcp": "node bin.mjs mcp",
     "devtools:report": "node bin.mjs build --outDir dist-report",
+    "devtools:nativescript": "cd app-nativescript && node ../bin.mjs dev --host 0.0.0.0 --no-auth",
     "devtools:build-pkg": "pnpm --filter @santoshyadavdev/ng-devtools build",
     "devtools:publish": "pnpm --filter @santoshyadavdev/ng-devtools publish --access public",
     "extension:build": "pnpm devtools:build && rm -rf extension/ui && cp -r dist/devtools-ui extension/ui",

@@ -374,9 +374,13 @@ Then open `http://localhost:9999/` for the UI, or point an MCP client at
 showcase component (signals, a computed, an effect and a component-level
 provider). Tested on the iOS simulator; Android has not been verified yet.
 
+The app maps `@santoshyadavdev/ng-devtools/*` to the package's build output in
+`packages/ng-devtools/dist`, so build the package first.
+
 ```sh
+pnpm devtools:build-pkg      # builds packages/ng-devtools/dist, UI included
 pnpm devtools:nativescript   # devtools server scanning app-nativescript/src
-cd app-nativescript && ns debug ios --no-hmr
+cd app-nativescript && npm install && ns debug ios --no-hmr
 ```
 
 ## Demo App

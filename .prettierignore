@@ -4,3 +4,7 @@ dist
 pnpm-lock.yaml
 extension/ui
 docs/privacy-policy.html
+app-nativescript/platforms
+app-nativescript/hooks
+app-nativescript/App_Resources
+app-nativescript/package-lock.json
