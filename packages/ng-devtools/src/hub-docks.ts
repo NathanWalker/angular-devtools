@@ -12,7 +12,7 @@ const DOCKS: { view: HubView; title: string; icon: string; soon?: boolean }[] = 
   { view: 'angular', title: 'Angular', icon: 'logos:angular-icon' },
   { view: 'ngrx', title: 'NgRx', icon: NGRX_ICON },
   { view: 'analog', title: 'Analog', icon: 'logos:analog' },
-  { view: 'nativescript', title: 'NativeScript', icon: 'logos:nativescript', soon: true },
+  { view: 'nativescript', title: 'NativeScript', icon: 'logos:nativescript' },
   { view: 'capacitor', title: 'Capacitor', icon: 'logos:capacitorjs-icon', soon: true },
 ];
 
