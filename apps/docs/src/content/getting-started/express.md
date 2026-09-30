@@ -91,13 +91,13 @@ With `ws: {sidecar: true}`, the WebSocket runs on its own port, picked automatic
 
 `initNgDevtoolsHub()` accepts the options of `initHub()` from `@devframes/hub`, apart from `devframes` and `ui`. These are the ones you are most likely to set:
 
-| Option           | Default           | What it does                                                                                  |
-| ---------------- | ----------------- | --------------------------------------------------------------------------------------------- |
-| `base`           | `'/__devframes/'` | Where the hub is mounted. The devtools panel lives at `<base>ng-devtools/`.                   |
-| `ws`             |                   | `false` uses server-sent events only. `{ sidecar: true }` runs the WebSocket on its own port. |
-| `auth`           | on                | `false` turns off the one-time code.                                                          |
-| `allowedOrigins` | loopback origins  | Extra origins allowed to open the WebSocket. `false` turns the origin check off.              |
-| `mcp`            | `'auto'`          | Mounts the MCP endpoint at `<base>__mcp` once agent tools exist.                              |
+| Option           | Default           | What it does                                                                                                                                                                                                                   |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `base`           | `'/__devframes/'` | Where the hub is mounted. The devtools panel lives at `<base>ng-devtools/`.                                                                                                                                                    |
+| `ws`             |                   | `false` uses server-sent events only. `{ sidecar: true }` runs the WebSocket on its own port.                                                                                                                                  |
+| `auth`           | on                | `false` turns off the one-time code.                                                                                                                                                                                           |
+| `allowedOrigins` | loopback origins  | Extra origins allowed to open the WebSocket. `false` turns the origin check off.                                                                                                                                               |
+| `mcp`            | a bearer token    | Mounts the MCP endpoint at `<base>__mcp` and asks for a bearer token. With `auth: false` the default is `'auto'`: it mounts once agent tools exist and asks for no token. See [Send a token](/agents/mcp-server#send-a-token). |
 
 ### Access control
 

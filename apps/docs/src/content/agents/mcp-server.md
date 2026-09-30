@@ -104,11 +104,37 @@ If you mount the devtools panel without the hub, at `/__ng-devtools/`, the endpo
 
 The header value is the origin of your dev server. Every example below sets it.
 
+### Send a token
+
+If the hub asks for the one-time code, the HTTP endpoint also asks for a bearer token. Requests without the right token get `401`.
+
+| Setup                                   | Token required                                                                                   |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [Express hub](/getting-started/express) | Yes, unless you pass `auth: false` or your own `mcp` option.                                     |
+| [Vite plugin](/getting-started/vite)    | Only when the one-time code is on. See the plugin's [`auth` option](/getting-started/vite#auth). |
+
+The hub prints a generated token in the terminal when it starts. The token changes on every restart. To keep the same token across restarts, set `NG_DEVTOOLS_MCP_TOKEN` in the environment of the server. The hub then uses that value and prints nothing.
+
+Send the token in an `Authorization: Bearer <token>` header, next to the `Origin` header. If your setup needs no token, leave the `Authorization` header out.
+
+The stdio server never needs a token.
+
 ### Add the HTTP endpoint to your client
 
-```bash group="http" name="Claude Code" active
-claude mcp add --transport http ng-devtools http://localhost:4000/__devframes/__mcp \
-  --header "Origin: http://localhost:4000"
+```json group="http" name="Claude Code" active
+// .mcp.json
+{
+  "mcpServers": {
+    "ng-devtools": {
+      "type": "http",
+      "url": "http://localhost:4000/__devframes/__mcp",
+      "headers": {
+        "Authorization": "Bearer ${NG_DEVTOOLS_MCP_TOKEN}",
+        "Origin": "http://localhost:4000"
+      }
+    }
+  }
+}
 ```
 
 ```json group="http" name="Cursor"
@@ -117,7 +143,10 @@ claude mcp add --transport http ng-devtools http://localhost:4000/__devframes/__
   "mcpServers": {
     "ng-devtools": {
       "url": "http://localhost:4000/__devframes/__mcp",
-      "headers": {"Origin": "http://localhost:4000"}
+      "headers": {
+        "Authorization": "Bearer ${env:NG_DEVTOOLS_MCP_TOKEN}",
+        "Origin": "http://localhost:4000"
+      }
     }
   }
 }
@@ -126,15 +155,28 @@ claude mcp add --transport http ng-devtools http://localhost:4000/__devframes/__
 ```json group="http" name="VS Code"
 // .vscode/mcp.json
 {
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "ng-devtools-token",
+      "description": "ng-devtools MCP token",
+      "password": true
+    }
+  ],
   "servers": {
     "ng-devtools": {
       "type": "http",
       "url": "http://localhost:4000/__devframes/__mcp",
-      "headers": {"Origin": "http://localhost:4000"}
+      "headers": {
+        "Authorization": "Bearer ${input:ng-devtools-token}",
+        "Origin": "http://localhost:4000"
+      }
     }
   }
 }
 ```
+
+The Claude Code and Cursor examples read the token from `NG_DEVTOOLS_MCP_TOKEN`, so set the same value for the server and the client. VS Code asks for the token the first time it starts the server.
 
 ### Open the app in a browser
 

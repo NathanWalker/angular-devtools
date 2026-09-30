@@ -107,7 +107,9 @@ The CLI server binds to `localhost` and asks for a one-time code. `--host` chang
 
 ### MCP endpoint
 
-The HTTP MCP endpoint answers only requests from a loopback address that carry a loopback `Origin` header. See [MCP server](/agents/mcp-server).
+The HTTP MCP endpoint answers only requests from a loopback address that carry a loopback `Origin` header.
+
+While the one-time code is on, the endpoint also asks for a bearer token. That is the Express hub by default, and the Vite plugin when its code is on. The hub prints a generated token when it starts. Set `NG_DEVTOOLS_MCP_TOKEN` to choose the token yourself. Requests without the right `Authorization: Bearer <token>` header get `401`. The stdio server needs no token. See [Send a token](/agents/mcp-server#send-a-token).
 
 ### Chrome extension
 

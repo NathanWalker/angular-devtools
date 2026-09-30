@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -10,6 +11,8 @@ import pkg from '../package.json' with { type: 'json' };
 const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 223 236"><path fill="#F5A524" d="m222.077 39.192-8.019 125.923L137.387 0l84.69 39.192Zm-53.105 162.825-57.933 33.056-57.934-33.056 11.783-28.556h92.301l11.783 28.556ZM111.039 62.675l30.357 73.803H80.681l30.358-73.803ZM7.937 165.115 0 39.192 84.69 0 7.937 165.115Z"/></svg>`;
 
 export const NG_DEVTOOLS_HUB_BASE = DEVFRAMES_HUB_BASE;
+
+const NG_DEVTOOLS_MCP_TOKEN_ENV = 'NG_DEVTOOLS_MCP_TOKEN';
 
 export type NgDevtoolsHubOptions = Partial<Omit<InitHubOptions, 'devframes' | 'ui'>>;
 
@@ -41,12 +44,30 @@ function hubUi() {
   };
 }
 
+function mcpToken(): string {
+  const fromEnv = process.env[NG_DEVTOOLS_MCP_TOKEN_ENV];
+  if (fromEnv) return fromEnv;
+  const token = randomBytes(24).toString('base64url');
+  console.log(
+    `\n  ng-devtools MCP token: ${token}\n` +
+      `  HTTP MCP clients send it as "Authorization: Bearer <token>".\n` +
+      `  Set ${NG_DEVTOOLS_MCP_TOKEN_ENV} to keep it the same across restarts.\n`,
+  );
+  return token;
+}
+
+function hubMcpFor(options: NgDevtoolsHubOptions): InitHubOptions['mcp'] {
+  if (options.mcp !== undefined || options.auth === false) return options.mcp;
+  return { authorization: mcpToken() };
+}
+
 export function initNgDevtoolsHub(options: NgDevtoolsHubOptions = {}) {
   return initHub({
     name: 'ng-devtools',
     version: pkg.version,
     base: NG_DEVTOOLS_HUB_BASE,
     ...options,
+    mcp: hubMcpFor(options),
     devframes: [ngDevtools],
     ui: hubUi(),
   });
