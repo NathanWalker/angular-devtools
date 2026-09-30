@@ -15,16 +15,16 @@ cd angular-devtools
 pnpm install
 ```
 
-## Project Structure
+## Project structure
 
-```
+```text
 app/                          # Devtools UI SPA (Angular + Vite)
   src/app.ts                  # Root component with tab navigation
-  src/pages/                  # Dashboard, Components, Routes, Signals, Injectors, Store, Forms
+  src/pages/                  # Dashboard, Components, Routes, Signals, Injectors, Store, Forms, Pipes, SSR & HTTP, Analog
   vite.config.ts              # Vite config with Analog Angular plugin
 packages/
   ng-devtools/                # Publishable npm package
-    src/devframe.ts           # defineDevframe() — tool definition
+    src/devframe.ts           # defineDevframe(), the tool definition
     src/overlay.ts            # Client script running in user's page
     src/rpc/                  # Node-side RPC functions
 extension/                    # Chrome DevTools extension
@@ -47,29 +47,33 @@ pnpm start
 pnpm extension:build
 ```
 
-## Making Changes
+## Make changes
 
-### Adding a new RPC function
+### Add an RPC function
 
 1. Create the function in `packages/ng-devtools/src/rpc/`
 2. Register it in `packages/ng-devtools/src/devframe.ts`
 3. Call it from the UI in `app/src/pages/`
 
-### Adding a new tab
+### Add a tab
 
 1. Create a component in `app/src/pages/`
 2. Import and add it to `app/src/app.ts` (imports array, tabs array, template switch)
 3. Add a card to `app/src/pages/dashboard.ts`
 
-### Adding agent tools
+### Add agent tools
 
 Add `agent: { description }` to any RPC function, or use `ctx.agent.registerTool()` in the devframe setup.
 
-## Code Style
+## Documentation
+
+The docs site lives in `apps/docs`. Run it with `pnpm docs:dev`. Before you change a page, read the [writing guide](./apps/docs/src/content/contributing/writing-docs.md). Coding agents get the same rules from the `devtools-docs` skill in `.claude/skills`.
+
+## Code style
 
 - Follow the conventions in `AGENTS.md`
-- Use `signal()`, `computed()`, `input()`, `output()` — not decorators
-- Use `@if`/`@for`/`@switch` control flow — not structural directives
+- Use `signal()`, `computed()`, `input()`, `output()`, not decorators
+- Use `@if`/`@for`/`@switch` control flow, not structural directives
 - Keep components small with inline templates where practical
 
 ## Testing
@@ -81,7 +85,7 @@ pnpm typecheck       # host app + specs, devtools UI, devtools package + its tes
 pnpm format:check
 ```
 
-## Submitting a PR
+## Submit a pull request
 
 1. Fork and create a branch from `main`
 2. Make your changes

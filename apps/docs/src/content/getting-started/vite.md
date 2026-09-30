@@ -1,0 +1,182 @@
+---
+title: Vite and Analog
+description: Add the devtools Vite plugin to an Analog app.
+---
+
+<ngmd-hero title="Vite and Analog" logo="/logos/vite.svg" gradient>
+  One plugin next to <code>analog()</code>, one import in <code>main.ts</code>. The hub mounts on the Vite dev server.
+</ngmd-hero>
+
+# Vite and Analog
+
+For *Analog apps, add the *Vite plugin next to `analog()` and load the overlay in `main.ts`. The plugin mounts the devtools hub on the Vite dev server.
+
+## Setup at a glance
+
+<ngmd-workflow>
+  <ngmd-step title="Install the package">
+    Add <code>&#64;santoshyadavdev/ng-devtools</code> and <code>devframe</code>. See <a href="/getting-started/installation">Installation</a>.
+  </ngmd-step>
+  <ngmd-step title="Add the plugin">
+    Register <code>ngDevtools()</code> after <code>analog()</code> in <code>vite.config.ts</code>.
+  </ngmd-step>
+  <ngmd-step title="Load the overlay">
+    Import the overlay in <code>src/main.ts</code> when <code>import.meta.env.DEV</code> is true.
+  </ngmd-step>
+  <ngmd-step title="Open the devtools">
+    Start the dev server and click the amber button, or open <code>/__devframes/</code>.
+  </ngmd-step>
+</ngmd-workflow>
+
+## Add the plugin
+
+### Register it in `vite.config.ts`
+
+```ts {3,7}
+// vite.config.ts
+import analog from '@analogjs/platform';
+import ngDevtools from '@santoshyadavdev/ng-devtools/vite';
+import {defineConfig} from 'vite';
+
+export default defineConfig({
+  plugins: [analog(), ngDevtools()],
+});
+```
+
+### Load the overlay
+
+The plugin does not inject the overlay. Your app imports it in `main.ts`:
+
+```ts {7}
+// src/main.ts
+import {bootstrapApplication} from '@angular/platform-browser';
+import {App} from './app/app';
+import {appConfig} from './app/app.config';
+
+bootstrapApplication(App, appConfig).then(() => {
+  if (import.meta.env.DEV) void import('@santoshyadavdev/ng-devtools/overlay');
+});
+```
+
+`import.meta.env.DEV` is false in `vite build`, so the overlay stays out of your production bundle.
+
+### Where to find it
+
+| What              | Where                                  |
+| ----------------- | -------------------------------------- |
+| Floating button   | Bottom-right corner of your page       |
+| Full-page viewer  | `/__devframes/` on the Vite dev server |
+| HTTP MCP endpoint | `/__devframes/__mcp`                   |
+
+## What the plugin does
+
+### Dev server only
+
+The plugin applies to `vite serve` only. `vite build` is not affected, so nothing from the plugin reaches your production output.
+
+### Mounts the hub
+
+It mounts the devtools hub on the Vite dev server. The WebSocket shares Vite's HTTP server when it can. Otherwise it runs on its own port.
+
+### Records Analog server activity
+
+It records Analog page renders, `load()` fetches, server functions and API calls for the [Analog inspector](/inspectors/analog). The `apiPrefix` option tells it which requests are API calls.
+
+### Answers only your machine
+
+The plugin only answers requests from a loopback address (any `127.x.x.x` address or `::1`). Other requests to the devtools get `403` with the message "ng-devtools only answers requests from this machine." WebSocket upgrades follow the same rules.
+
+The Vite plugin turns the one-time code off. The loopback and origin checks take its place. [Access and redaction](/security) covers both checks.
+
+## Options
+
+```ts
+// vite.config.ts
+ngDevtools({
+  base: '/__devframes/',
+  apiPrefix: 'api',
+  allowedOrigins: ['https://tunnel.example'],
+});
+```
+
+| Option           | Default                          | What it does                                                             |
+| ---------------- | -------------------------------- | ------------------------------------------------------------------------ |
+| `base`           | `'/__devframes/'`                | Where the hub is mounted.                                                |
+| `apiPrefix`      | Analog's `apiPrefix`, or `'api'` | The prefix of your server routes, used to classify API calls.            |
+| `allowedOrigins` | none                             | Extra exact origins allowed to reach the devtools, for example a tunnel. |
+
+### `base`
+
+Change `base` if `/__devframes/` clashes with a route of your own. The overlay looks for `/__devframes/ng-devtools/` and `/__ng-devtools/` by default, so a custom base also needs a custom overlay path. See [A custom mount path](/getting-started/overlay#a-custom-mount-path).
+
+### `apiPrefix`
+
+The plugin reads `apiPrefix` from your Analog config. Set it here only when the detection is wrong.
+
+### `allowedOrigins`
+
+Each entry is an exact origin, such as `https://tunnel.example`. The request itself must still come from a loopback address.
+
+## Hostnames other than localhost
+
+### Local hostnames
+
+If you open the dev server through another hostname that points to your machine (for example `myapp.test`), list it in Vite's `server.allowedHosts`. The devtools trust it too.
+
+```ts {7}
+// vite.config.ts
+import analog from '@analogjs/platform';
+import ngDevtools from '@santoshyadavdev/ng-devtools/vite';
+import {defineConfig} from 'vite';
+
+export default defineConfig({
+  server: {allowedHosts: ['myapp.test']},
+  plugins: [analog(), ngDevtools()],
+});
+```
+
+### Tunnels and other origins
+
+Add other origins with `allowedOrigins`:
+
+```ts
+// vite.config.ts
+ngDevtools({allowedOrigins: ['https://tunnel.example']});
+```
+
+## Angular CLI apps
+
+<ngmd-alert severity="important">
+  The Angular CLI dev server does not accept Vite plugins. For an Angular CLI app, mount the hub in your Express server instead. See <a href="/getting-started/express">Angular CLI and Express</a>.
+</ngmd-alert>
+
+## FAQ
+
+<ngmd-accordion>
+  <ngmd-accordion-item title="Does the plugin change my production build?" open>
+    No. It applies to the dev server only, and the overlay import is guarded by <code>import.meta.env.DEV</code>.
+  </ngmd-accordion-item>
+  <ngmd-accordion-item title="Why do I get a 403 from the devtools?">
+    The request did not come from your machine, or its origin is not trusted. Open the app on <code>localhost</code>, list your hostname in <code>server.allowedHosts</code>, or add the origin to <code>allowedOrigins</code>.
+  </ngmd-accordion-item>
+  <ngmd-accordion-item title="The Analog tab shows no server calls">
+    The plugin records server calls made through the Vite dev server. Check that the plugin is registered and that <code>apiPrefix</code> matches your server routes. The <a href="/guides/analog">Analog guide</a> walks through a full setup.
+  </ngmd-accordion-item>
+</ngmd-accordion>
+
+## Where to next
+
+<ngmd-card-grid columns="2">
+  <ngmd-card icon="rocket" title="Set up Analog" link="/guides/analog" cta="Read the guide">
+    A full Analog setup, including the demo in this repository.
+  </ngmd-card>
+  <ngmd-card icon="layers" title="Analog inspector" link="/inspectors/analog" cta="Inspector">
+    File routes, server calls, render modes, content and lint.
+  </ngmd-card>
+  <ngmd-card icon="zap" title="Browser overlay" link="/getting-started/overlay" cta="How it connects">
+    What the overlay sends, and how it finds the server.
+  </ngmd-card>
+  <ngmd-card icon="shield" title="Access and redaction" link="/security" cta="Security">
+    The loopback check and the origin rules in detail.
+  </ngmd-card>
+</ngmd-card-grid>

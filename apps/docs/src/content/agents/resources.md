@@ -1,0 +1,111 @@
+---
+title: Resources
+description: Live state an agent can read as MCP resources, and the shared-state keys behind them.
+---
+
+<ngmd-hero title="Resources" logo="https://cdn.simpleicons.org/modelcontextprotocol/71717A" gradient>
+  Six JSON resources hold what the connected pages reported. Shared-state keys cover the rest.
+</ngmd-hero>
+
+# Resources
+
+Resources hold the live data the connected pages reported. An agent reads them when it wants the raw state instead of a tool's summary.
+
+## Read a resource
+
+### Connect over HTTP
+
+Resources are empty when no page is connected. Read them through the [HTTP endpoint](/agents/mcp-server#connect-over-http), with the app open in a browser.
+
+<ngmd-alert severity="warning">
+  Over stdio, no page ever connects. Every resource stays empty.
+</ngmd-alert>
+
+### Resource URIs
+
+Clients see each resource at a `devframe://resource/` URI with the id encoded. For example, `ng-devtools:component-tree` is served at:
+
+```text
+devframe://resource/ng-devtools%3Acomponent-tree
+```
+
+Each one returns JSON.
+
+## Available resources
+
+| Resource                     | Name                   | Content                         |
+| ---------------------------- | ---------------------- | ------------------------------- |
+| `ng-devtools:component-tree` | Angular Component Tree | Live component hierarchy        |
+| `ng-devtools:signal-graph`   | Angular Signal Graph   | Signal dependency graph         |
+| `ng-devtools:injector-tree`  | Angular Injector Tree  | DI injector hierarchy           |
+| `ng-devtools:ngrx-store`     | NgRx Store State       | Live NgRx stores and change log |
+| `ng-devtools:forms`          | Angular Forms          | Live forms and recent changes   |
+| `ng-devtools:router`         | Angular Router         | Live route and navigations      |
+
+### component-tree
+
+The component instances of each page, under `pages[pageId].roots`. Each node has an instance id, class name, host tag and the directives on its host. `detail` holds the live inputs, outputs, listeners, change detection, encapsulation and injected dependencies of the instance selected in the panel. `nodes` repeats the roots of the most recent page.
+
+The instance ids here are what `highlight` accepts.
+
+### signal-graph
+
+The signal graph of each page, under `pages[pageId]`. `graph` is the latest one. It holds the nodes (`signal`, `computed`, `effect`, `linkedSignal`), producer to consumer edges, the component it belongs to, and recent value history per node. Only signals a template or an effect has read appear.
+
+### injector-tree
+
+The injector hierarchy the page last reported, with the providers at each level.
+
+### ngrx-store
+
+Each `@ngrx/signals` store on the page: state, computed values, methods, and the component fields that reference it. It also holds the `@ngrx/store` state and the change log, with a state diff per entry. The log records method calls, `patchState` writes and dispatched actions.
+
+### forms
+
+Every form the page reported (Signal Forms, reactive and template-driven), with each field's value, status, touched, dirty and errors, plus recent changes.
+
+<ngmd-callout type="info" title="Large forms return a summary">
+  When the data is too large, the resource returns a summary per form (status, field count, error count) and points to <code>inspect-forms</code>.
+</ngmd-callout>
+
+### router
+
+The active route tree (params, data, guards, resolvers) and recent navigations of each page. When the data is too large, the resource returns the URL and recent navigations of each page, and points to `inspect-route`, `explain-navigation` and `list-routes`.
+
+## Shared state
+
+The devtools keep their live data in shared-state keys. Every key is also listed as a resource, at `devframe://state/<key>` with the key encoded.
+
+### Keys
+
+This table covers the data that has no resource of its own.
+
+| Key                      | Content                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `ng-devtools:http`       | The SSR & HTTP timeline, fault rules, hydration data and TransferState payload |
+| `ng-devtools:pipe-usage` | Live pipe instances and recorded calls                                         |
+| `ng-devtools:analog`     | Analog page data and the server call log                                       |
+| `ng-devtools:routes`     | Declared but not filled. Use `get-routes` or `list-routes` instead.            |
+
+The list also includes the keys behind the six resources above (`ng-devtools:component-tree`, `ng-devtools:forms`, and so on).
+
+### Read a key with a tool
+
+Some clients only use tools. The `devframe_state_read` tool reads the same keys:
+
+<ngmd-workflow>
+  <ngmd-step title="List the keys">
+    Call <code>devframe_state_read</code> without arguments. It returns every key.
+  </ngmd-step>
+  <ngmd-step title="Read one">
+    Call it again with <code>key</code>, for example <code>ng-devtools:http</code>. It returns the value as JSON.
+  </ngmd-step>
+</ngmd-workflow>
+
+## Where to next
+
+<ngmd-pill-row>
+  <ngmd-pill href="/agents/tools" title="Tools"></ngmd-pill>
+  <ngmd-pill href="/agents/mcp-server" title="MCP server"></ngmd-pill>
+  <ngmd-pill href="/security" title="Security"></ngmd-pill>
+</ngmd-pill-row>

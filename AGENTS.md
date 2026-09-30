@@ -61,8 +61,13 @@ You are an expert in TypeScript, Angular, and scalable web application developme
 ## Serving Locally
 
 - **Demo app (SSR):** `pnpm build --configuration development && node dist/angular-devtools/server/server.mjs` → http://localhost:4000
-- **Devtools SPA (hot reload):** `pnpm devtools:dev` → http://localhost:5173 (requires the SSR server running for RPC data)
+- **Devtools SPA (hot reload):** `pnpm devtools:dev` → http://localhost:5173 (serves its own RPC, so source-scan data works; live tabs need an app page connected, so use the SSR server on 4000 for those)
 - **Demo app (SPA, no SSR):** `pnpm start` → http://localhost:4200 (runs `ng serve` with SSR and hot reload; devtools popup + RPC work without a separate server)
 - The devtools popup appears on the demo app page; click it to open the inspector panel
 - Changes to `app/src/` (devtools SPA) are visible live via `pnpm devtools:dev`; the SSR server serves the SPA built into `packages/ng-devtools/dist/public` (or the npm-published copy when it has not been built), so run `pnpm devtools:build-pkg` to refresh it
 - To publish: update the version in `packages/ng-devtools/package.json`, then run `pnpm devtools:publish` (the package build bundles the SPA)
+
+## Documentation
+
+- Use the `devtools-docs` skill (`.claude/skills/devtools-docs`) for any change in `apps/docs/src/content`, the docs home page or `README.md`.
+- The human-readable version is `apps/docs/src/content/contributing/writing-docs.md`.
