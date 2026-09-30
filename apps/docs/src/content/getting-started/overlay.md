@@ -84,7 +84,7 @@ It also adds the [floating button](/getting-started/popup-and-hub). With the hub
 
 ### Snapshots and events
 
-On Angular 20 and later, the overlay reads the page about 250 ms after Angular runs change detection. It also reads it every 4 seconds as a heartbeat. On older versions, it reads the page every 3 seconds instead.
+On Angular 20 and later, the overlay reads the page about 250 ms after Angular runs change detection. It also reads it every 4 seconds as a heartbeat. On older versions, it reads the page every 3 seconds instead. Change that interval with [`limits.refreshMs`](/getting-started/configuration#limits).
 
 Each read skips data that did not change. Router events are sent as they happen.
 

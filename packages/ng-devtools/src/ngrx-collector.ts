@@ -176,6 +176,7 @@ export function createNgrxCollector(
   getNg: () => NgrxDebugNg | undefined,
   onChange: () => void,
   doc: Document = document,
+  maxLog = MAX_LOG,
 ): NgrxCollector {
   const ids = new WeakMap<object, string>();
   let nextId = 0;
@@ -197,7 +198,7 @@ export function createNgrxCollector(
     const full = { ...entry, seq: ++seq };
     log.push(full);
     saved.set(full.seq, keep);
-    while (log.length > MAX_LOG) saved.delete(log.shift()!.seq);
+    while (log.length > maxLog) saved.delete(log.shift()!.seq);
     onChange();
     return full;
   };

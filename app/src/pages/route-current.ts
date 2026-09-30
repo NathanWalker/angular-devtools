@@ -1,6 +1,7 @@
 import { Component, computed, input, signal } from '@angular/core';
 import { JsonPipe } from '@angular/common';
 import type { DevframeRpcClient } from 'devframe/client';
+import { actionAllowed, actionBlockedMessage } from '../devtools-config';
 import {
   SHARED_STYLES,
   routerAction,
@@ -41,8 +42,19 @@ interface OutletRow {
           <span class="pending-text"
             >Navigating to <code>{{ pending.url }}</code> (#{{ pending.id }})</span
           >
-          <button type="button" class="small" (click)="abort()">Abort</button>
+          <button
+            type="button"
+            class="small"
+            [disabled]="!navigationAllowed()"
+            [attr.aria-describedby]="navigationAllowed() ? null : 'route-current-writes-off'"
+            (click)="abort()"
+          >
+            Abort
+          </button>
         </div>
+        @if (!navigationAllowed()) {
+          <p id="route-current-writes-off" class="muted">{{ navigationOff }}</p>
+        }
       }
       @if (message()) {
         <p class="muted" role="status">{{ message() }}</p>
@@ -296,6 +308,8 @@ interface OutletRow {
 export class RouteCurrent {
   page = input.required<RouterPage>();
   rpc = input<DevframeRpcClient | null>(null);
+  readonly navigationAllowed = computed(() => actionAllowed(this.rpc(), 'router'));
+  protected readonly navigationOff = actionBlockedMessage('router');
 
   readonly message = signal('');
 

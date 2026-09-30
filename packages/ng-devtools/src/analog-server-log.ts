@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { isCustomSecretKey } from './forms-privacy.ts';
 
 const SECRET_WORDS =
   /^(password|passwd|passphrase|passcode|pass|pwd|secret|token|otp|pin|cvv|cvc|ssn|iban|card|credential|cookie|session|authorization|auth|apikey|jwt)s?$/;
@@ -95,7 +96,8 @@ function redactJson(value: unknown, depth = 0): unknown {
   if (Array.isArray(value)) return value.slice(0, 50).map((item) => redactJson(item, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 50)) {
-    out[key] = isSecretKey(key) ? '[redacted]' : redactJson(item, depth + 1);
+    out[key] =
+      isSecretKey(key) || isCustomSecretKey(key) ? '[redacted]' : redactJson(item, depth + 1);
   }
   return out;
 }

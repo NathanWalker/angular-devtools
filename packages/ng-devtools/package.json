@@ -16,6 +16,7 @@
   "exports": {
     ".": "./src/devframe.ts",
     "./devframe": "./src/devframe.ts",
+    "./config": "./src/config.ts",
     "./overlay": "./src/overlay.ts",
     "./popup": "./src/popup.ts",
     "./http": "./src/http.ts",
@@ -27,6 +28,7 @@
     "exports": {
       ".": "./dist/devframe.mjs",
       "./devframe": "./dist/devframe.mjs",
+      "./config": "./dist/config.mjs",
       "./overlay": "./dist/overlay.mjs",
       "./popup": "./dist/popup.mjs",
       "./http": "./dist/http.mjs",

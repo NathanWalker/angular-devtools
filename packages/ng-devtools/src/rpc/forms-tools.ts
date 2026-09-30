@@ -396,18 +396,18 @@ export function isPageReport(value: unknown): value is PageReport {
 
 type Pages = Map<string, PageReport & { reportedAt: number }>;
 
-export function currentForms(pages: Pages): FormsState {
-  return stateOf(pages);
+export function currentForms(pages: Pages, maxEvents = MAX_EVENTS): FormsState {
+  return stateOf(pages, maxEvents);
 }
 
-function stateOf(pages: Pages): FormsState {
+function stateOf(pages: Pages, maxEvents: number): FormsState {
   const all = Array.from(pages.values());
   return {
     forms: all.flatMap((page) => page.forms),
     events: all
       .flatMap((page) => page.events)
       .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(-MAX_EVENTS),
+      .slice(-maxEvents),
     reportedAt: all.length ? Math.min(...all.map((page) => page.reportedAt)) : 0,
     instrumented: all.filter((page) => page.instrumented).map((page) => page.pageId),
     setupErrors: all.flatMap((page) =>
@@ -416,7 +416,11 @@ function stateOf(pages: Pages): FormsState {
   };
 }
 
-export function expirePages(pages: Pages, now = Date.now()): FormsState | null {
+export function expirePages(
+  pages: Pages,
+  now = Date.now(),
+  maxEvents = MAX_EVENTS,
+): FormsState | null {
   let expired = false;
   for (const [id, page] of pages) {
     if (now - page.reportedAt > PAGE_EXPIRES_MS) {
@@ -424,11 +428,16 @@ export function expirePages(pages: Pages, now = Date.now()): FormsState | null {
       expired = true;
     }
   }
-  return expired ? stateOf(pages) : null;
+  return expired ? stateOf(pages, maxEvents) : null;
 }
 
-export function mergePageReport(pages: Pages, report: PageReport, now = Date.now()): FormsState {
+export function mergePageReport(
+  pages: Pages,
+  report: PageReport,
+  now = Date.now(),
+  maxEvents = MAX_EVENTS,
+): FormsState {
   pages.set(report.pageId, { ...report, reportedAt: now });
   expirePages(pages, now);
-  return stateOf(pages);
+  return stateOf(pages, maxEvents);
 }

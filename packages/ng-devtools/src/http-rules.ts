@@ -36,6 +36,8 @@ export interface HttpRegistry {
   warnings?: string[];
   /** Set by the devframe server so SSR calls reach the timeline. */
   record?: (call: HttpCall) => void;
+  /** How many calls to keep (`limits.httpCalls`). */
+  maxCalls?: number;
   dispose?: () => void;
 }
 
@@ -114,10 +116,10 @@ const num = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
 /** Validates calls reported over RPC; drops anything malformed. */
-export function sanitizeCalls(input: unknown): HttpCall[] {
+export function sanitizeCalls(input: unknown, max = MAX_CALLS): HttpCall[] {
   if (!Array.isArray(input)) return [];
   const calls: HttpCall[] = [];
-  for (const raw of input.slice(-MAX_CALLS)) {
+  for (const raw of input.slice(-max)) {
     if (!raw || typeof raw !== 'object') continue;
     const c = raw as { [K in keyof HttpCall]?: unknown };
     const id = str(c.id, 40);

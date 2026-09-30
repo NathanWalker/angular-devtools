@@ -90,6 +90,24 @@ describe('watchChangeDetection', () => {
     watcher.stop();
   });
 
+  it('polls on the given interval and keeps the heartbeat fixed once hooked', () => {
+    page('19.2.0');
+    const refresh = vi.fn();
+    const polling = watchChangeDetection({ getNg: () => fakeNg(), refresh, pollMs: 1000 });
+    vi.advanceTimersByTime(3000);
+    expect(refresh).toHaveBeenCalledTimes(3);
+    polling.stop();
+
+    page('22.1.7');
+    refresh.mockClear();
+    const hooked = watchChangeDetection({ getNg: () => fakeNg(), refresh, pollMs: 1000 });
+    vi.advanceTimersByTime(3000);
+    expect(refresh).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    hooked.stop();
+  });
+
   it('does not take the single profiler slot of Angular before v20', () => {
     page('19.2.0');
     const ng = fakeNg();

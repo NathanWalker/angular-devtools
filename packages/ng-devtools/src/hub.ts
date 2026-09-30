@@ -7,16 +7,20 @@ import { DEVFRAMES_HUB_BASE, initHub } from '@devframes/hub/initiate';
 import type { InitHubOptions } from '@devframes/hub/initiate';
 import type { WsOriginRegistry } from 'devframe/rpc/transports/ws-server';
 import { isAllowedOrigin } from 'devframe/utils/origin';
-import ngDevtools from './devframe.ts';
+import { createNgDevtools } from './devframe.ts';
+import { pickNgDevtoolsConfig, type NgDevtoolsConfig } from './config.ts';
 import pkg from '../package.json' with { type: 'json' };
 
 const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 223 236"><path fill="#F5A524" d="m222.077 39.192-8.019 125.923L137.387 0l84.69 39.192Zm-53.105 162.825-57.933 33.056-57.934-33.056 11.783-28.556h92.301l11.783 28.556ZM111.039 62.675l30.357 73.803H80.681l30.358-73.803ZM7.937 165.115 0 39.192 84.69 0 7.937 165.115Z"/></svg>`;
 
 export const NG_DEVTOOLS_HUB_BASE = DEVFRAMES_HUB_BASE;
 
+export type { NgDevtoolsConfig } from './config.ts';
+
 const NG_DEVTOOLS_MCP_TOKEN_ENV = 'NG_DEVTOOLS_MCP_TOKEN';
 
-export type NgDevtoolsHubOptions = Partial<Omit<InitHubOptions, 'devframes' | 'ui'>>;
+export type NgDevtoolsHubOptions = Partial<Omit<InitHubOptions, 'devframes' | 'ui'>> &
+  NgDevtoolsConfig;
 
 function hubUiClientDir(): string | undefined {
   try {
@@ -80,14 +84,15 @@ function hubMcpFor(options: NgDevtoolsHubOptions): InitHubOptions['mcp'] {
 }
 
 export function initNgDevtoolsHub(options: NgDevtoolsHubOptions = {}) {
+  const { config, rest } = pickNgDevtoolsConfig(options);
   return initHub({
     name: 'ng-devtools',
     version: pkg.version,
     base: NG_DEVTOOLS_HUB_BASE,
-    ...options,
-    allowedOrigins: options.allowedOrigins ?? hubDefaultOrigins,
-    mcp: hubMcpFor(options),
-    devframes: [ngDevtools],
+    ...rest,
+    allowedOrigins: rest.allowedOrigins ?? hubDefaultOrigins,
+    mcp: hubMcpFor(rest),
+    devframes: [createNgDevtools(config)],
     ui: hubUi(),
   });
 }

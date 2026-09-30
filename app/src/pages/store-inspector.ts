@@ -3,6 +3,7 @@ import type { DevframeRpcClient } from 'devframe/client';
 import { time } from '../format';
 import { hostPageId } from '../page-id';
 import { rpcCall as call } from '../rpc';
+import { actionAllowed, actionBlockedMessage } from '../devtools-config';
 import { Select, type SelectOption } from '../ui/select';
 import {
   pretty,
@@ -338,10 +339,15 @@ const CLASSIC_KINDS = new Set([
                           <button
                             type="button"
                             class="btn restore"
+                            [disabled]="!canRestore()"
+                            [attr.aria-describedby]="canRestore() ? null : 'store-writes-off'"
                             (click)="confirmSeq.set(selected.seq)"
                           >
                             Restore this state
                           </button>
+                          @if (!canRestore()) {
+                            <p id="store-writes-off" class="hint small">{{ restoreOff }}</p>
+                          }
                         }
                       } @else if (selected.source === 'store') {
                         <p class="hint small">
@@ -1097,6 +1103,8 @@ const CLASSIC_KINDS = new Set([
 })
 export class StoreInspector {
   readonly rpc = input<DevframeRpcClient | null>(null);
+  readonly canRestore = computed(() => actionAllowed(this.rpc(), 'ngrx'));
+  protected readonly restoreOff = actionBlockedMessage('ngrx');
 
   readonly filter = signal('');
   readonly kind = signal<string | null>(null);

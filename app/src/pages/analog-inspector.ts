@@ -11,6 +11,7 @@ import {
 import type { DevframeRpcClient } from 'devframe/client';
 import { time } from '../format';
 import { rpcTry as call } from '../rpc';
+import { actionAllowed, actionBlockedMessage } from '../devtools-config';
 import { Select } from '../ui/select';
 
 interface AnalogRoute {
@@ -619,8 +620,18 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
                   [value]="apiPath()"
                   (input)="apiPath.set($any($event.target).value)"
                 />
-                <button type="submit" class="btn primary">Send</button>
+                <button
+                  type="submit"
+                  class="btn primary"
+                  [disabled]="!canCall()"
+                  [attr.aria-describedby]="canCall() ? null : 'analog-calls-off'"
+                >
+                  Send
+                </button>
               </div>
+              @if (!canCall()) {
+                <p id="analog-calls-off" class="muted">{{ callsOff }}</p>
+              }
               @if (method() !== 'GET') {
                 <label for="api-body">JSON body</label>
                 <textarea
@@ -1819,6 +1830,8 @@ function walk(routes: AnalogRoute[], depth = 0, out: { route: AnalogRoute; depth
 })
 export class AnalogInspector {
   rpc = input<DevframeRpcClient | null>(null);
+  readonly canCall = computed(() => actionAllowed(this.rpc(), 'analog'));
+  protected readonly callsOff = actionBlockedMessage('analog');
 
   readonly kinds: Kind[] = ['all', 'page', 'load', 'fn', 'api'];
   readonly methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];

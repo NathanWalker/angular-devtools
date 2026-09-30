@@ -57,12 +57,13 @@ export function mergeNgrxReport(
   report: NgrxPageReport,
   declarations: NgrxDeclaration[],
   now = Date.now(),
+  maxLog = MAX_LOG,
 ): number {
   const previous = pages.get(report.pageId);
   const keep = previous && previous.session === report.session ? previous.log : [];
   const lastSeq = keep.at(-1)?.seq ?? 0;
   const fresh = report.log.filter((entry: NgrxLogEntry) => entry.seq > lastSeq);
-  const log = [...keep, ...fresh].slice(-MAX_LOG);
+  const log = [...keep, ...fresh].slice(-maxLog);
   pages.set(report.pageId, {
     pageId: report.pageId,
     session: report.session,

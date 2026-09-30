@@ -53,7 +53,7 @@ class App {
   }
 }
 
-function setup() {
+function setup(maxLog?: number) {
   document.body.innerHTML = '<app-root ng-version="22"></app-root>';
   const root = document.querySelector('app-root')!;
   const store = new SignalStore();
@@ -76,7 +76,7 @@ function setup() {
     ɵgetInjectorProviders: () => [],
   };
   const onChange = vi.fn();
-  const collector = createNgrxCollector(() => ng as any, onChange);
+  const collector = createNgrxCollector(() => ng as any, onChange, document, maxLog);
   return { store, app, rootEnv, collector, onChange };
 }
 
@@ -113,6 +113,15 @@ describe('ngrx collector', () => {
     collector.collect();
     store.setQuery('rome');
     expect(collector.logSince(0).filter((entry) => entry.type === 'setQuery')).toHaveLength(1);
+  });
+
+  it('keeps at most the configured number of change log entries', () => {
+    const { store, collector } = setup(10);
+    collector.collect();
+    for (let i = 0; i < 25; i++) store.setQuery(`q${i}`);
+    const log = collector.logSince(0);
+    expect(log).toHaveLength(10);
+    expect(log.at(-1)!.seq).toBe(25);
   });
 
   it('keeps a stable id across collections', () => {
@@ -381,6 +390,8 @@ describe('ngrx tools', () => {
     expect(mergeNgrxReport(pages, report('s1', [entry(2), entry(3)]), [])).toBe(3);
     expect(ngrxStateOf(pages).pages[0].log.map((e) => e.seq)).toEqual([1, 2, 3]);
     expect(mergeNgrxReport(pages, report('s2', [entry(1)]), [])).toBe(1);
+    mergeNgrxReport(pages, report('s3', [1, 2, 3, 4, 5].map(entry)), [], 0, 2);
+    expect(ngrxStateOf(pages).pages[0].log.map((e) => e.seq)).toEqual([4, 5]);
     expect(ngrxStateOf(pages).pages[0]).not.toHaveProperty('session');
   });
 });

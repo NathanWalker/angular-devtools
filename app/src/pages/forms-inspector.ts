@@ -12,6 +12,7 @@ import {
 import { JsonPipe } from '@angular/common';
 import type { DevframeRpcClient } from 'devframe/client';
 import { hostPageId } from '../page-id';
+import { actionAllowed, actionBlockedMessage } from '../devtools-config';
 import { FormsFieldDetail } from './forms-field-detail';
 import { FormsLint, FormsSubmit } from './forms-report';
 import { FormsTimeline } from './forms-timeline';
@@ -217,8 +218,24 @@ function countFields(node: FormFieldNode): number {
 
             <div class="action-bar">
               <div class="actions" role="group" aria-label="Form actions">
-                <button type="button" class="small" (click)="act('touch-all')">Touch all</button>
-                <button type="button" class="small" (click)="act('revalidate')">Revalidate</button>
+                <button
+                  type="button"
+                  class="small"
+                  [disabled]="!canWrite()"
+                  [attr.aria-describedby]="canWrite() ? null : 'forms-writes-off'"
+                  (click)="act('touch-all')"
+                >
+                  Touch all
+                </button>
+                <button
+                  type="button"
+                  class="small"
+                  [disabled]="!canWrite()"
+                  [attr.aria-describedby]="canWrite() ? null : 'forms-writes-off'"
+                  (click)="act('revalidate')"
+                >
+                  Revalidate
+                </button>
                 <button type="button" class="small" (click)="act('focus-first-invalid')">
                   Focus first invalid
                 </button>
@@ -230,6 +247,8 @@ function countFields(node: FormFieldNode): number {
                     type="button"
                     class="small"
                     [class.armed]="armed() === 'restore'"
+                    [disabled]="!canWrite()"
+                    [attr.aria-describedby]="canWrite() ? null : 'forms-writes-off'"
                     [attr.title]="'Restore ' + snapshot()"
                     (click)="confirmAct('restore')"
                   >
@@ -241,6 +260,8 @@ function countFields(node: FormFieldNode): number {
                   type="button"
                   class="small danger"
                   [class.armed]="armed() === 'reset'"
+                  [disabled]="!canWrite()"
+                  [attr.aria-describedby]="canWrite() ? null : 'forms-writes-off'"
                   (click)="confirmAct('reset')"
                 >
                   {{ armed() === 'reset' ? 'Confirm reset' : 'Reset' }}
@@ -249,11 +270,16 @@ function countFields(node: FormFieldNode): number {
                   type="button"
                   class="small primary"
                   [class.armed]="armed() === 'submit'"
+                  [disabled]="!canWrite()"
+                  [attr.aria-describedby]="canWrite() ? null : 'forms-writes-off'"
                   (click)="confirmAct('submit')"
                 >
                   {{ armed() === 'submit' ? 'Confirm submit' : 'Submit' }}
                 </button>
               </div>
+              @if (!canWrite()) {
+                <p id="forms-writes-off" class="muted">{{ writesOff }}</p>
+              }
               <p class="status" role="status">{{ message() }}</p>
             </div>
 
@@ -1189,6 +1215,8 @@ function countFields(node: FormFieldNode): number {
 export class FormsInspector {
   rpc = input<DevframeRpcClient | null>(null);
   focus = input<{ id: string } | null>(null);
+  readonly canWrite = computed(() => actionAllowed(this.rpc(), 'forms'));
+  protected readonly writesOff = actionBlockedMessage('forms');
   readonly focusHandled = output<void>();
 
   readonly forms = signal<CollectedForm[]>([]);

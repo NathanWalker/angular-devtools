@@ -151,6 +151,8 @@ window.__NG_DEVTOOLS_FORMS__ = {mask: ['iban'], unmask: ['passport']};
 
 `[data-ng-devtools="unmask"]` opts a field back in. The `window` setting does the same by key.
 
+You can also name secret and unmasked fields on the server, with the `redaction` option. `redaction.secretNames` adds secret names for forms, the router, components, signals, NgRx and Analog, and `redaction.unmask` joins the `window` list. See [Redaction options](/getting-started/configuration#redaction).
+
 Unmasking also changes what the devtools can write. A key listed in `unmask` on `window` can be written. The element marker only lifts the checks that come from the element (password type, `autocomplete` and mask markers), so a field with a secret-looking name is still not written.
 
 <ngmd-accordion>
@@ -198,7 +200,10 @@ Response previews and TransferState values in the [SSR & HTTP tab](/inspectors/s
     Keep real credentials out of forms and API responses you inspect.
   </ngmd-step>
   <ngmd-step title="Mark extra secrets">
-    Use <code>data-ng-devtools="mask"</code> or <code>window.__NG_DEVTOOLS_FORMS__</code> for fields the secret words miss.
+    Use <code>data-ng-devtools="mask"</code>, <code>window.__NG_DEVTOOLS_FORMS__</code> or <code>redaction.secretNames</code> for fields the secret words miss.
+  </ngmd-step>
+  <ngmd-step title="Block what you don't need">
+    Set <code>agent.readOnly</code> or turn off <code>actions</code> to stop the panel and agents from writing to your app. See <a href="/getting-started/configuration#actions">Configuration</a>.
   </ngmd-step>
 </ngmd-workflow>
 
@@ -207,6 +212,7 @@ Response previews and TransferState values in the [SSR & HTTP tab](/inspectors/s
 <ngmd-pill-row>
   <ngmd-pill href="/getting-started/vite" title="Vite and Analog"></ngmd-pill>
   <ngmd-pill href="/getting-started/express" title="Angular CLI and Express"></ngmd-pill>
+  <ngmd-pill href="/getting-started/configuration" title="Configuration"></ngmd-pill>
   <ngmd-pill href="/inspectors/forms" title="Forms inspector"></ngmd-pill>
   <ngmd-pill href="/agents/mcp-server" title="MCP server"></ngmd-pill>
 </ngmd-pill-row>

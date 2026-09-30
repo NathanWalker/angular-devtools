@@ -61,7 +61,8 @@ function record(call: HttpCall) {
   if (registry.record) return registry.record(call);
   const calls = (registry.calls ??= []);
   calls.push(call);
-  if (calls.length > MAX_CALLS) calls.splice(0, calls.length - MAX_CALLS);
+  const max = registry.maxCalls ?? MAX_CALLS;
+  if (calls.length > max) calls.splice(0, calls.length - max);
 }
 
 let seq = 0;

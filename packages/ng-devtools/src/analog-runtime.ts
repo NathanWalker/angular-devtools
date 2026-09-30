@@ -1,4 +1,5 @@
 import { hasStateScript, scanHydration } from './http-hydration.ts';
+import { isCustomSecretKey } from './forms-privacy.ts';
 import { createHydrationScanner } from './http-overlay.ts';
 
 type AnyRecord = Record<string, any>;
@@ -67,7 +68,7 @@ function redact(value: unknown, depth = 0): unknown {
   if (Array.isArray(value)) return value.slice(0, 20).map((item) => redact(item, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as AnyRecord).slice(0, 30)) {
-    out[key] = SECRET.test(key) ? '[redacted]' : redact(item, depth + 1);
+    out[key] = SECRET.test(key) || isCustomSecretKey(key) ? '[redacted]' : redact(item, depth + 1);
   }
   return out;
 }
@@ -234,7 +235,12 @@ interface Rpc {
   rpc: { call(name: string, ...args: unknown[]): Promise<unknown> };
 }
 
-export function attachAnalog(my: Rpc, pageId: string, getNg: () => AnyRecord | undefined) {
+export function attachAnalog(
+  my: Rpc,
+  pageId: string,
+  getNg: () => AnyRecord | undefined,
+  refreshMs = 3000,
+) {
   const hydrationErrors: string[] = [];
   const scanner = createHydrationScanner();
   let last = '';
@@ -285,7 +291,7 @@ export function attachAnalog(my: Rpc, pageId: string, getNg: () => AnyRecord | u
     push();
   };
   tick();
-  const interval = setInterval(tick, 3000);
+  const interval = setInterval(tick, refreshMs);
   return () => {
     clearInterval(interval);
     subscription?.unsubscribe();

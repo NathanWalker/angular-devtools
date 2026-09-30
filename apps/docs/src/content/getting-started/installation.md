@@ -51,14 +51,15 @@ MCP agent support (`@devframes/agentic`) is included. You don't install it separ
 
 ### Entry points
 
-| Import                                  | Use it for                                                       |
-| --------------------------------------- | ---------------------------------------------------------------- |
-| `@santoshyadavdev/ng-devtools/hub`      | `initNgDevtoolsHub()`, the server middleware for an Express app. |
-| `@santoshyadavdev/ng-devtools/vite`     | The Vite plugin for Analog apps.                                 |
-| `@santoshyadavdev/ng-devtools/overlay`  | The browser script that collects live data from your page.       |
-| `@santoshyadavdev/ng-devtools/popup`    | The floating button and panel on your page.                      |
-| `@santoshyadavdev/ng-devtools/http`     | The HTTP interceptor and hydration hooks for the SSR & HTTP tab. |
-| `@santoshyadavdev/ng-devtools/devframe` | The devframe definition, for custom hosts.                       |
+| Import                                  | Use it for                                                                                         |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `@santoshyadavdev/ng-devtools/hub`      | `initNgDevtoolsHub()`, the server middleware for an Express app.                                   |
+| `@santoshyadavdev/ng-devtools/vite`     | The Vite plugin for Analog apps.                                                                   |
+| `@santoshyadavdev/ng-devtools/overlay`  | The browser script that collects live data from your page.                                         |
+| `@santoshyadavdev/ng-devtools/popup`    | The floating button and panel on your page.                                                        |
+| `@santoshyadavdev/ng-devtools/http`     | The HTTP interceptor and hydration hooks for the SSR & HTTP tab.                                   |
+| `@santoshyadavdev/ng-devtools/config`   | The `NgDevtoolsConfig` type and its defaults. See [Configuration](/getting-started/configuration). |
+| `@santoshyadavdev/ng-devtools/devframe` | The devframe definition, for custom hosts.                                                         |
 
 ### The CLI binary
 
@@ -134,6 +135,10 @@ bootstrapApplication(App, appConfig).then(() => {
 
 The standalone CLI has no page connected, so it needs no browser part.
 
+### Configure the devtools
+
+Everything is on by default. To turn inspectors, agent tools or actions off, or to change redaction and limits, pass options to the server part. See [Configuration](/getting-started/configuration).
+
 ### Add the Chrome extension
 
 The [Chrome extension](/getting-started/chrome-extension) adds a panel to Chrome DevTools. It sits on top of the Express or Vite setup. It does not replace the server part or the overlay.
@@ -176,4 +181,5 @@ The [Chrome extension](/getting-started/chrome-extension) adds a panel to Chrome
   <ngmd-pill href="/getting-started/vite" title="Vite and Analog"></ngmd-pill>
   <ngmd-pill href="/getting-started/cli" title="Standalone CLI"></ngmd-pill>
   <ngmd-pill href="/getting-started/overlay" title="Browser overlay"></ngmd-pill>
+  <ngmd-pill href="/getting-started/configuration" title="Configuration"></ngmd-pill>
 </ngmd-pill-row>

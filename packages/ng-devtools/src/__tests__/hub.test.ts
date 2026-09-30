@@ -165,6 +165,19 @@ describe('ng-devtools hub MCP route', () => {
     expect((await mcp(token)).status).toBe(200);
   });
 
+  it('keeps the token and the mcp setting next to the devtools config', async () => {
+    vi.stubEnv('NG_DEVTOOLS_MCP_TOKEN', 'env-secret');
+    const guarded = await bootMcp({ inspectors: { http: false }, agent: { readOnly: true } });
+    expect((await guarded()).status).toBe(401);
+    expect((await guarded('env-secret')).status).toBe(200);
+    const own = await bootMcp({
+      mcp: { authorization: 'own-secret' },
+      limits: { refreshMs: 1000 },
+    });
+    expect((await own('env-secret')).status).toBe(401);
+    expect((await own('own-secret')).status).toBe(200);
+  });
+
   it('keeps an explicit mcp setting', async () => {
     const mcp = await bootMcp({ auth: true, mcp: { authorization: 'own-secret' } });
     expect((await mcp()).status).toBe(401);

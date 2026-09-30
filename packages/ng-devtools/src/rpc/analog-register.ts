@@ -108,8 +108,14 @@ export function stopAnalog() {
   disposeAnalog = undefined;
 }
 
-export async function registerAnalog(my: Scoped, ctx: AgentHost) {
+export async function registerAnalog(
+  my: Scoped,
+  ctx: AgentHost,
+  options: { blockCalls?: string } = {},
+) {
   disposeAnalog?.();
+  const sendApi = (request: ApiRequest): Promise<AnyRecord> =>
+    options.blockCalls ? Promise.resolve({ error: options.blockCalls }) : callApi(request);
   const state = await my.rpc.sharedState('analog', {
     initialValue: { pages: [], calls: [], duplicates: [], reportedAt: 0 } as AnalogState,
   });
@@ -222,7 +228,7 @@ export async function registerAnalog(my: Scoped, ctx: AgentHost) {
     jsonSerializable: true,
     handler: (request: unknown) =>
       request && typeof request === 'object'
-        ? callApi(request as ApiRequest)
+        ? sendApi(request as ApiRequest)
         : { ok: false, error: 'Bad request.' },
   });
 
@@ -302,7 +308,7 @@ export async function registerAnalog(my: Scoped, ctx: AgentHost) {
       },
     },
     handler: async (args: ApiRequest) => {
-      const result = await callApi(args ?? { path: '' });
+      const result = await sendApi(args ?? { path: '' });
       if (result['error']) return text(`Refused: ${result['error']}`);
       return text(
         `${args.method ?? 'GET'} ${args.path}: ${result['status']} in ${result['ms']}ms (${result['type'] || 'no content type'})\n\n${result['body']}`,

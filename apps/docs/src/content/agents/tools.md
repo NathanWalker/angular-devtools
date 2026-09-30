@@ -43,6 +43,10 @@ Most page tools take an optional `page` argument to pick a browser tab. It defau
   <code>highlight</code>, <code>navigate</code>, <code>form-action</code>, <code>fill-form</code> and <code>analog-call-api</code> act on the app. Every other tool is marked read-only for your client.
 </ngmd-alert>
 
+### Turn tools off
+
+The server decides which tools exist. Set `agent.readOnly` to drop the five action tools. Set `agent.tools.<inspector>` to `false` to hide one inspector's tools and resources, and keep its tab. Turning an inspector off with `inspectors`, or blocking an action with `actions`, drops the matching tools too. See [Inspectors and agent tools](/getting-started/configuration#inspectors-and-agent-tools).
+
 ## Source scan
 
 These seven tools take no arguments. They all read your source.

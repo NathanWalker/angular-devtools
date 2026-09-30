@@ -8,8 +8,11 @@ import { analogMiddleware, setDevOrigin } from './analog-server-log.ts';
 import { analogConfig } from './rpc/analog-scan.ts';
 import { stopAnalog } from './rpc/analog-register.ts';
 import { httpRegistry } from './http-rules.ts';
+import { pickNgDevtoolsConfig, resolveNgDevtoolsConfig, type NgDevtoolsConfig } from './config.ts';
 
-export interface NgDevtoolsViteOptions {
+export type { NgDevtoolsConfig } from './config.ts';
+
+export interface NgDevtoolsViteOptions extends NgDevtoolsConfig {
   base?: string;
   apiPrefix?: string;
   allowedOrigins?: string[];
@@ -141,21 +144,26 @@ export function guardNewUpgrades(
 
 export default function ngDevtoolsVite(options: NgDevtoolsViteOptions = {}): Plugin {
   const base = options.base ?? NG_DEVTOOLS_HUB_BASE;
+  const { config } = pickNgDevtoolsConfig(options);
+  const analog = resolveNgDevtoolsConfig(config).inspectors.analog;
   return {
     name: 'ng-devtools',
     apply: 'serve',
     enforce: 'pre',
     configureServer(server) {
-      const apiPrefix = options.apiPrefix ?? analogConfig(server.config.root).apiPrefix;
       const policy: HubOriginPolicy = {
         allowedHosts: server.config.server?.allowedHosts,
         allowedOrigins: options.allowedOrigins,
       };
       server.middlewares.use(hubRequestGate(base, policy));
-      server.middlewares.use(analogMiddleware(apiPrefix));
+      if (analog) {
+        const apiPrefix = options.apiPrefix ?? analogConfig(server.config.root).apiPrefix;
+        server.middlewares.use(analogMiddleware(apiPrefix));
+      }
       const shared = server.httpServer instanceof HttpServer ? server.httpServer : null;
       const upgradesBefore = shared?.listeners('upgrade') ?? [];
       const devtools = initNgDevtoolsHub({
+        ...config,
         base,
         ...(server.httpServer instanceof HttpServer
           ? { server: server.httpServer }

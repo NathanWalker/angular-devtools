@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const hubOptions = vi.hoisted(() => [] as { auth?: unknown }[]);
+const hubOptions = vi.hoisted(() => [] as Record<string, unknown>[]);
 
 vi.mock('../hub.ts', () => ({
   NG_DEVTOOLS_HUB_BASE: '/__devframes/',
-  initNgDevtoolsHub: (options: { auth?: unknown }) => {
+  initNgDevtoolsHub: (options: Record<string, unknown>) => {
     hubOptions.push(options);
     return { nodeMiddleware: vi.fn(), close: vi.fn() };
   },
@@ -76,5 +76,14 @@ describe('ngDevtoolsVite hub auth', () => {
     expect(hubAuth({ auth: false, allowedOrigins: ['https://tunnel.example'] })).toBe(false);
     expect(hubAuth({ auth: false }, true)).toBe(false);
     expect(hubAuth({ auth: true })).toBe(true);
+  });
+
+  it('passes the devtools config to the hub next to auth', () => {
+    hubAuth({ auth: true, inspectors: { http: false }, limits: { refreshMs: 1000 } });
+    expect(hubOptions[0]).toMatchObject({
+      auth: true,
+      inspectors: { http: false },
+      limits: { refreshMs: 1000 },
+    });
   });
 });

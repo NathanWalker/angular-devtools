@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { noteFailedCall, redactText, type NavigationRecord } from '../router.ts';
+import {
+  noteFailedCall,
+  redactText,
+  setNavigationLimit,
+  type NavigationRecord,
+} from '../router.ts';
 import type { RouteNode } from '../router-config.ts';
 import { lintRoutes, listRoutesText, matchUrl, renderModeFor } from '../rpc/router-config-tools.ts';
 import {
@@ -238,6 +243,12 @@ describe('report validation', () => {
       isRouterReport({ ...base, config: [node('/a')], activeIds: ['/a'], instrumented: true }),
     ).toBe(true);
   });
+
+  it('accepts as many navigations as the configured limit', () => {
+    const report = { ...base, navigations: Array.from({ length: 60 }, (_, i) => nav(i + 1)) };
+    expect(isRouterReport(report)).toBe(false);
+    expect(isRouterReport(report, 100)).toBe(true);
+  });
 });
 
 describe('failed calls', () => {
@@ -247,6 +258,17 @@ describe('failed calls', () => {
     expect(list).toHaveLength(50);
     expect(new Set(list.map((n) => n.id)).size).toBe(50);
     expect(list.every((n) => n.id < 0)).toBe(true);
+  });
+
+  it('follow the configured navigation limit', () => {
+    const list: NavigationRecord[] = [];
+    setNavigationLimit(10);
+    try {
+      for (let i = 0; i < 20; i++) noteFailedCall(list, `/x/${i}`, new Error('nope'), i);
+    } finally {
+      setNavigationLimit(50);
+    }
+    expect(list).toHaveLength(10);
   });
 });
 

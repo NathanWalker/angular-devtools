@@ -115,6 +115,7 @@ export function attachForms(
   pageId: string,
   getNg: () => any,
   highlight: { show(el: HTMLElement): void; clear(): void },
+  maxEvents = MAX_FORM_EVENTS,
 ): FormsCollector {
   const assignIds = createFormIds(pageId);
   let ids = new WeakMap<object, string>();
@@ -199,8 +200,8 @@ export function attachForms(
       }
     }
     formEvents.push(event);
-    if (formEvents.length > MAX_FORM_EVENTS) {
-      formEvents.splice(0, formEvents.length - MAX_FORM_EVENTS);
+    if (formEvents.length > maxEvents) {
+      formEvents.splice(0, formEvents.length - maxEvents);
     }
   }
 

@@ -4,11 +4,13 @@ import { attachAnalog } from './analog-runtime.ts';
 import { attachForms } from './forms-collector.ts';
 import { attachPipes } from './pipes-collector.ts';
 import { attachHttp } from './http-overlay.ts';
+import { httpRegistry } from './http-rules.ts';
 import { attachNgrx } from './ngrx-overlay.ts';
 import { collectInjectorTree } from './injector-tree.ts';
 import {
   findRouters,
   setGeneration,
+  setNavigationLimit,
   snapshotRouter,
   watchRouter,
   type NavigationRecord,
@@ -34,6 +36,8 @@ import { collectComponentTree, componentHostOf } from './component-tree.ts';
 import { elementById, elementId } from './element-id.ts';
 import { collectSignalGraph, graphKey, toSignalTarget, type SignalTarget } from './signal-graph.ts';
 import { serializeNamed } from './serialize.ts';
+import { configFromConnection } from './config.ts';
+import { setRedaction } from './forms-privacy.ts';
 import { outsideAngular, watchChangeDetection } from './change-detection.ts';
 
 declare global {
@@ -151,6 +155,12 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   });
   if (!own(() => rpc.close?.())) return;
   const my = rpc.scope('ng-devtools');
+  const devtoolsConfig = configFromConnection(rpc.connectionMeta);
+  const on = devtoolsConfig.inspectors;
+  const limits = devtoolsConfig.limits;
+  setRedaction(devtoolsConfig.redaction);
+  setNavigationLimit(limits.navigations);
+  if (on.http) httpRegistry().maxCalls = limits.httpCalls;
 
   let componentTarget: string | null = null;
   let lastTreeJson = '';
@@ -167,7 +177,9 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   const signalHistory = createSignalHistory((value, name) =>
     serializeNamed(name, value, { budget: 1000 }),
   );
-  const restoreSignalHook = await installSignalWriteHook(signalHistory.onWrite);
+  const restoreSignalHook = on.signals
+    ? await installSignalWriteHook(signalHistory.onWrite)
+    : () => {};
   if (!own(restoreSignalHook)) return;
 
   let signalTarget: SignalTarget = null;
@@ -208,15 +220,19 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
 
   const { id: pageId, release: releasePageId } = await claimPageId();
   if (!own(releasePageId)) return;
-  const stopAnalog = attachAnalog(my, pageId, getNg);
-  const forms = attachForms(my, pageId, getNg, { show: showHighlight, clear: clearHighlight });
-  const pushForms = forms.push;
-  const pipes = attachPipes(my, pageId, getNg);
-  const pushPipes = pipes.push;
-  const http = attachHttp(my, pageId);
-  const ngrx = attachNgrx(my, pageId, getNg);
-  const pushNgrxState = () => void ngrx.push();
-  const pushHttp = () => void http.push().catch(() => {});
+  const stopAnalog = on.analog ? attachAnalog(my, pageId, getNg, limits.refreshMs) : () => {};
+  const forms = on.forms
+    ? attachForms(
+        my,
+        pageId,
+        getNg,
+        { show: showHighlight, clear: clearHighlight },
+        limits.formTimeline,
+      )
+    : null;
+  const pipes = on.pipes ? attachPipes(my, pageId, getNg) : null;
+  const http = on.http ? attachHttp(my, pageId) : null;
+  const ngrx = on.ngrx ? attachNgrx(my, pageId, getNg, limits.changeLog) : null;
 
   const navigations: NavigationRecord[] = [];
   const preloads: PreloadRecord[] = [];
@@ -238,7 +254,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   let outlets: ReturnType<typeof outletsOf> = [];
   let links: ReturnType<typeof linksOf> = [];
   const routerDomObserver =
-    typeof MutationObserver === 'function'
+    on.router && typeof MutationObserver === 'function'
       ? new MutationObserver(() => (routerDomDirty = true))
       : null;
   routerDomObserver?.observe(document.documentElement, {
@@ -350,18 +366,19 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     routerPushTimer = setTimeout(() => void pushRouter(), 50);
   }
 
-  const pushAll = () => {
-    pushTree().catch(() => {});
-    pushSignalGraph().catch(() => {});
-    pushInjectorTree().catch(() => {});
-    pushNgrxState();
-    pushForms();
-    pushPipes();
-    void pushRouter();
-    pushHttp();
-  };
+  const collectors = [
+    on.components && (() => void pushTree().catch(() => {})),
+    on.signals && (() => void pushSignalGraph().catch(() => {})),
+    on.injectors && (() => void pushInjectorTree().catch(() => {})),
+    ngrx && (() => void ngrx.push()),
+    forms?.push,
+    pipes?.push,
+    on.router && (() => void pushRouter()),
+    http && (() => void http.push().catch(() => {})),
+  ].filter((collect) => typeof collect === 'function');
+  const pushAll = () => collectors.forEach((run) => run());
   pushAll();
-  const refresher = watchChangeDetection({ getNg, refresh: pushAll });
+  const refresher = watchChangeDetection({ getNg, refresh: pushAll, pollMs: limits.refreshMs });
 
   my.rpc.register({
     name: 'highlight-in-page',
@@ -430,31 +447,36 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     },
   });
 
-  const componentOf = (el: unknown) => {
-    const host = el instanceof Element ? componentHostOf(getNg(), el) : null;
-    return host ? elementId(host) : null;
-  };
-  window.__ngDevtoolsComponentOf = componentOf;
-  own(() => {
-    if (window.__ngDevtoolsComponentOf === componentOf) delete window.__ngDevtoolsComponentOf;
-  });
+  if (on.components) {
+    const componentOf = (el: unknown) => {
+      const host = el instanceof Element ? componentHostOf(getNg(), el) : null;
+      return host ? elementId(host) : null;
+    };
+    window.__ngDevtoolsComponentOf = componentOf;
+    own(() => {
+      if (window.__ngDevtoolsComponentOf === componentOf) delete window.__ngDevtoolsComponentOf;
+    });
+  }
 
+  const forget = (inspector: keyof typeof on, name: string) => {
+    if (on[inspector]) void my.rpc.call(name, pageId).catch(() => {});
+  };
   const leave = () => {
-    pipes.pause();
-    void my.rpc.call('forget-forms-page', pageId).catch(() => {});
-    void my.rpc.call('forget-router-page', pageId).catch(() => {});
-    void my.rpc.call('forget-pipes-page', pageId).catch(() => {});
-    void my.rpc.call('forget-component-page', pageId).catch(() => {});
+    pipes?.pause();
+    forget('forms', 'forget-forms-page');
+    forget('router', 'forget-router-page');
+    forget('pipes', 'forget-pipes-page');
+    forget('components', 'forget-component-page');
     lastInjectorJson = '';
-    void my.rpc.call('forget-injector-page', pageId).catch(() => {});
-    http.leave();
-    void my.rpc.call('forget-analog-page', pageId).catch(() => {});
-    ngrx.leave();
+    forget('injectors', 'forget-injector-page');
+    http?.leave();
+    forget('analog', 'forget-analog-page');
+    ngrx?.leave();
   };
   addEventListener('pagehide', leave);
   const resendConfig = () => {
     sentGeneration = -1;
-    pipes.resume();
+    pipes?.resume();
   };
   addEventListener('pageshow', resendConfig);
 
@@ -463,9 +485,9 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     removeEventListener('pagehide', leave);
     removeEventListener('pageshow', resendConfig);
     leave();
-    forms.stop();
-    pipes.stop();
-    ngrx.stop();
+    forms?.stop();
+    pipes?.stop();
+    ngrx?.stop();
     stopAnalog();
     for (const cleanup of routerCleanup) cleanup();
     routerCleanup = [];

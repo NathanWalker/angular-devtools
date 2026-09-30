@@ -1,6 +1,7 @@
 import { Component, computed, input, signal } from '@angular/core';
 import { JsonPipe } from '@angular/common';
 import type { DevframeRpcClient } from 'devframe/client';
+import { actionAllowed, actionBlockedMessage } from '../devtools-config';
 import {
   SHARED_STYLES,
   routerAction,
@@ -65,6 +66,9 @@ interface MatchResult {
     }
     @if (message()) {
       <p class="message" role="status">{{ message() }}</p>
+    }
+    @if (!navigationAllowed()) {
+      <p id="route-tree-writes-off" class="message">{{ navigationOff }}</p>
     }
 
     <div class="filter-row">
@@ -189,6 +193,10 @@ interface MatchResult {
                       <button
                         type="button"
                         class="small"
+                        [disabled]="!navigationAllowed()"
+                        [attr.aria-describedby]="
+                          navigationAllowed() ? null : 'route-tree-writes-off'
+                        "
                         (click)="navigate(row.node)"
                         [attr.aria-label]="'Navigate to ' + row.node.fullPath"
                       >
@@ -353,6 +361,8 @@ interface MatchResult {
 export class RouteTree {
   page = input.required<RouterPage>();
   rpc = input<DevframeRpcClient | null>(null);
+  readonly navigationAllowed = computed(() => actionAllowed(this.rpc(), 'router'));
+  protected readonly navigationOff = actionBlockedMessage('router');
   sources = input<SourceRoute[]>([]);
 
   readonly filter = signal('');

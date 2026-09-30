@@ -176,6 +176,7 @@ const config: NgmdConfig = {
         {label: 'Angular CLI and Express', href: '/getting-started/express'},
         {label: 'Vite and Analog', href: '/getting-started/vite'},
         {label: 'Standalone CLI', href: '/getting-started/cli'},
+        {label: 'Configuration', href: '/getting-started/configuration', status: 'new'},
         {label: 'Popup and hub', href: '/getting-started/popup-and-hub', status: 'new'},
         {label: 'Browser overlay', href: '/getting-started/overlay'},
         {label: 'Chrome extension', href: '/getting-started/chrome-extension'},

@@ -99,7 +99,7 @@ When the inspected page navigates, the panel shows "Detecting Angular app…", l
 
 ### Elements panel
 
-While the **Components** tab is open, select an element in the Chrome **Elements** panel. The Components tab selects the component that hosts that element (the element itself, or the nearest ancestor that is a component host). It expands the parent rows, clears the filter if it hides the row, and scrolls the row into view. On other tabs, the Elements selection does nothing.
+While the **Components** tab is open, select an element in the Chrome **Elements** panel. The Components tab selects the component that hosts that element (the element itself, or the nearest ancestor that is a component host). It expands the parent rows, clears the filter if it hides the row, and scrolls the row into view. On other tabs, the Elements selection does nothing. It also does nothing when `inspectors.components` is `false` in the [configuration](/getting-started/configuration).
 
 This needs the overlay on the page, since the overlay answers which component hosts the element.
 

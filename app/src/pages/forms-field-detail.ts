@@ -9,6 +9,7 @@ import {
   type CollectedForm,
   type FormFieldNode,
 } from './forms-types';
+import { actionAllowed, actionBlockedMessage } from '../devtools-config';
 
 @Component({
   selector: 'app-forms-field-detail',
@@ -33,15 +34,42 @@ import {
           (input)="draft.set($any($event.target).value)"
           (keydown.enter)="setValue()"
         />
-        <button type="button" class="small primary" (click)="setValue()">Set</button>
+        <button
+          type="button"
+          class="small primary"
+          [disabled]="!canWrite()"
+          [attr.aria-describedby]="canWrite() ? null : 'field-writes-off'"
+          (click)="setValue()"
+        >
+          Set
+        </button>
       </div>
     }
     <div class="row" role="group" aria-label="Field actions">
       <button type="button" class="small" (click)="act('focus')">Focus</button>
-      <button type="button" class="small" (click)="act('mark-touched')">Touch</button>
-      <button type="button" class="small" (click)="act('revalidate')">Revalidate</button>
+      <button
+        type="button"
+        class="small"
+        [disabled]="!canWrite()"
+        [attr.aria-describedby]="canWrite() ? null : 'field-writes-off'"
+        (click)="act('mark-touched')"
+      >
+        Touch
+      </button>
+      <button
+        type="button"
+        class="small"
+        [disabled]="!canWrite()"
+        [attr.aria-describedby]="canWrite() ? null : 'field-writes-off'"
+        (click)="act('revalidate')"
+      >
+        Revalidate
+      </button>
       <button type="button" class="small" (click)="act('store-as-global')">Store as global</button>
     </div>
+    @if (!canWrite()) {
+      <p id="field-writes-off" class="muted">{{ writesOff }}</p>
+    }
     <p class="status" role="status">{{ message() }}</p>
   `,
   styles: `
@@ -106,6 +134,8 @@ export class FormsFieldDetail {
   version = input(0);
   rpc = input<DevframeRpcClient | null>(null);
 
+  readonly canWrite = computed(() => actionAllowed(this.rpc(), 'forms'));
+  protected readonly writesOff = actionBlockedMessage('forms');
   readonly text = signal('');
   private readonly target = computed(() => `${this.form().id}|${this.node().path}`);
   readonly draft = linkedSignal({ source: this.target, computation: () => '' });

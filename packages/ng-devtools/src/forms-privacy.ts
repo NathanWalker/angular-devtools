@@ -46,13 +46,30 @@ interface PrivacyConfig {
   unmask?: string[];
 }
 
-function config(): PrivacyConfig {
+let secretNames: string[] = [];
+let unmaskNames: string[] = [];
+
+/** Applies the `redaction` devtools config on top of the built-in rules. */
+export function setRedaction(options: { secretNames?: string[]; unmask?: string[] } = {}) {
+  secretNames = (options.secretNames ?? [])
+    .map((name) => wordsOf(name).map(singular).join(''))
+    .filter(Boolean);
+  unmaskNames = [...(options.unmask ?? [])];
+}
+
+function pageConfig(): PrivacyConfig {
   try {
     const value = (globalThis as { __NG_DEVTOOLS_FORMS__?: unknown }).__NG_DEVTOOLS_FORMS__;
     return value && typeof value === 'object' ? (value as PrivacyConfig) : {};
   } catch {
     return {};
   }
+}
+
+function config(): PrivacyConfig {
+  const page = pageConfig();
+  if (!unmaskNames.length) return page;
+  return { ...page, unmask: [...(Array.isArray(page.unmask) ? page.unmask : []), ...unmaskNames] };
 }
 
 export function wordsOf(key: string): string[] {
@@ -68,11 +85,30 @@ function singular(word: string): string {
   return word.length > 3 && word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word;
 }
 
+function containsName(words: string[], name: string): boolean {
+  for (let i = 0; i < words.length; i++) {
+    let run = '';
+    for (let j = i; j < words.length && run.length < name.length; j++) {
+      run += words[j];
+      if (run === name) return true;
+    }
+  }
+  return false;
+}
+
+/** Whether a key matches one of the `redaction.secretNames` from the devtools config. */
+export function isCustomSecretKey(key: string): boolean {
+  if (!secretNames.length) return false;
+  const words = wordsOf(key).map(singular);
+  return secretNames.some((name) => containsName(words, name));
+}
+
 export function isSecretKey(key: string): boolean {
   const words = wordsOf(key).map(singular);
   if (words.some((word) => SECRET_WORDS.has(word))) return true;
   if (SECRET_PAIRS.has(words.join(''))) return true;
-  return words.some((word, i) => i > 0 && SECRET_PAIRS.has(words[i - 1] + word));
+  if (words.some((word, i) => i > 0 && SECRET_PAIRS.has(words[i - 1] + word))) return true;
+  return secretNames.some((name) => containsName(words, name));
 }
 
 function listed(list: string[] | undefined, key: string): boolean {

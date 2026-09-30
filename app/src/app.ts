@@ -29,6 +29,7 @@ import { ComingSoon, type ComingSoonInfo } from './pages/coming-soon';
 import { TabIcon } from './pages/tab-icon';
 import { styleHubRail } from './hub-rail-style';
 import { followHubDocks, selectHubDock } from './hub-dock-sync';
+import { panelConfig, tabEnabled } from './devtools-config';
 
 const HUB_VIEWS = ['angular', 'ngrx', 'analog', 'nativescript', 'capacitor'] as const;
 
@@ -250,6 +251,10 @@ function readView(): View | null {
         </p>
       } @else if (comingSoon(); as info) {
         <app-coming-soon [info]="info" />
+      } @else if (!tabEnabled(tab(), config())) {
+        <p class="turned-off">
+          This inspector is turned off in the devtools config (<code>inspectors</code>).
+        </p>
       } @else {
         @switch (tab()) {
           @case ('dashboard') {
@@ -559,6 +564,15 @@ function readView(): View | null {
     main > * {
       animation: enter 0.28s var(--ease) both;
     }
+    .turned-off {
+      max-width: 60ch;
+      margin: 0;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+    }
     .connection-error {
       max-width: 60ch;
       margin: 0;
@@ -624,12 +638,15 @@ export class App implements OnInit, OnDestroy {
     if (view === 'analog') return this.analogKnown() && !this.analog() ? NOT_ANALOG : undefined;
     return view ? COMING_SOON[view] : undefined;
   });
+  readonly config = computed(() => panelConfig(this.rpc()));
+  protected readonly tabEnabled = tabEnabled;
   readonly tabs = computed(() => {
     if (this.comingSoon()) return [];
     const view = this.view();
     const only = view ? VIEW_TAB[view] : undefined;
-    if (only) return this.allTabs.filter((t) => t.id === only);
-    return this.allTabs.filter(
+    const enabled = this.allTabs.filter((t) => tabEnabled(t.id, this.config()));
+    if (only) return enabled.filter((t) => t.id === only);
+    return enabled.filter(
       (t) => (t.id !== 'analog' || this.analog()) && !(view === 'angular' && TAB_VIEW[t.id]),
     );
   });
@@ -766,7 +783,7 @@ export class App implements OnInit, OnDestroy {
     if (message?.type !== 'ng-devtools:inspect-component' || typeof message.id !== 'string') return;
     // Any element inside the app resolves to a component, so following every
     // Elements selection would pull the user off whichever tab they are on.
-    if (this.tab() !== 'components') return;
+    if (this.tab() !== 'components' || !this.config().inspectors.components) return;
     this.componentFocus.set({ id: message.id });
   }
 

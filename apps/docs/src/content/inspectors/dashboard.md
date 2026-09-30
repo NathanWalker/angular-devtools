@@ -37,9 +37,15 @@ Each card counts what one inspector found. Click a card to open its tab. When th
 | [NgRx declarations](/inspectors/ngrx-store) | NgRx declarations in source, broken down by kind.                                                            |
 | [Pipes](/inspectors/pipes)                  | Custom pipes in source, plus the built-in pipes in use.                                                      |
 
+Cards of inspectors turned off in the [configuration](/getting-started/configuration) are hidden.
+
 ### Card states
 
 A card shows **Counting…** while it loads. It shows **Count unavailable** when the tab can't read its data.
+
+### Configuration block
+
+Below the cards, the **Configuration** block lists the devtools options that differ from the defaults, such as **Inspectors off**, **Blocked actions** and **Limits**. It says **Defaults** when nothing is changed. See [Configuration](/getting-started/configuration#check-the-active-configuration).
 
 ## Where the data comes from
 

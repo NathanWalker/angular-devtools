@@ -184,6 +184,22 @@ describe('MCP tool text', () => {
 });
 
 describe('mergePageReport', () => {
+  it('keeps the newest events up to the configured limit', () => {
+    const a = form(group([control('x')], 'VALID'), { id: 'form-1@aaaa' });
+    const events = Array.from({ length: 30 }, (_, i) => ({
+      formId: a.id,
+      path: 'x',
+      type: 'value' as const,
+      timestamp: i,
+    }));
+    const pages = new Map();
+    expect(
+      mergePageReport(pages, { pageId: 'aaaa', forms: [a], events }, 1_000, 10).events.map(
+        (e) => e.timestamp,
+      ),
+    ).toEqual([20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+  });
+
   it('keeps each open page, drops pages that stopped reporting, and orders events', () => {
     const pages = new Map();
     const a = form(group([control('x')], 'VALID'), { id: 'form-1@aaaa' });

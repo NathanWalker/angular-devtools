@@ -12,6 +12,7 @@ import { JsonPipe } from '@angular/common';
 import type { DevframeRpcClient } from 'devframe/client';
 import { hostPageId } from '../page-id';
 import { rpcCall as call } from '../rpc';
+import { actionAllowed, actionBlockedMessage } from '../devtools-config';
 import { Select, type SelectOption } from '../ui/select';
 
 type HttpSide = 'client' | 'server';
@@ -137,7 +138,14 @@ const EMPTY_DRAFT: RuleDraft = {
           (valueChange)="selectPage($event)"
         />
       </div>
-      <button type="button" (click)="clearCalls()">Clear timeline</button>
+      <button
+        type="button"
+        [disabled]="!canWrite()"
+        [attr.aria-describedby]="canWrite() ? null : 'http-writes-off'"
+        (click)="clearCalls()"
+      >
+        Clear timeline
+      </button>
       <p class="message" role="status">{{ message() }}</p>
     </div>
 
@@ -243,6 +251,9 @@ const EMPTY_DRAFT: RuleDraft = {
 
       <section class="panel" aria-labelledby="rules-heading">
         <h2 id="rules-heading">Fault injection</h2>
+        @if (!canWrite()) {
+          <p id="http-writes-off" class="muted small">{{ writesOff }}</p>
+        }
         <form class="rule-form" (submit)="addRule($event)">
           <label>
             <span>URL pattern <span class="hint">(substring or * glob)</span></span>
@@ -320,7 +331,11 @@ const EMPTY_DRAFT: RuleDraft = {
             </p>
           }
           <div class="form-actions">
-            <button type="submit" [disabled]="!draft().pattern.trim() || !!bodyError()">
+            <button
+              type="submit"
+              [disabled]="!canWrite() || !draft().pattern.trim() || !!bodyError()"
+              [attr.aria-describedby]="canWrite() ? null : 'http-writes-off'"
+            >
               Add rule
             </button>
           </div>
@@ -334,6 +349,8 @@ const EMPTY_DRAFT: RuleDraft = {
                 <input
                   type="checkbox"
                   [checked]="rule.enabled"
+                  [disabled]="!canWrite()"
+                  [attr.aria-describedby]="canWrite() ? null : 'http-writes-off'"
                   (change)="toggleRule(rule.id)"
                   [attr.aria-label]="'Enable rule for ' + rule.pattern"
                 />
@@ -345,6 +362,8 @@ const EMPTY_DRAFT: RuleDraft = {
               <button
                 type="button"
                 class="link remove"
+                [disabled]="!canWrite()"
+                [attr.aria-describedby]="canWrite() ? null : 'http-writes-off'"
                 (click)="removeRule(rule.id)"
                 [attr.aria-label]="'Remove rule for ' + rule.pattern"
               >
@@ -1253,6 +1272,8 @@ const EMPTY_DRAFT: RuleDraft = {
 })
 export class NetworkInspector {
   readonly rpc = input<DevframeRpcClient | null>(null);
+  readonly canWrite = computed(() => actionAllowed(this.rpc(), 'http'));
+  protected readonly writesOff = actionBlockedMessage('http');
 
   readonly loading = signal(false);
   readonly failed = signal(false);

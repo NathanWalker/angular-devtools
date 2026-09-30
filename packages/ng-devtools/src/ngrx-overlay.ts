@@ -16,7 +16,12 @@ interface RpcScope {
 
 const HEARTBEAT_MS = 5000;
 
-export function attachNgrx(my: RpcScope, pageId: string, getNg: () => NgrxDebugNg | undefined) {
+export function attachNgrx(
+  my: RpcScope,
+  pageId: string,
+  getNg: () => NgrxDebugNg | undefined,
+  maxLog?: number,
+) {
   const session = Math.random().toString(36).slice(2, 10);
   let sentSeq = 0;
   let lastBody = '';
@@ -35,7 +40,7 @@ export function attachNgrx(my: RpcScope, pageId: string, getNg: () => NgrxDebugN
     }, 50);
   };
 
-  const collector = createNgrxCollector(getNg, () => schedule());
+  const collector = createNgrxCollector(getNg, () => schedule(), document, maxLog);
 
   const push = async (rediscover = true) => {
     if (pushing) return schedule(rediscover);

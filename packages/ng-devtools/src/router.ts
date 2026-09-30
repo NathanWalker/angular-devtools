@@ -167,6 +167,7 @@ const seenRoutes = new WeakSet<object>();
 let pendingCaller: { text: string; at: number; sticky?: boolean } | null = null;
 let pendingRedirect: { from: number; kind: string } | null = null;
 let configGeneration = 0;
+let navigationLimit = 50;
 
 export function setCaller(text: string, sticky = false) {
   if (!sticky && pendingCaller?.sticky && Date.now() - pendingCaller.at < 50) return;
@@ -175,6 +176,11 @@ export function setCaller(text: string, sticky = false) {
 
 export function setGeneration(generation: number) {
   configGeneration = generation;
+}
+
+/** How many navigations a page keeps (`limits.navigations`). */
+export function setNavigationLimit(limit: number) {
+  navigationLimit = limit;
 }
 
 export function read<T>(fn: () => T, fallback: T): T {
@@ -792,7 +798,9 @@ export function noteFailedCall(
     caller: pendingCaller?.text,
     generation: configGeneration,
   });
-  if (navigations.length > 50) navigations.splice(0, navigations.length - 50);
+  if (navigations.length > navigationLimit) {
+    navigations.splice(0, navigations.length - navigationLimit);
+  }
 }
 
 /**
@@ -1110,7 +1118,7 @@ export function watchRouter(
   router: AnyRecord,
   navigations: NavigationRecord[],
   onChange: () => void,
-  max = 50,
+  max = navigationLimit,
 ): (() => void) | null {
   const events = eventsOf(router);
   if (!events) return null;

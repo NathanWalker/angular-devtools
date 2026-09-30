@@ -5,7 +5,7 @@ import { TestBed } from '@angular/core/testing';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { FormField, FormRoot, form, required } from '@angular/forms/signals';
 import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attachForms, setupErrorOf } from '../forms-collector.ts';
 import type { FormEvent } from '../forms.ts';
 
@@ -44,7 +44,7 @@ Component({
   template: `<form [formRoot]="form"><input id="pname" [formField]="form.name" /><button>Go</button></form>`,
 })(Profile);
 
-function harness() {
+function harness(maxEvents?: number) {
   const calls: { name: string; args: any[] }[] = [];
   const handlers = new Map<string, (...args: any[]) => unknown>();
   const my = {
@@ -57,10 +57,13 @@ function harness() {
       },
     },
   };
-  const collector = attachForms(my, 'pg', () => (globalThis as any).ng, {
-    show: () => {},
-    clear: () => {},
-  });
+  const collector = attachForms(
+    my,
+    'pg',
+    () => (globalThis as any).ng,
+    { show: () => {}, clear: () => {} },
+    maxEvents,
+  );
   stops.push(collector.stop);
   const reports = () => calls.filter((c) => c.name === 'push-forms').map((c) => c.args[0]);
   const lastEvents = (): FormEvent[] => reports().at(-1)?.events ?? [];
@@ -95,6 +98,29 @@ describe('forms collector', () => {
     expect(values[0]).toMatchObject({ origin: 'user', count: 3, detail: '"abc"', prev: '""' });
     expect(values[1]).toMatchObject({ origin: 'code', detail: '"code@x.io"', prev: '"abc"' });
     expect(h.reports().at(-1).forms[0].submitDom.buttons).toBe(1);
+  });
+
+  it('keeps at most the configured number of timeline events', async () => {
+    const fixture = await mount(Login);
+    const h = harness(10);
+    h.collector.push();
+    await tick();
+    const email = fixture.componentInstance.form.controls.email;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      for (let i = 0; i < 15; i++) {
+        vi.setSystemTime(Date.now() + 5000);
+        email.setValue(`v${i}@x.io`);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    h.collector.push();
+    await tick();
+    const events = h.lastEvents();
+    expect(events).toHaveLength(10);
+    expect(events.map((e) => e.detail)).toContain('"v14@x.io"');
+    expect(events.map((e) => e.detail)).not.toContain('"v0@x.io"');
   });
 
   it('records Signal Forms submits as blocked or ran', async () => {
