@@ -815,9 +815,22 @@ export function noteFailedCall(
     caller: pendingCaller?.text,
     generation: configGeneration,
   });
-  if (navigations.length > navigationLimit) {
-    navigations.splice(0, navigations.length - navigationLimit);
-  }
+  trimNavigations(navigations, navigationLimit);
+}
+
+const droppedNavigationCounts = new WeakMap<NavigationRecord[], number>();
+
+/** Removes the oldest navigations past `max` and counts them. */
+export function trimNavigations(navigations: NavigationRecord[], max: number) {
+  const extra = navigations.length - max;
+  if (extra <= 0) return;
+  navigations.splice(0, extra);
+  droppedNavigationCounts.set(navigations, droppedNavigations(navigations) + extra);
+}
+
+/** How many navigations `trimNavigations` removed from this list. */
+export function droppedNavigations(navigations: NavigationRecord[]): number {
+  return droppedNavigationCounts.get(navigations) ?? 0;
 }
 
 /**
@@ -1159,7 +1172,7 @@ export function watchRouter(
     () =>
       events['subscribe']((event: AnyRecord) => {
         if (!applyRouterEvent(navigations, event, Date.now(), router)) return;
-        if (navigations.length > max) navigations.splice(0, navigations.length - max);
+        trimNavigations(navigations, max);
         onChange();
       }) as { unsubscribe(): void },
     null,

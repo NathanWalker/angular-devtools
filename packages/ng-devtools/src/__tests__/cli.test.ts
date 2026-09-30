@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCac } from 'devframe/adapters/cac';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { checkReportOutDir, guardReportOutDir } from '../cli.ts';
+import { checkReportOutDir, createNgDevtoolsCli, guardReportOutDir } from '../cli.ts';
 import { fixtureDir } from '../rpc/__tests__/fixture-dir.ts';
 
 function project() {
@@ -92,5 +92,34 @@ describe('ng-devtools build --outDir', () => {
     expect(existsSync(join(cwd, 'src/app.ts'))).toBe(false);
     expect(existsSync(join(cwd, 'src/__connection.json'))).toBe(true);
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it('keeps refusing the folder it was run from after --root moves the working directory', async () => {
+    const root = project();
+    const shell = project();
+    const from = process.cwd();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(() => checkReportOutDir(shell, { cwd: root, force: true, invokedFrom: shell })).toThrow(
+      /working directory or one of its parents/,
+    );
+    process.chdir(shell);
+    try {
+      await createNgDevtoolsCli({ log: () => {} }).parse([
+        'node',
+        'ng-devtools',
+        'build',
+        '--root',
+        root,
+        '--outDir',
+        shell,
+        '--force',
+      ]);
+    } finally {
+      process.chdir(from);
+    }
+    expect(existsSync(join(shell, 'src/app.ts'))).toBe(true);
+    expect(process.exitCode).toBe(1);
+    expect(error.mock.calls.flat().join('\n')).toContain('working directory or one of its parents');
   });
 });

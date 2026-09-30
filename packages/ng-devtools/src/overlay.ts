@@ -8,7 +8,10 @@ import { httpRegistry, storeRules } from './http-rules.ts';
 import { attachNgrx } from './ngrx-overlay.ts';
 import { collectInjectorTree } from './injector-tree.ts';
 import {
+  droppedNavigations,
   findRouters,
+  redactMessage,
+  redactUrl,
   setGeneration,
   setNavigationLimit,
   snapshotRouter,
@@ -33,6 +36,8 @@ import {
 } from './router-actions.ts';
 import { createSignalHistory, type RawSignalNode } from './signal-history.ts';
 import { collectComponentTree, componentHostOf } from './component-tree.ts';
+import { startComponentPick } from './component-pick.ts';
+import { createDeferTracker } from './defer-blocks.ts';
 import { elementById, elementId } from './element-id.ts';
 import {
   collectSignalGraph,
@@ -44,8 +49,15 @@ import {
 import { serializeNamed } from './serialize.ts';
 import { configFromConnection } from './config.ts';
 import { setRedaction } from './forms-privacy.ts';
-import { outsideAngular, watchChangeDetection } from './change-detection.ts';
+import {
+  keepaliveDue,
+  outsideAngular,
+  watchChangeDetection,
+  type RefreshScheduler,
+} from './change-detection.ts';
+import { attachChangeDetection } from './cd-overlay.ts';
 import { SETUP_URL, insideDevtoolsPanel } from './panel-frame.ts';
+import { clearHighlight, showHighlight } from './page-highlight.ts';
 
 declare global {
   interface Window {
@@ -53,12 +65,10 @@ declare global {
   }
 }
 
-let highlightEl: HTMLElement | null = null;
-let highlightTimer: ReturnType<typeof setTimeout> | undefined;
-let highlightFrame = 0;
 const PAGE_ID_KEY = 'ng-devtools-page-id';
 const ROUTER_HEARTBEAT_MS = 5000;
-const KEEPALIVE_MS = 8000;
+/** A tab in the background still says it is there, at the pace browsers allow it. */
+const HIDDEN_HEARTBEAT_MS = 60_000;
 
 function storedPageId(): string | null {
   try {
@@ -189,13 +199,33 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   setNavigationLimit(limits.navigations);
   if (on.http) httpRegistry().maxCalls = limits.httpCalls;
 
+  let refresher: RefreshScheduler | undefined;
+  const tickMs = () => refresher?.intervalMs ?? limits.refreshMs;
+
+  const pingKnows = async (name: string) => {
+    const answer = (await my.rpc.call(name, pageId)) as { known?: boolean } | undefined;
+    return answer?.known !== false;
+  };
+
   let componentTarget: string | null = null;
+  const deferTracker = createDeferTracker();
   let lastTreeJson = '';
   let treeSentAt = 0;
   async function pushTree(force = false) {
-    const tree = collectComponentTree(getNg(), { selectedId: componentTarget });
+    const ng = getNg();
+    const deferBlocks = deferTracker.collect(ng);
+    const tree = {
+      ...collectComponentTree(ng, { selectedId: componentTarget }),
+      url: redactUrl(location.href),
+      title: redactMessage(document.title),
+      ...(deferBlocks ? { deferBlocks } : {}),
+    };
     const json = JSON.stringify(tree);
-    if (!force && json === lastTreeJson && Date.now() - treeSentAt < KEEPALIVE_MS) return;
+    if (!force && json === lastTreeJson) {
+      if (!keepaliveDue(treeSentAt, tickMs())) return;
+      treeSentAt = Date.now();
+      if (await pingKnows('ping-component-tree')) return;
+    }
     lastTreeJson = json;
     treeSentAt = Date.now();
     await my.rpc.call('push-component-tree', { ...tree, pageId });
@@ -221,13 +251,30 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     const graph = collectSignalGraph(getNg(), signalTarget);
     if (!graph) return;
     const key = graphKey(graph);
-    if (!force && key === lastSignalKey && Date.now() - signalSentAt < KEEPALIVE_MS) return;
+    if (!force && key === lastSignalKey) {
+      if (!keepaliveDue(signalSentAt, tickMs())) return;
+      signalSentAt = Date.now();
+      if (await pingKnows('ping-signal-graph')) return;
+    }
     lastSignalKey = key;
     signalSentAt = Date.now();
     const owner = graph.component?.id ?? '';
     const full = force || !historyDelta || owner !== historyFor;
     historyFor = owner;
-    const history = signalHistory.collectDelta(graph.nodes, full);
+    const statuses = (graph.resources ?? [])
+      .filter((r) => r.status)
+      .map((r) => ({
+        id: r.id,
+        kind: 'resource' as const,
+        label: r.name,
+        epoch: r.epoch,
+        value: r.status,
+      }));
+    const history = signalHistory.collectDelta([...graph.nodes, ...statuses], full);
+    for (const item of [...graph.nodes, ...(graph.resources ?? [])]) {
+      const changes = signalHistory.changesOf(item.id);
+      if (changes) item.changes = changes;
+    }
     const answer = (await my.rpc.call('push-signal-graph', {
       ...graph,
       pageId,
@@ -241,7 +288,11 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   async function pushInjectorTree() {
     const tree = collectInjectorTree(getNg());
     const json = JSON.stringify(tree);
-    if (json === lastInjectorJson && Date.now() - injectorSentAt < KEEPALIVE_MS) return;
+    if (json === lastInjectorJson) {
+      if (!keepaliveDue(injectorSentAt, tickMs())) return;
+      injectorSentAt = Date.now();
+      if (await pingKnows('ping-injector-tree')) return;
+    }
     lastInjectorJson = json;
     injectorSentAt = Date.now();
     await my.rpc.call('push-injector-tree', { ...tree, pageId });
@@ -260,7 +311,8 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
       )
     : null;
   const pipes = on.pipes ? attachPipes(my, pageId, getNg) : null;
-  const http = on.http ? attachHttp(my, pageId) : null;
+  const http = on.http ? attachHttp(my, pageId, tickMs) : null;
+  const cd = on.components ? attachChangeDetection(my, pageId, getNg, limits.cdCycles) : null;
   const ngrx = on.ngrx ? attachNgrx(my, pageId, getNg, limits.changeLog) : null;
 
   const navigations: NavigationRecord[] = [];
@@ -345,6 +397,8 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
       if (!router && routerMisses < 3 && ng) attachRouter(ng);
       const snapshot = router ? snapshotRouter(router) : null;
       const report: Record<string, unknown> = { pageId, snapshot, navigations };
+      const dropped = droppedNavigations(navigations);
+      if (dropped) report['dropped'] = dropped;
       if (router && ng) {
         if (configTracker.update(router) || !config) {
           const cut = { routes: 0 };
@@ -408,33 +462,61 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     pipes?.push,
     on.router && (() => void pushRouter()),
     http && (() => void http.push().catch(() => {})),
+    cd && (() => void cd.push().catch(() => {})),
   ].filter((collect) => typeof collect === 'function');
   const pushAll = () => collectors.forEach((run) => run());
   pushAll();
-  const refresher = watchChangeDetection({ getNg, refresh: pushAll, pollMs: limits.refreshMs });
+  const watch = () => watchChangeDetection({ getNg, refresh: pushAll, pollMs: limits.refreshMs });
+  refresher = watch();
+
+  // A tab in the background runs its timers about once a minute, so it stops
+  // collecting and says so; the server keeps its last data meanwhile.
+  const reportVisibility = (hidden: boolean) =>
+    void my.rpc.call('report-page-visibility', { pageId, hidden }).catch(() => {});
+  let stillHidden: ReturnType<typeof setInterval> | undefined;
+  let left = false;
+  const onVisibility = () => {
+    if (left) return;
+    if (document.visibilityState === 'hidden') {
+      if (!refresher) return;
+      refresher.stop();
+      refresher = undefined;
+      reportVisibility(true);
+      stillHidden = outsideAngular(() =>
+        setInterval(() => reportVisibility(true), HIDDEN_HEARTBEAT_MS),
+      );
+      return;
+    }
+    if (refresher) return;
+    clearInterval(stillHidden);
+    reportVisibility(false);
+    pushAll();
+    refresher = watch();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  onVisibility();
 
   my.rpc.register({
     name: 'highlight-in-page',
     type: 'event',
     jsonSerializable: true,
-    handler: (selector: string | { pageId?: string; id?: string } | null) => {
+    handler: (
+      selector:
+        string | { pageId?: string; id?: string; selector?: string; reveal?: boolean } | null,
+    ) => {
+      clearHighlight();
       if (selector && typeof selector === 'object') {
         if (selector.pageId && selector.pageId !== pageId) return;
-        clearHighlight();
-        const host = typeof selector.id === 'string' ? elementById(selector.id) : null;
-        if (host instanceof HTMLElement) showHighlight(host);
+        const reveal = selector.reveal === true;
+        if (typeof selector.id === 'string') {
+          const host = elementById(selector.id);
+          if (host instanceof Element) showHighlight(host, { reveal });
+          return;
+        }
+        if (typeof selector.selector === 'string') highlightSelector(selector.selector, reveal);
         return;
       }
-      clearHighlight();
-      if (typeof selector !== 'string' || !selector) return;
-      // The selector comes from an agent, so it may not be valid CSS.
-      let el: Element | null = null;
-      try {
-        el = document.querySelector(selector);
-      } catch {
-        return;
-      }
-      if (el instanceof HTMLElement) showHighlight(el);
+      if (typeof selector === 'string') highlightSelector(selector, false);
     },
   });
 
@@ -480,7 +562,34 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     },
   });
 
+  let cancelComponentPick: (() => void) | null = null;
   if (on.components) {
+    my.rpc.register({
+      name: 'component-pick',
+      type: 'event',
+      jsonSerializable: true,
+      handler: (request: { requestId?: unknown; pageId?: unknown; cancel?: unknown } | null) => {
+        if (!request || (request.pageId && request.pageId !== pageId)) return;
+        cancelComponentPick?.();
+        if (request.cancel === true || typeof request.requestId !== 'string') return;
+        const requestId = request.requestId;
+        const pick = startComponentPick({
+          getNg,
+          highlight: { show: showHighlight, clear: clearHighlight },
+        });
+        cancelComponentPick = pick.cancel;
+        void pick.result.then((result) => {
+          if (cancelComponentPick === pick.cancel) cancelComponentPick = null;
+          if (result.ok) {
+            componentTarget = result.id;
+            void pushTree(true).catch(() => {});
+          }
+          void my.rpc.call('component-pick-result', { requestId, pageId, result }).catch(() => {});
+        });
+      },
+    });
+    own(() => cancelComponentPick?.());
+
     const componentOf = (el: unknown) => {
       const host = el instanceof Element ? componentHostOf(getNg(), el) : null;
       return host ? elementId(host) : null;
@@ -495,11 +604,17 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     if (on[inspector]) void my.rpc.call(name, pageId).catch(() => {});
   };
   const leave = () => {
+    left = true;
+    refresher?.stop();
+    refresher = undefined;
+    clearInterval(stillHidden);
+    reportVisibility(false);
     pipes?.pause();
     forget('forms', 'forget-forms-page');
     forget('router', 'forget-router-page');
     forget('pipes', 'forget-pipes-page');
     forget('components', 'forget-component-page');
+    cd?.leave();
     lastInjectorJson = '';
     forget('injectors', 'forget-injector-page');
     http?.leave();
@@ -510,17 +625,23 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   const resendConfig = () => {
     sentGeneration = -1;
     pipes?.resume();
+    left = false;
+    onVisibility();
   };
   addEventListener('pageshow', resendConfig);
 
   own(() => {
-    refresher.stop();
+    refresher?.stop();
+    refresher = undefined;
+    clearInterval(stillHidden);
+    document.removeEventListener('visibilitychange', onVisibility);
     removeEventListener('pagehide', leave);
     removeEventListener('pageshow', resendConfig);
     leave();
     forms?.stop();
     pipes?.stop();
     ngrx?.stop();
+    cd?.stop();
     stopAnalog();
     for (const cleanup of routerCleanup) cleanup();
     routerCleanup = [];
@@ -532,6 +653,18 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   });
 }
 
+function highlightSelector(selector: string, reveal: boolean) {
+  if (!selector) return;
+  // The selector comes from an agent, so it may not be valid CSS.
+  let el: Element | null = null;
+  try {
+    el = document.querySelector(selector);
+  } catch {
+    return;
+  }
+  if (el) showHighlight(el, { reveal });
+}
+
 function findAngularElements(): Element[] {
   const versionEls = Array.from(document.querySelectorAll('[ng-version]'));
   const allEls = Array.from(document.querySelectorAll('*'));
@@ -539,41 +672,6 @@ function findAngularElements(): Element[] {
     Array.from(el.attributes).some((a) => a.name.startsWith('_nghost')),
   );
   return Array.from(new Set([...versionEls, ...hostEls]));
-}
-
-// Highlight overlay
-function showHighlight(el: HTMLElement) {
-  clearHighlight();
-  highlightEl = document.createElement('div');
-  Object.assign(highlightEl.style, {
-    position: 'fixed',
-    background: 'rgba(245, 165, 36, 0.12)',
-    border: '2px solid rgba(245, 165, 36, 0.9)',
-    borderRadius: '4px',
-    pointerEvents: 'none',
-    zIndex: '2147483645',
-  } satisfies Partial<CSSStyleDeclaration>);
-  document.body.appendChild(highlightEl);
-  const follow = () => {
-    if (!highlightEl) return;
-    const rect = el.getBoundingClientRect();
-    Object.assign(highlightEl.style, {
-      top: `${rect.top}px`,
-      left: `${rect.left}px`,
-      width: `${rect.width}px`,
-      height: `${rect.height}px`,
-    });
-    highlightFrame = requestAnimationFrame(follow);
-  };
-  follow();
-  highlightTimer = setTimeout(clearHighlight, 2000);
-}
-
-function clearHighlight() {
-  clearTimeout(highlightTimer);
-  cancelAnimationFrame(highlightFrame);
-  highlightEl?.remove();
-  highlightEl = null;
 }
 
 // --- Signal Graph collection using Angular's debug API ---

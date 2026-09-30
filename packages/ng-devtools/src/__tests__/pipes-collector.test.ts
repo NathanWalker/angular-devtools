@@ -9,9 +9,9 @@ import {
   type PipeTransform,
 } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { AsyncPipe, CurrencyPipe, JsonPipe, UpperCasePipe } from '@angular/common';
+import { AsyncPipe, CurrencyPipe, DatePipe, JsonPipe, UpperCasePipe } from '@angular/common';
 import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, of, type Observable } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attachPipes } from '../pipes-collector.ts';
 import { setRedaction } from '../forms-privacy.ts';
@@ -63,6 +63,20 @@ class JoinPipe implements PipeTransform {
   }
 }
 Pipe({ name: 'join' })(JoinPipe);
+
+class KeysPipe implements PipeTransform {
+  transform(value: Map<string, number> | Set<string>): string {
+    return [...value.keys()].join(',');
+  }
+}
+Pipe({ name: 'keys' })(KeysPipe);
+
+class FilterPipe implements PipeTransform {
+  transform(value: string[], term: string): string {
+    return value.filter((v) => v.includes(term)).join(',');
+  }
+}
+Pipe({ name: 'filter' })(FilterPipe);
 
 function harness(pageId = 'pg') {
   const calls: { name: string; args: unknown[] }[] = [];
@@ -500,6 +514,227 @@ describe('pipes collector', () => {
     );
     expect(markdown).toContain('[redacted]');
     expect(markdown).not.toContain('hunter3');
+  });
+
+  async function recheck(
+    fixture: { detectChanges(): void; whenStable(): Promise<unknown> },
+    cdr: ChangeDetectorRef,
+  ) {
+    cdr.markForCheck();
+    fixture.detectChanges();
+    await fixture.whenStable();
+  }
+
+  async function report(h: ReturnType<typeof harness>) {
+    h.collector.resume();
+    await Promise.resolve();
+    return h.reports().at(-1)!;
+  }
+
+  it('starts each recording from zero calls', async () => {
+    const fixture = await mount(Receipt);
+    const h = harness();
+    const record = (on: boolean) => h.handlers.get('instrument-pipes')!(on);
+    record(true);
+    for (const value of [5, 6, 7]) {
+      fixture.componentInstance.a.set(value);
+      fixture.detectChanges();
+    }
+    const first = (await report(h)).pipes.find((p) => p.name === 'currency')!;
+    expect(first.call?.callCount).toBe(3);
+
+    record(false);
+    record(true);
+    expect((await report(h)).pipes.find((p) => p.name === 'currency')!.call).toBeUndefined();
+
+    fixture.componentInstance.a.set(8);
+    fixture.detectChanges();
+    const second = (await report(h)).pipes.find((p) => p.name === 'currency')!;
+    expect(second.call?.callCount).toBe(1);
+    expect(second.call?.lastResult).toBe('$8.00');
+  });
+
+  it('starts each recording with a fresh stale baseline', async () => {
+    class ListView {
+      items = signal<string[]>(['a', 'b']);
+      cdr = inject(ChangeDetectorRef);
+    }
+    Component({
+      selector: 'app-list-baseline',
+      imports: [JoinPipe],
+      template: `<p>{{ items() | join }}</p>`,
+    })(ListView);
+    const fixture = await mount(ListView);
+    const h = harness();
+    const record = (on: boolean) => h.handlers.get('instrument-pipes')!(on);
+    record(true);
+    await report(h);
+    record(false);
+    fixture.componentInstance.items().push('c');
+    await recheck(fixture, fixture.componentInstance.cdr);
+    record(true);
+    expect((await report(h)).pipes.find((p) => p.name === 'join')?.stale).toBeUndefined();
+  });
+
+  it('flags a Date mutated in place and shown with the real DatePipe', async () => {
+    class When {
+      when = new Date(2020, 0, 1);
+      cdr = inject(ChangeDetectorRef);
+    }
+    Component({
+      selector: 'app-when',
+      imports: [DatePipe],
+      template: `<p>{{ when | date: 'yyyy' }}</p>`,
+    })(When);
+    const fixture = await mount(When);
+    const h = harness();
+    h.handlers.get('instrument-pipes')!(true);
+    await report(h);
+
+    fixture.componentInstance.when.setFullYear(2030);
+    await recheck(fixture, fixture.componentInstance.cdr);
+    expect(fixture.nativeElement.textContent).toContain('2020');
+    expect((await report(h)).pipes.find((p) => p.name === 'date')?.stale).toBeDefined();
+  });
+
+  it.each([
+    [
+      'Map',
+      () => new Map([['a', 1]]),
+      (v: Map<string, number> | Set<string>) => (v as Map<string, number>).set('b', 2),
+    ],
+    [
+      'Set',
+      () => new Set(['a']),
+      (v: Map<string, number> | Set<string>) => (v as Set<string>).add('b'),
+    ],
+  ])('flags a %s mutated in place', async (_kind, create, mutate) => {
+    class Bag {
+      bag = create();
+      cdr = inject(ChangeDetectorRef);
+    }
+    Component({
+      selector: `app-bag-${_kind.toLowerCase()}`,
+      imports: [KeysPipe],
+      template: `<p>{{ bag | keys }}</p>`,
+    })(Bag);
+    const fixture = await mount(Bag);
+    const h = harness();
+    h.handlers.get('instrument-pipes')!(true);
+    await report(h);
+
+    mutate(fixture.componentInstance.bag);
+    await recheck(fixture, fixture.componentInstance.cdr);
+    expect((await report(h)).pipes.find((p) => p.name === 'keys')?.stale).toBeDefined();
+  });
+
+  it('does not flag a pipe that reran because another argument changed', async () => {
+    class Search {
+      items = ['apple', 'banana'];
+      term = signal('a');
+      cdr = inject(ChangeDetectorRef);
+    }
+    Component({
+      selector: 'app-search',
+      imports: [FilterPipe],
+      template: `<p>{{ items | filter: term() }}</p>`,
+    })(Search);
+    const fixture = await mount(Search);
+    const h = harness();
+    h.handlers.get('instrument-pipes')!(true);
+    await report(h);
+
+    fixture.componentInstance.items.push('cherry');
+    fixture.componentInstance.term.set('an');
+    await recheck(fixture, fixture.componentInstance.cdr);
+    expect(fixture.nativeElement.textContent).toContain('banana');
+    expect((await report(h)).pipes.find((p) => p.name === 'filter')?.stale).toBeUndefined();
+  });
+
+  it('clears a stale finding once the pipe reruns', async () => {
+    class Search {
+      items = ['apple', 'banana'];
+      term = signal('a');
+      cdr = inject(ChangeDetectorRef);
+    }
+    Component({
+      selector: 'app-search2',
+      imports: [FilterPipe],
+      template: `<p>{{ items | filter: term() }}</p>`,
+    })(Search);
+    const fixture = await mount(Search);
+    const h = harness();
+    h.handlers.get('instrument-pipes')!(true);
+    await report(h);
+
+    fixture.componentInstance.items.push('avocado');
+    await recheck(fixture, fixture.componentInstance.cdr);
+    expect((await report(h)).pipes.find((p) => p.name === 'filter')?.stale).toBeDefined();
+
+    fixture.componentInstance.term.set('av');
+    await recheck(fixture, fixture.componentInstance.cdr);
+    expect(fixture.nativeElement.textContent).toContain('avocado');
+    expect((await report(h)).pipes.find((p) => p.name === 'filter')?.stale).toBeUndefined();
+  });
+
+  it('marks an async pipe whose source changes on every check as resubscribing', async () => {
+    const cached = of('cached');
+    class Feed {
+      stable$ = new BehaviorSubject('stable');
+      cdr = inject(ChangeDetectorRef);
+      getData(): Observable<string> {
+        return of('fresh');
+      }
+      getCached(): Observable<string> {
+        return cached;
+      }
+    }
+    Component({
+      selector: 'app-resubscribe',
+      imports: [AsyncPipe],
+      template: `<p>{{ getData() | async }}</p><p>{{ getCached() | async }}</p><p>{{ stable$ | async }}</p>`,
+    })(Feed);
+    const fixture = await mount(Feed);
+    const h = harness();
+    const flags = async () => (await report(h)).async!.map((a) => a.resubscribing ?? false);
+    expect(await flags()).toEqual([false, false, false]);
+    for (let i = 0; i < 2; i++) {
+      await recheck(fixture, fixture.componentInstance.cdr);
+      expect(await flags()).toEqual([false, false, false]);
+    }
+    await recheck(fixture, fixture.componentInstance.cdr);
+    expect(await flags()).toEqual([true, false, false]);
+
+    const markdown = explainPipeText(
+      'async',
+      '/nonexistent',
+      mergePipePageReport(new Map(), h.reports().at(-1)!, 0),
+    );
+    expect(markdown).toContain('**Resubscribing:** 1');
+    expect(markdown).toContain('Feed');
+  });
+
+  it('does not mark an async pipe whose source changed once', async () => {
+    class Feed {
+      source$ = new BehaviorSubject('one');
+      cdr = inject(ChangeDetectorRef);
+    }
+    Component({
+      selector: 'app-switch',
+      imports: [AsyncPipe],
+      template: `<p>{{ source$ | async }}</p>`,
+    })(Feed);
+    const fixture = await mount(Feed);
+    const h = harness();
+    await report(h);
+    fixture.componentInstance.source$ = new BehaviorSubject('two');
+    await recheck(fixture, fixture.componentInstance.cdr);
+    await report(h);
+    for (let i = 0; i < 3; i++) {
+      await recheck(fixture, fixture.componentInstance.cdr);
+      await report(h);
+    }
+    expect(h.reports().at(-1)!.async![0].resubscribing).toBeUndefined();
   });
 
   it('does nothing harmful when Angular has no debug API on the page', async () => {

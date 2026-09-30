@@ -40,6 +40,16 @@ export function explainPipeText(name: string, cwd: string, live: PipesState): st
   if (!declared.length) lines.push(`Not found by source scan (only seen live).`);
 
   lines.push('', runtimeText(runtime, live.instrumented.length > 0));
+  if (name === 'async') {
+    const resubscribing = live.async.filter((a) => a.resubscribing);
+    if (resubscribing.length) {
+      const owners = [...new Set(resubscribing.map((a) => a.component))].join(', ');
+      lines.push(
+        '',
+        `**Resubscribing:** ${resubscribing.length} \`| async\` usage(s) got a new source on several reports in a row (${owners}). A call like \`getData() | async\` that builds a new Observable on each check makes AsyncPipe unsubscribe and subscribe again every time. Keep the Observable in a field, or use \`toSignal()\` or \`httpResource()\`.`,
+      );
+    }
+  }
 
   if (findings.length) {
     lines.push('', '**Lint findings:**');

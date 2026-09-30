@@ -63,7 +63,7 @@ SSR is **On** when the build options of that project set `ssr` or `server`, or w
 
 ### Counts
 
-The Components, Routes, NgRx and Pipes cards count the source scan. The Signals and Injectors cards use the live page when one is connected, and the source scan otherwise. The live Signals count covers the graph of the one component the [Signals tab](./signals.md) shows, and counts its signals, computeds, linked signals and effects.
+The Components, Routes, NgRx and Pipes cards count the source scan. The Signals and Injectors cards use the live page when one is connected, and the source scan otherwise. Opened from the popup or the Chrome extension, they count the page the Dashboard belongs to, like the Signals and Injectors tabs. Opened on its own, they count the page that reported last. The live Signals count covers the graph of the one component the [Signals tab](./signals.md) shows, and counts its signals, computeds, linked signals and effects.
 
 ## How to use it
 

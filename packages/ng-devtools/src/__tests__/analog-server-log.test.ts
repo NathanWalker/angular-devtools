@@ -5,7 +5,6 @@ import {
   classify,
   clearCalls,
   duplicateLoads,
-  isSecretKey,
   loadRoute,
   previewOf,
   recentCalls,
@@ -13,6 +12,7 @@ import {
   type AnalogCall,
 } from '../analog-server-log.ts';
 import ngDevtoolsVite from '../vite.ts';
+import { isRedactedKey as isSecretKey } from '../forms-privacy.ts';
 
 class FakeRes extends EventEmitter {
   statusCode = 200;
@@ -121,6 +121,82 @@ describe('Analog server call log', () => {
     expect(client.call!.render).toBe('client');
     const devtools = run('/api/v1/hello', (res) => res.end('{}'), { 'x-ng-devtools': '1' });
     expect(devtools.call!.from).toBe('devtools');
+  });
+
+  it('classifies non-GET page endpoint requests as form actions', () => {
+    expect(classify('/api/_analog/pages/contact', 'POST', '*/*', 'api')).toEqual({
+      kind: 'action',
+      route: '/contact',
+    });
+    expect(classify('/_analog/pages/(auth)/login', 'DELETE', '', 'api')).toEqual({
+      kind: 'action',
+      route: '/login',
+    });
+    expect(classify('/api/_analog/pages/contact', 'HEAD', '', 'api')!.kind).toBe('load');
+  });
+
+  it('records form action outcomes with redacted validation errors and redirects', () => {
+    const browser = { 'user-agent': 'Mozilla' };
+    const ok = run(
+      '/api/_analog/pages/contact',
+      (res) => {
+        res.setHeader('content-type', 'application/json');
+        res.end('{"sent":true}');
+      },
+      browser,
+      'POST',
+    );
+    expect(ok.call).toMatchObject({ kind: 'action', outcome: 'success', route: '/contact' });
+    const invalid = run(
+      '/api/_analog/pages/contact',
+      (res) => {
+        res.statusCode = 422;
+        res.setHeader('x-analog-errors', 'true');
+        res.setHeader('content-type', 'text/plain;charset=UTF-8');
+        res.end('{"email":"Email is required","password":"hunter2 is too short"}');
+      },
+      browser,
+      'POST',
+    );
+    expect(invalid.call).toMatchObject({ kind: 'action', outcome: 'invalid', status: 422 });
+    expect(invalid.call!.preview).toContain('"email":"Email is required"');
+    expect(invalid.call!.preview).not.toContain('hunter2');
+    const redirect = run(
+      '/api/_analog/pages/contact',
+      (res) => {
+        res.statusCode = 302;
+        res.setHeader('location', '/thanks?token=abc');
+        res.end();
+      },
+      browser,
+      'POST',
+    );
+    expect(redirect.call).toMatchObject({
+      kind: 'action',
+      outcome: 'redirect',
+      location: '/thanks?token=[redacted]',
+    });
+    const failed = run(
+      '/api/_analog/pages/contact',
+      (res) => {
+        res.statusCode = 500;
+        res.end('boom');
+      },
+      browser,
+      'POST',
+    );
+    expect(failed.call!.outcome).toBe('error');
+  });
+
+  it('keeps load pairing when a form action posts in between', () => {
+    const base = { method: 'GET', url: '', status: 200, ms: 1, kind: 'load' as const };
+    const list: AnalogCall[] = [
+      { ...base, id: 1, at: 1000, route: '/a', from: 'ssr' },
+      { ...base, id: 2, at: 1100, kind: 'page', route: '/a', from: 'browser', render: 'ssr' },
+      { ...base, id: 3, at: 1200, kind: 'action', method: 'POST', route: '/a', from: 'browser' },
+      { ...base, id: 4, at: 1300, route: '/a', from: 'browser' },
+    ];
+    expect(duplicateLoads(list)).toEqual([{ route: '/a', ssrAt: 1000, browserAt: 1300 }]);
   });
 
   it('passes unrelated requests straight through', () => {

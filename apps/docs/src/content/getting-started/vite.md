@@ -120,7 +120,9 @@ The plugin reads `apiPrefix` from your Analog config. Set it here only when the 
 
 ### `allowedOrigins`
 
-Each entry is an exact origin, such as `https://tunnel.example`. The request itself must still come from a loopback address.
+Each entry is an origin, such as `https://tunnel.example`. The request itself must still come from a loopback address.
+
+The plugin reads each entry the way a browser sends an origin: it drops a path or a trailing slash and lowercases the host, so `'https://Tunnel.example/app/'` allows `https://tunnel.example`. It prints a warning in the terminal when it changes an entry, and it ignores an entry that is not a URL, such as `'tunnel.example'`. The first request from each origin that the check refuses also prints a warning that names the origin.
 
 ### `auth`
 
@@ -183,7 +185,7 @@ A non-loopback entry in `server.allowedHosts` or `allowedOrigins` turns the one-
     No. It applies to the dev server only, and the overlay import is guarded by <code>import.meta.env.DEV</code>.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Why do I get a 403 from the devtools?">
-    The request did not come from your machine, or its origin is not trusted. Open the app on <code>localhost</code>, list your hostname in <code>server.allowedHosts</code>, or add the origin to <code>allowedOrigins</code>.
+    The request did not come from your machine, or its origin is not trusted. The terminal names a refused origin. Open the app on <code>localhost</code>, list your hostname in <code>server.allowedHosts</code>, or add the origin to <code>allowedOrigins</code>.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="The Analog tab shows no server calls">
     The plugin records server calls made through the Vite dev server. Check that the plugin is registered and that <code>apiPrefix</code> matches your server routes. The <a href="../guides/analog.md">Analog guide</a> walks through a full setup.

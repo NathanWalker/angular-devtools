@@ -341,6 +341,77 @@ describe('componentDetail', () => {
   });
 });
 
+describe('component properties', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  class TripList {
+    trips = signalOf(['Rome', 'Lisbon']);
+    loading = false;
+    filters = { city: 'Rome', sessionToken: 'abc' };
+    password = 'hunter2';
+    title = signalOf('Trips');
+    picked = { emit: () => {} };
+    http = new Store();
+    __ngContext__ = 7;
+    select() {}
+    reload = () => {};
+  }
+
+  function detailFor(instance: object, extra: Partial<ComponentDebugNg> = {}) {
+    document.body.innerHTML = `<app-trip-list></app-trip-list>`;
+    const host = document.querySelector('app-trip-list')!;
+    const { ng } = fakeNg(new Map<Element, object>([[host, instance]]), {
+      getDirectiveMetadata: () => ({ inputs: { heading: 'title' }, outputs: { picked: 'picked' } }),
+      getInjector: () => ({}),
+      ɵgetInjectorMetadata: () => ({ type: 'element', source: host }),
+      ...extra,
+    });
+    return componentDetail(ng, host)!;
+  }
+
+  it('lists own fields that are not inputs, outputs, services or methods, with signals unwrapped', () => {
+    const list = new TripList();
+    const detail = detailFor(list, {
+      ɵgetDependenciesFromInjectable: () => ({
+        dependencies: [{ token: Store, value: list.http, flags: {} }],
+      }),
+    });
+    expect(detail.properties).toEqual([
+      { name: 'trips', prop: 'trips', value: ['Rome', 'Lisbon'], kind: 'signal' },
+      { name: 'loading', prop: 'loading', value: false },
+      { name: 'filters', prop: 'filters', value: { city: 'Rome', sessionToken: '[redacted]' } },
+      { name: 'password', prop: 'password', value: '[redacted]' },
+    ]);
+  });
+
+  it('shows the status, value and error of a resource', () => {
+    const status = signalOf('error');
+    const value = signalOf(undefined);
+    const error = signalOf(new Error('Offline'));
+    const detail = detailFor({ trips: { status, value, error, hasValue: () => false } });
+    expect(detail.properties).toEqual([
+      {
+        name: 'trips',
+        prop: 'trips',
+        kind: 'resource',
+        value: { status: 'error', error: 'Error: Offline' },
+      },
+    ]);
+  });
+
+  it('caps the number of properties and the size of each value', () => {
+    const many: Record<string, unknown> = {};
+    for (let i = 0; i < 80; i++) many[`field${i}`] = i;
+    many['field0'] = { list: Array.from({ length: 100 }, (_, i) => i) };
+    const detail = detailFor(many);
+    expect(detail.properties).toHaveLength(60);
+    const list = (detail.properties[0].value as { list: unknown[] }).list;
+    expect(list.length).toBeLessThanOrEqual(31);
+  });
+});
+
 describe('element ids', () => {
   it('differ between page loads, so a stale selection matches nothing', async () => {
     const el = document.createElement('app-card');

@@ -83,7 +83,12 @@ import { SHARED_STYLES, sourceLocation, type SourceRoute } from './router-types'
             {{ filtered().length }} of {{ routes().length }} route entries,
             {{ navigable() }} navigable
           </p>
-          <div class="table-scroll" role="region" aria-label="Source route config" tabindex="0">
+          <div
+            class="table-scroll"
+            role="region"
+            aria-label="Source route config table"
+            tabindex="0"
+          >
             <table>
               <thead>
                 <tr>

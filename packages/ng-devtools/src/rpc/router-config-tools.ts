@@ -228,7 +228,7 @@ export function listRoutesText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   const config = page.config;
   if (!config) {
     return `Page ${code(page.pageId)} has not reported its route config yet${page.setup?.mode === 'events-only' ? ' (events-only mode: this build has no debug utils, so the config cannot be read)' : ''}.${freshness(page, now)}`;
@@ -300,6 +300,21 @@ export function listRoutesText(
   return capped(
     `${UNTRUSTED}\n\n${header}\n\n${lines.join('\n')}${otherPages(state, page)}${freshness(page, now)}`,
   );
+}
+
+export type RouterLintResult =
+  | { checked: true; findings: LintFinding[] }
+  | { checked: false; reason: 'no-page' | 'events-only' | 'no-config' };
+
+/** Lint findings for the panel, or why no check could run. */
+export function routerLintResult(page: RouterPage | undefined): RouterLintResult {
+  if (!page) return { checked: false, reason: 'no-page' };
+  if (!page.config)
+    return {
+      checked: false,
+      reason: page.setup?.mode === 'events-only' ? 'events-only' : 'no-config',
+    };
+  return { checked: true, findings: lintRoutes(page) };
 }
 
 /**
@@ -550,9 +565,11 @@ export function lintRoutesText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   if (!page.config)
-    return `Page ${code(page.pageId)} has not reported its route config yet.${freshness(page, now)}`;
+    return page.setup?.mode === 'events-only'
+      ? `No checks ran: page ${code(page.pageId)} runs in events-only mode (no debug utils, for example a production build), so it cannot report its route config.${freshness(page, now)}`
+      : `Page ${code(page.pageId)} has not reported its route config yet.${freshness(page, now)}`;
   const findings = lintRoutes(page);
   if (!findings.length)
     return `${UNTRUSTED}\n\nNo route config problems found (${countNodes(page.config)} routes checked). Lazy routes that have not loaded yet are not checked.${freshness(page, now)}`;
@@ -580,7 +597,7 @@ export function routerConfigText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   const setup = page.setup;
   if (!setup)
     return `Page ${code(page.pageId)} has not reported its router setup yet.${freshness(page, now)}`;
@@ -619,7 +636,7 @@ export function exportNavigationText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   const nav: NavigationRecord | undefined =
     args.id !== undefined
       ? page.navigations.find((n) => n.id === args.id)
@@ -720,6 +737,7 @@ export function explainRenderModeText(
   if (!entries.length)
     return 'No ServerRoute config found (no *.routes.server.ts in the workspace), so every route uses the default server rendering setup.';
   const page = pickPage(state, args.page);
+  if (args.page && !page) return noPage(args.page, state);
   const url = args.url ?? page?.snapshot?.url;
   const lines: string[] = [];
   if (url) {

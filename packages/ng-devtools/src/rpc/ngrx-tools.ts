@@ -6,8 +6,9 @@ import type {
   NgrxState,
 } from '../ngrx-shared.ts';
 import type { SignalStoreMembers } from './get-ngrx-store.ts';
+import { PAGE_TTL_MS, fixedTtl, type PageTtl } from './page-ttl.ts';
 
-export const NGRX_PAGE_EXPIRES_MS = 15_000;
+export const NGRX_PAGE_EXPIRES_MS = PAGE_TTL_MS;
 const MAX_LOG = 200;
 
 export interface NgrxDeclaration {
@@ -72,15 +73,20 @@ export function mergeNgrxReport(
     stores: report.stores.map((store) => ({ ...store, ...nameStore(store, declarations) })),
     classic: report.classic ?? null,
     log,
+    dropped: Math.max(0, (log[0]?.seq ?? 1) - 1),
     reportedAt: now,
   });
   return log.at(-1)?.seq ?? 0;
 }
 
-export function expireNgrxPages(pages: NgrxPages, now = Date.now()): boolean {
+export function expireNgrxPages(
+  pages: NgrxPages,
+  now = Date.now(),
+  ttl: PageTtl = fixedTtl(NGRX_PAGE_EXPIRES_MS),
+): boolean {
   let expired = false;
   for (const [id, page] of pages) {
-    if (now - page.reportedAt > NGRX_PAGE_EXPIRES_MS) {
+    if (now - page.reportedAt > ttl(id)) {
       pages.delete(id);
       expired = true;
     }

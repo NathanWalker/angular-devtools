@@ -9,7 +9,8 @@ import { ExamplePage } from './example-page';
     <app-example-page heading="Nested routes" tab="Routes">
       <ng-container lead>
         This page has children of its own, route <code>data</code>, a redirect, a route with a param
-        and a resolver, a guard that redirects, a guard that blocks and a resolver that fails.
+        and a resolver, a guard that redirects, a guard that blocks, a resolver that fails and two
+        guards that redirect to each other a few times before they let go.
       </ng-container>
       <ng-container hint>
         Click through the links and watch the current route and the navigation timeline in the
@@ -23,6 +24,7 @@ import { ExamplePage } from './example-page';
         <a routerLink="admin" routerLinkActive="active" ariaCurrentWhenActive="page">Admin</a>
         <a routerLink="locked" routerLinkActive="active" ariaCurrentWhenActive="page">Locked</a>
         <a routerLink="broken" routerLinkActive="active" ariaCurrentWhenActive="page">Broken</a>
+        <a routerLink="loop-a" routerLinkActive="active" ariaCurrentWhenActive="page">Guard loop</a>
       </nav>
 
       <div class="outlet">

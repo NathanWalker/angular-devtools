@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createNgrxCollector } from '../ngrx-collector.ts';
 import { diff, serialize } from '../ngrx-shared.ts';
@@ -77,7 +78,7 @@ function setup(maxLog?: number) {
   };
   const onChange = vi.fn();
   const collector = createNgrxCollector(() => ng as any, onChange, document, maxLog);
-  return { store, app, rootEnv, collector, onChange };
+  return { store, app, rootEnv, collector, onChange, ng };
 }
 
 describe('ngrx collector', () => {
@@ -223,16 +224,16 @@ describe('ngrx collector', () => {
   });
 
   it('only rescans the page when asked to rediscover stores', () => {
-    const { store, collector } = setup();
-    const spy = vi.spyOn(document, 'createTreeWalker');
+    const { store, collector, ng } = setup();
+    const spy = vi.spyOn(ng, 'getComponent');
     collector.collect();
-    expect(spy).toHaveBeenCalledTimes(1);
+    const scan = spy.mock.calls.length;
+    expect(scan).toBeGreaterThan(0);
     store.setQuery('a');
     expect(collector.collect(false).stores[0].state).toMatchObject({ query: 'a' });
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(scan);
     collector.collect();
-    expect(spy).toHaveBeenCalledTimes(2);
-    spy.mockRestore();
+    expect(spy).toHaveBeenCalledTimes(scan * 2);
   });
 
   it('only returns entries after a sequence number', () => {
@@ -300,6 +301,121 @@ describe('ngrx collector', () => {
     expect(collector.run({ type: 'restore', seq: entry.seq }).error).toMatch(
       /provideStoreDevtools/,
     );
+  });
+});
+
+function fakeClassic<S>(initial: S, reducer: (state: S, action: { type: string }) => S) {
+  document.body.innerHTML = '<app-root ng-version="22"></app-root>';
+  const root = document.querySelector('app-root')!;
+  let state = initial;
+  const listeners: ((a: unknown) => void)[] = [];
+  class _Store {
+    source = { getValue: () => state };
+    dispatch(action: { type: string } | (() => { type: string })) {
+      if (typeof action === 'function') {
+        this.dispatch(action());
+        return;
+      }
+      this.run(action);
+    }
+    next(action: { type: string }) {
+      this.run(action);
+    }
+    run(action: { type: string }) {
+      state = reducer(state, action);
+      for (const l of listeners) l(action);
+    }
+    select() {}
+  }
+  class ScannedActionsSubject {
+    subscribe(fn: (a: unknown) => void) {
+      listeners.push(fn);
+      return { unsubscribe: () => listeners.splice(listeners.indexOf(fn), 1) };
+    }
+  }
+  const store = new _Store();
+  const values = new Map<unknown, unknown>([
+    [_Store, store],
+    [ScannedActionsSubject, new ScannedActionsSubject()],
+  ]);
+  const rootEnv = {
+    scopes: new Set(['root']),
+    records: new Map([...values.keys()].map((k) => [k, { value: undefined }])),
+  };
+  const node = { get: (token: unknown) => values.get(token) ?? null };
+  const ng = {
+    getInjector: () => node,
+    getComponent: (el: Element) => (el === root ? {} : null),
+    ɵgetInjectorResolutionPath: () => [node, rootEnv],
+    ɵgetInjectorProviders: () => [],
+  };
+  const collector = createNgrxCollector(
+    () => ng as any,
+    () => {},
+  );
+  collector.collect();
+  return { store, collector, Store: _Store };
+}
+
+describe('ngrx collector with a classic store', () => {
+  it('finds a change past the first hundred array items', () => {
+    type Todo = { id: number; done: boolean };
+    const todos: Todo[] = Array.from({ length: 150 }, (_, id) => ({ id, done: false }));
+    const { store, collector } = fakeClassic({ todos }, (state, action) => {
+      const id = Number(action.type.split(' ')[1]);
+      return {
+        todos: state.todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
+      };
+    });
+    store.dispatch({ type: 'toggle 5' });
+    store.dispatch({ type: 'toggle 120' });
+    expect(collector.logSince(0).map((e) => e.diff)).toEqual([
+      [{ path: 'todos[5].done', op: 'change', before: false, after: true }],
+      [{ path: 'todos[120].done', op: 'change', before: false, after: true }],
+    ]);
+  });
+
+  it('finds a changed entity past the first hundred keys and keeps an unchanged state empty', () => {
+    const entities = Object.fromEntries(
+      Array.from({ length: 150 }, (_, i) => [`e${i}`, { id: i, done: false }]),
+    );
+    const { store, collector } = fakeClassic({ entities }, (state, action) =>
+      action.type === 'toggle'
+        ? { entities: { ...state.entities, e140: { id: 140, done: true } } }
+        : state,
+    );
+    store.dispatch({ type: 'toggle' });
+    store.dispatch({ type: 'noop' });
+    expect(collector.logSince(0).map((e) => e.diff)).toEqual([
+      [{ path: 'entities.e140.done', op: 'change', before: false, after: true }],
+      [],
+    ]);
+  });
+
+  it('tags each action with where it came from', () => {
+    const { store, collector } = fakeClassic({ n: 0 }, (s) => ({ n: s.n + 1 }));
+    store.dispatch({ type: 'from component' });
+    store.next({ type: 'from effect' });
+    store.dispatch(() => ({ type: 'from signal' }));
+    store.dispatch({ type: 'plain again' });
+    expect(collector.logSince(0).map((e) => [e.type, e.origin])).toEqual([
+      ['from component', 'dispatch'],
+      ['from effect', 'effect'],
+      ['from signal', 'reactive'],
+      ['plain again', 'dispatch'],
+    ]);
+  });
+
+  it('puts back the original dispatch and next when it stops', () => {
+    const { store, collector, Store } = fakeClassic({ n: 0 }, (s) => s);
+    expect(Object.hasOwn(store, 'dispatch')).toBe(true);
+    expect(Object.hasOwn(store, 'next')).toBe(true);
+    collector.stop();
+    expect(Object.hasOwn(store, 'dispatch')).toBe(false);
+    expect(Object.hasOwn(store, 'next')).toBe(false);
+    expect(store.dispatch).toBe(Store.prototype.dispatch);
+    store.dispatch({ type: 'after stop' });
+    expect(collector.logSince(0)).toEqual([]);
   });
 });
 
@@ -512,9 +628,11 @@ describe('ngrx tools', () => {
     expect(mergeNgrxReport(pages, report('s1', [entry(1), entry(2)]), [])).toBe(2);
     expect(mergeNgrxReport(pages, report('s1', [entry(2), entry(3)]), [])).toBe(3);
     expect(ngrxStateOf(pages).pages[0].log.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(ngrxStateOf(pages).pages[0].dropped).toBe(0);
     expect(mergeNgrxReport(pages, report('s2', [entry(1)]), [])).toBe(1);
     mergeNgrxReport(pages, report('s3', [1, 2, 3, 4, 5].map(entry)), [], 0, 2);
     expect(ngrxStateOf(pages).pages[0].log.map((e) => e.seq)).toEqual([4, 5]);
+    expect(ngrxStateOf(pages).pages[0].dropped).toBe(3);
     expect(ngrxStateOf(pages).pages[0]).not.toHaveProperty('session');
   });
 });
@@ -642,6 +760,48 @@ describe('ngrx collector with @ngrx/signals', () => {
     }
   });
 
+  it('finds a component-scoped store and a signalState field through the debug API', async () => {
+    const TestBed = await testBed();
+    const { Component, inject } = await import('@angular/core');
+    const { signalStore, signalState, withState, withMethods, patchState } =
+      await import('@ngrx/signals');
+    const PackingStore = signalStore(
+      withState({ items: ['passport'] }),
+      withMethods((store) => ({
+        add(item: string) {
+          patchState(store, (state) => ({ items: [...state.items, item] }));
+        },
+      })),
+    );
+    class Packing {
+      store = inject(PackingStore);
+      view = signalState({ hidePacked: false });
+    }
+    Component({ selector: 'app-packing', template: '', providers: [PackingStore] })(Packing);
+    const fixture = TestBed.createComponent(Packing);
+    document.body.replaceChildren(fixture.nativeElement);
+    const collector = createNgrxCollector(
+      () => (globalThis as { ng?: any }).ng,
+      () => {},
+    );
+    expect(
+      collector.collect().stores.map((s) => [s.className, s.kind, s.scope, s.references]),
+    ).toEqual([
+      ['SignalStore', 'signal-store', 'Packing (component)', ['Packing.store']],
+      ['signalState', 'signal-state', 'Packing (field)', ['Packing.view']],
+    ]);
+    fixture.componentInstance.store.add('charger');
+    patchState(fixture.componentInstance.view, { hidePacked: true });
+    await Promise.resolve();
+    expect(collector.logSince(0).map((e) => [e.type, e.diff])).toEqual([
+      ['add', [{ path: 'items[1]', op: 'add', after: 'charger' }]],
+      ['patchState', [{ path: 'hidePacked', op: 'change', before: false, after: true }]],
+    ]);
+    fixture.destroy();
+    fixture.nativeElement.remove();
+    expect(collector.collect().stores).toEqual([]);
+  });
+
   it('does not add reactive dependencies when a method runs inside a computed', async () => {
     await import('@angular/compiler');
     const { Injector, computed } = await import('@angular/core');
@@ -694,3 +854,157 @@ function realCollector(store: object) {
     () => {},
   );
 }
+
+let testBedReady = false;
+
+async function testBed() {
+  await import('@angular/compiler');
+  const { TestBed } = await import('@angular/core/testing');
+  if (!testBedReady) {
+    const { BrowserTestingModule, platformBrowserTesting } =
+      await import('@angular/platform-browser/testing');
+    TestBed.initTestEnvironment(BrowserTestingModule, platformBrowserTesting());
+    testBedReady = true;
+  }
+  TestBed.resetTestingModule();
+  return TestBed;
+}
+
+describe('ngrx collector with @ngrx/store', () => {
+  async function realStore(
+    options: { devtools?: { maxAge?: number }; hide?: string[]; store?: boolean } = {},
+  ) {
+    const TestBed = await testBed();
+    const { EnvironmentInjector } = await import('@angular/core');
+    const { Store, createAction, createReducer, on, props, provideStore } =
+      await import('@ngrx/store');
+    const { provideStoreDevtools } = await import('@ngrx/store-devtools');
+    const add = createAction('[Counter] Add', props<{ by: number }>());
+    const reducer = createReducer(
+      0,
+      on(add, (n, { by }) => n + by),
+    );
+    TestBed.configureTestingModule({
+      providers: [
+        ...(options.store === false ? [] : [provideStore({ count: reducer })]),
+        ...(options.devtools ? [provideStoreDevtools(options.devtools)] : []),
+      ],
+    });
+    const env = TestBed.inject(EnvironmentInjector) as unknown as {
+      records: Map<unknown, unknown>;
+      scopes: Set<string>;
+      get(token: unknown, fallback?: unknown): unknown;
+    };
+    const hide = new Set(options.hide ?? []);
+    const view = hide.size
+      ? {
+          scopes: env.scopes,
+          records: new Map(
+            [...env.records].filter(
+              ([token]) => !hide.has((token as { name?: string })?.name ?? ''),
+            ),
+          ),
+        }
+      : env;
+    document.body.innerHTML = '<app-root ng-version="22"></app-root>';
+    const root = document.querySelector('app-root')!;
+    const node = { get: (token: unknown, fallback?: unknown) => env.get(token, fallback) };
+    const ng = {
+      getInjector: () => node,
+      getComponent: (el: Element) => (el === root ? {} : null),
+      ɵgetInjectorResolutionPath: () => [node, view],
+      ɵgetInjectorProviders: vi.fn((_injector: unknown) => [] as { token: unknown }[]),
+    };
+    const collector = createNgrxCollector(
+      () => ng as any,
+      () => {},
+    );
+    const store = options.store === false ? null : TestBed.inject(Store);
+    return { TestBed, Store, store: store!, collector, add, ng, view };
+  }
+
+  it('finds the Store by class name and logs actions with a diff and their origin', async () => {
+    const { TestBed, Store, store, collector, add } = await realStore();
+    expect(collector.collect().classic).toEqual({
+      state: { count: 0 },
+      devtools: false,
+      scope: 'root',
+    });
+    store.dispatch(add({ by: 2 }));
+    store.next(add({ by: 3 }));
+    const by = signal(4);
+    store.dispatch(() => add({ by: by() }));
+    TestBed.tick();
+    expect(collector.logSince(0).map((e) => [e.type, e.origin, e.diff])).toEqual([
+      ['[Counter] Add', 'dispatch', [{ path: 'count', op: 'change', before: 0, after: 2 }]],
+      ['[Counter] Add', 'effect', [{ path: 'count', op: 'change', before: 2, after: 5 }]],
+      ['[Counter] Add', 'reactive', [{ path: 'count', op: 'change', before: 5, after: 9 }]],
+    ]);
+    expect(collector.logSince(0)[0]).toMatchObject({
+      source: 'store',
+      action: { type: '[Counter] Add', by: 2 },
+      restorable: false,
+    });
+    expect(collector.run({ type: 'restore', seq: 1 }).error).toMatch(/provideStoreDevtools/);
+    collector.stop();
+    expect(Object.hasOwn(store, 'dispatch')).toBe(false);
+    expect(store.dispatch).toBe(Store.prototype.dispatch);
+  });
+
+  it('restores through Store DevTools and keeps logging actions while paused', async () => {
+    const { store, collector, add } = await realStore({ devtools: {} });
+    expect(collector.collect().classic).toMatchObject({ devtools: true });
+    store.dispatch(add({ by: 1 }));
+    store.dispatch(add({ by: 10 }));
+    store.dispatch(add({ by: 100 }));
+    const result = collector.run({ type: 'restore', seq: 1 });
+    expect(result).toMatchObject({ ok: true });
+    expect(result.message).toMatch(/paused/);
+    expect(collector.collect().classic).toMatchObject({ state: { count: 1 }, paused: true });
+    expect(collector.logSince(3)[0]).toMatchObject({
+      type: 'Restore #1',
+      diff: [{ path: 'count', op: 'change', before: 111, after: 1 }],
+    });
+    store.dispatch(add({ by: 1000 }));
+    expect(collector.logSince(4)).toMatchObject([{ type: '[Counter] Add', diff: [] }]);
+    expect(collector.collect().classic).toMatchObject({ state: { count: 1 } });
+    expect(collector.run({ type: 'latest' })).toMatchObject({ ok: true });
+    expect(collector.collect().classic).toEqual({
+      state: { count: 1111 },
+      devtools: true,
+      scope: 'root',
+    });
+    expect(collector.run({ type: 'restore', seq: 3 })).toMatchObject({ ok: true });
+    expect(collector.collect().classic).toMatchObject({ state: { count: 111 }, paused: true });
+  });
+
+  it('says so when Store DevTools dropped the action past maxAge', async () => {
+    const { store, collector, add } = await realStore({ devtools: { maxAge: 3 } });
+    collector.collect();
+    for (let i = 0; i < 5; i++) store.dispatch(add({ by: 1 }));
+    expect(collector.run({ type: 'restore', seq: 1 }).error).toMatch(/no longer holds this action/);
+    expect(collector.run({ type: 'restore', seq: 5 })).toMatchObject({ ok: true });
+  });
+
+  it('falls back to ActionsSubject when ScannedActionsSubject is not found', async () => {
+    const { store, collector, add } = await realStore({ hide: ['ScannedActionsSubject'] });
+    expect(collector.collect().classic).toMatchObject({ state: { count: 0 } });
+    store.dispatch(add({ by: 2 }));
+    expect(collector.logSince(0)).toEqual([]);
+    await Promise.resolve();
+    expect(collector.logSince(0)).toMatchObject([
+      {
+        type: '[Counter] Add',
+        origin: 'dispatch',
+        diff: [{ path: 'count', op: 'change', before: 0, after: 2 }],
+      },
+    ]);
+  });
+
+  it('stops looking for the Store after five misses', async () => {
+    const { collector, ng, view } = await realStore({ store: false });
+    for (let i = 0; i < 8; i++) expect(collector.collect().classic).toBeNull();
+    const lookups = ng.ɵgetInjectorProviders.mock.calls.filter(([injector]) => injector === view);
+    expect(lookups).toHaveLength(5);
+  });
+});

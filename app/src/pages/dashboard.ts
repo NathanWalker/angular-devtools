@@ -14,6 +14,7 @@ import {
   type ResolvedNgDevtoolsConfig,
 } from '@santoshyadavdev/ng-devtools/config';
 import { hostPageId } from '../page-id';
+import { injectorTreeFor, signalGraphFor } from '../live-pages';
 import { isStaticReport } from '../rpc';
 import { panelConfig, tabEnabled } from '../devtools-config';
 import { TabIcon } from './tab-icon';
@@ -61,6 +62,7 @@ interface InjectorNode {
 interface InjectorSnapshot {
   roots?: InjectorNode[];
   environment?: InjectorNode[];
+  pages?: Record<string, InjectorSnapshot>;
 }
 
 interface GraphSnapshot {
@@ -507,7 +509,7 @@ export class Dashboard {
   private stopLive: (() => void)[] = [];
 
   private readonly liveInjectors = computed(() => {
-    const tree = this.injectorTree();
+    const tree = injectorTreeFor(this.injectorTree(), this.pageId);
     if (!tree?.roots?.length) return null;
     let injectors = 0;
     let providers = 0;
@@ -521,8 +523,7 @@ export class Dashboard {
   });
 
   private readonly liveSignals = computed(() => {
-    const state = this.signalGraph();
-    const graph = (this.pageId && state?.pages?.[this.pageId]) || state?.graph;
+    const graph = signalGraphFor(this.signalGraph(), this.pageId);
     if (!graph?.nodes?.length) return null;
     return graph.nodes.filter((node) => LIVE_SIGNAL_KINDS.has(node.kind ?? '')).length;
   });

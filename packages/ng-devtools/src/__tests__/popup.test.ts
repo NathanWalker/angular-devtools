@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** The module auto-creates on import and keeps a single instance, so each test
  * needs it loaded afresh. */
@@ -40,7 +40,35 @@ function parts() {
   return {
     fab: shadow.querySelector('.fab') as HTMLButtonElement,
     panel: shadow.querySelector('.panel') as HTMLElement,
+    toolbar: shadow.querySelector('.toolbar') as HTMLElement,
+    dock: (mode: string) =>
+      shadow.querySelector(`.dock-btn[aria-label="Dock ${mode}"]`) as HTMLButtonElement,
   };
+}
+
+/** jsdom has no PointerEvent, so a mouse event carries the pointer fields. */
+function pointer(type: string, x: number, y: number, pointerType = 'touch') {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+  Object.defineProperties(event, {
+    pointerId: { value: 1 },
+    pointerType: { value: pointerType },
+  });
+  return event;
+}
+
+function stored() {
+  return JSON.parse(localStorage.getItem('ng-devtools-popup') ?? '{}');
+}
+
+/** Hooks the frame to a document the test controls, as a same origin frame is. */
+async function frameDocument() {
+  await openedSrc();
+  const inner = document.createElement('iframe');
+  document.body.appendChild(inner);
+  const doc = inner.contentDocument!;
+  Object.defineProperty(frame(), 'contentDocument', { get: () => doc });
+  frame().dispatchEvent(new Event('load'));
+  return doc;
 }
 
 // One document and one localStorage, so these share state by nature.
@@ -209,5 +237,146 @@ describe.sequential('devtools popup', () => {
       window.innerWidth = width;
       window.innerHeight = height;
     }
+  });
+
+  it('brings a panel stored off screen back inside the window, and keeps it there on resize', async () => {
+    const width = window.innerWidth;
+    localStorage.setItem(
+      'ng-devtools-popup',
+      JSON.stringify({ x: 3000, y: 3000, width: 720, height: 480, docked: 'float' }),
+    );
+    try {
+      await loadPopup(true);
+      parts().fab.click();
+      const { panel } = parts();
+      expect(parseInt(panel.style.left, 10)).toBe(window.innerWidth - 720);
+      expect(parseInt(panel.style.top, 10)).toBe(window.innerHeight - 480);
+
+      window.innerWidth = 360;
+      window.dispatchEvent(new Event('resize'));
+      expect(parseInt(panel.style.left, 10)).toBe(16);
+      expect(stored().width ?? 720).toBe(720);
+    } finally {
+      window.innerWidth = width;
+    }
+  });
+
+  it('drags the floating panel by touch and remembers where it went', async () => {
+    await loadPopup(true);
+    parts().fab.click();
+    const { panel, toolbar } = parts();
+    const css = toolbar.getRootNode() as ShadowRoot;
+    expect(css.querySelector('style')!.textContent).toMatch(/\.toolbar \{[^}]*touch-action: none/);
+    toolbar.dispatchEvent(pointer('pointerdown', 40, 40));
+    toolbar.dispatchEvent(pointer('pointermove', 140, 90));
+    toolbar.dispatchEvent(pointer('pointerup', 140, 90));
+    expect(panel.style.left).toBe('100px');
+    expect(panel.style.top).toBe('50px');
+    expect(stored()).toMatchObject({ x: 100, y: 50 });
+  });
+
+  it('does not start a drag from the dock or close buttons', async () => {
+    await loadPopup(true);
+    parts().fab.click();
+    const { panel, dock } = parts();
+    const before = panel.style.left;
+    dock('right').dispatchEvent(pointer('pointerdown', 40, 40, 'mouse'));
+    parts().toolbar.dispatchEvent(pointer('pointermove', 240, 240, 'mouse'));
+    expect(panel.style.left).toBe(before);
+  });
+
+  it('puts the panel back in its default place on a double click of the toolbar', async () => {
+    localStorage.setItem(
+      'ng-devtools-popup',
+      JSON.stringify({ x: 200, y: 150, width: 300, height: 200, docked: 'float' }),
+    );
+    await loadPopup(true);
+    parts().fab.click();
+    const { panel, toolbar } = parts();
+    expect(panel.style.left).toBe('200px');
+    toolbar.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(panel.style.left).toBe('16px');
+    expect(panel.style.top).toBe('16px');
+    expect(stored()).toMatchObject({ x: 16, y: 16 });
+  });
+
+  it('switches docking and returns to the floating place', async () => {
+    localStorage.setItem(
+      'ng-devtools-popup',
+      JSON.stringify({ x: 50, y: 60, width: 300, height: 200, docked: 'float' }),
+    );
+    await loadPopup(true);
+    parts().fab.click();
+    const { panel, dock } = parts();
+    dock('bottom').click();
+    expect(panel.classList.contains('dock-bottom')).toBe(true);
+    expect(panel.style.left).toBe('');
+    expect(dock('bottom').getAttribute('aria-pressed')).toBe('true');
+    dock('float').click();
+    expect(panel.classList.contains('dock-float')).toBe(true);
+    expect(panel.style.left).toBe('50px');
+    expect(stored().docked).toBe('float');
+  });
+
+  it('lets Escape clear a search box in the frame without closing the panel', async () => {
+    await loadPopup(true);
+    const doc = await frameDocument();
+    const { panel } = parts();
+    const search = doc.createElement('input');
+    search.type = 'search';
+    search.value = 'card';
+    search.addEventListener('keydown', () => (search.value = ''));
+    doc.body.appendChild(search);
+
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(search.value).toBe('');
+    expect(panel.classList.contains('open')).toBe(true);
+
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(panel.classList.contains('open')).toBe(false);
+  });
+
+  describe('top layer', () => {
+    let shown: Element[] = [];
+    beforeEach(() => {
+      shown = [];
+      HTMLElement.prototype.showPopover = function (this: HTMLElement) {
+        shown.push(this);
+      };
+      HTMLElement.prototype.hidePopover = function () {};
+    });
+    afterEach(() => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).showPopover;
+      delete (HTMLElement.prototype as Partial<HTMLElement>).hidePopover;
+    });
+
+    it('shows the launcher and panel as popovers, and again above a popover that opens', async () => {
+      await loadPopup(true);
+      const { fab, panel } = parts();
+      expect(fab.getAttribute('popover')).toBe('manual');
+      expect(panel.getAttribute('popover')).toBe('manual');
+      expect(shown).toEqual([fab, panel]);
+
+      const menu = document.createElement('div');
+      document.body.appendChild(menu);
+      shown = [];
+      menu.dispatchEvent(Object.assign(new Event('toggle'), { newState: 'open' }));
+      expect(shown).toEqual([fab, panel]);
+
+      shown = [];
+      menu.dispatchEvent(Object.assign(new Event('toggle'), { newState: 'closed' }));
+      expect(shown).toEqual([]);
+    });
+
+    it('stays below a modal dialog, which makes it inert anyway', async () => {
+      await loadPopup(true);
+      const dialog = document.createElement('dialog');
+      dialog.matches = ((selector: string): boolean =>
+        selector === ':modal') as typeof dialog.matches;
+      document.body.appendChild(dialog);
+      shown = [];
+      dialog.dispatchEvent(Object.assign(new Event('toggle'), { newState: 'open' }));
+      expect(shown).toEqual([]);
+    });
   });
 });

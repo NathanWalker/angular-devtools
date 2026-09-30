@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyRouterEvent,
+  droppedNavigations,
   findRouter,
   nameOf,
   redactText,
   serializeRoute,
+  trimNavigations,
   type ActiveRoute,
   type NavigationRecord,
 } from '../router.ts';
@@ -257,6 +259,27 @@ describe('router reports', () => {
     expect(both.pages.map((p) => p.pageId)).toEqual(['b', 'a']);
     expect(expireRouterPages(pages, 100_000)).toBeNull();
     expect(expireRouterPages(pages, 151_500)?.pages.map((p) => p.pageId)).toEqual(['b']);
+  });
+});
+
+describe('dropped navigations', () => {
+  it('counts what the limit removes and notes it in explain-navigation', () => {
+    const navigations = Array.from({ length: 8 }, (_, i) => nav(i + 1));
+    trimNavigations(navigations, 5);
+    trimNavigations(navigations, 5);
+    navigations.push(nav(9));
+    trimNavigations(navigations, 5);
+    expect(navigations.map((n) => n.id)).toEqual([5, 6, 7, 8, 9]);
+    expect(droppedNavigations(navigations)).toBe(4);
+    expect(droppedNavigations([])).toBe(0);
+
+    const report = { pageId: 'a', snapshot: null, navigations, dropped: 4 };
+    expect(isRouterReport(report)).toBe(true);
+    expect(isRouterReport({ ...report, dropped: 'x' })).toBe(false);
+    expect(explainNavigationText(state({ navigations, dropped: 4 }), {}, 1_000)).toContain(
+      '4 older navigations were dropped at the limit',
+    );
+    expect(explainNavigationText(state({ navigations }), {}, 1_000)).not.toContain('dropped');
   });
 });
 

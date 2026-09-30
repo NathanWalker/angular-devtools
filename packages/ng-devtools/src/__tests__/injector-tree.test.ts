@@ -16,6 +16,7 @@ class App {}
 class Card {}
 class Tooltip {}
 const API_URL = { _desc: 'API_URL', toString: () => 'InjectionToken API_URL' };
+const THEME = { _desc: 'THEME', toString: () => 'InjectionToken THEME' };
 
 function fakeNg() {
   document.body.innerHTML = `
@@ -75,7 +76,7 @@ function fakeNg() {
               dependencies: [
                 { token: Store, flags: { optional: false }, providedIn: rootEnv },
                 { token: Logger, flags: { self: true }, providedIn: node(card) },
-                { token: API_URL, flags: { optional: true } },
+                { token: THEME, flags: { optional: true } },
               ],
             }
           : { dependencies: [] },
@@ -121,7 +122,7 @@ describe('collectInjectorTree', () => {
     expect(card.dependencies).toEqual([
       { from: 'Card', token: 'Store', flags: [], providedBy: rootId },
       { from: 'Card', token: 'Logger', flags: ['self'], providedBy: card.injector.id },
-      { from: 'Card', token: 'API_URL', flags: ['optional'], providedBy: null },
+      { from: 'Card', token: 'THEME', flags: ['optional'], providedBy: null },
     ]);
     expect(card.injector.path).toEqual([
       card.injector.id,
@@ -152,7 +153,7 @@ describe('collectInjectorTree', () => {
     const first = collectInjectorTree(ng);
     const afterFirst = calls;
     const again = collectInjectorTree(ng);
-    expect(afterFirst).toBe(2);
+    expect(afterFirst).toBe(3);
     expect(calls).toBe(afterFirst);
     expect(again).toEqual(first);
   });
@@ -177,6 +178,105 @@ describe('collectInjectorTree', () => {
     expect(document.querySelector(report.roots[1].injector.selector!)).toBe(
       document.querySelectorAll('li')[1],
     );
+  });
+
+  it('walks into shadow roots and nests their injectors under the host', () => {
+    document.body.innerHTML = '<app-root><app-shell></app-shell></app-root>';
+    const root = document.querySelector('app-root')!;
+    const shell = document.querySelector('app-shell')!;
+    const shadow = shell.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<section><app-child></app-child></section>';
+    const child = shadow.querySelector('app-child')!;
+    const components = new Map<Element, object>([
+      [root, new App()],
+      [shell, new Card()],
+      [child, new Tooltip()],
+    ]);
+    const env = { kind: 'env' };
+    const ng = {
+      getInjector: (el: Element) => ({ kind: 'node', el }),
+      getComponent: (el: Element) => components.get(el) ?? null,
+      getDirectives: (el: Element) => (components.has(el) ? [components.get(el)] : []),
+      ɵgetInjectorMetadata: (inj: any) =>
+        inj.kind === 'node'
+          ? { type: 'element', source: inj.el }
+          : { type: 'environment', source: 'R' },
+      ɵgetInjectorResolutionPath: (inj: any) => [inj, env],
+      ɵgetInjectorProviders: () => [],
+    } as any;
+    const { roots } = collectInjectorTree(ng);
+    expect(roots.map((r) => r.injector.name)).toEqual(['app-root']);
+    const shellNode = roots[0].children[0];
+    expect(shellNode.injector.name).toBe('app-shell');
+    expect(document.querySelector(shellNode.injector.selector!)).toBe(shell);
+    expect(shellNode.children.map((c) => c.injector)).toEqual([
+      expect.objectContaining({ name: 'app-child', component: 'Tooltip' }),
+    ]);
+    expect(shellNode.children[0].injector).not.toHaveProperty('selector');
+  });
+
+  it('lists ng-container injectors and keeps them on the lookup path', () => {
+    document.body.innerHTML = '<app-root><app-card></app-card></app-root>';
+    const root = document.querySelector('app-root')!;
+    const card = document.querySelector('app-card')!;
+    const container = document.createComment('ng-container');
+    root.insertBefore(container, card);
+    const env = { kind: 'env' };
+    const node = (el: Node) => ({ kind: 'node', el });
+    const containerInjector = node(container);
+    const ng = {
+      getInjector: (el: Node) => (el === container ? containerInjector : node(el)),
+      getComponent: (el: Element) => (el === root ? new App() : el === card ? new Card() : null),
+      getDirectives: (el: Node) =>
+        el === root
+          ? [new App()]
+          : el === card
+            ? [new Card()]
+            : el === container
+              ? [new Tooltip()]
+              : [],
+      ɵgetInjectorMetadata: (inj: any) =>
+        inj.kind === 'node'
+          ? { type: 'element', source: inj.el }
+          : { type: 'environment', source: 'R' },
+      ɵgetInjectorResolutionPath: (inj: any) =>
+        inj.el === card ? [inj, containerInjector, node(root), env] : [inj, env],
+      ɵgetInjectorProviders: (inj: any) =>
+        inj === containerInjector ? [{ token: Logger, provider: Logger }] : [],
+      ɵgetDependenciesFromInjectable: (_inj: any, ctor: unknown) =>
+        ctor === Card
+          ? { dependencies: [{ token: Logger, flags: {}, providedIn: containerInjector }] }
+          : { dependencies: [] },
+    } as any;
+    const { roots } = collectInjectorTree(ng);
+    const [containerNode, cardNode] = roots[0].children;
+    expect(containerNode.injector).toMatchObject({ name: 'ng-container', directives: ['Tooltip'] });
+    expect(containerNode.injector).not.toHaveProperty('selector');
+    expect(containerNode.providers.map((p) => p.token)).toEqual(['Logger']);
+    expect(cardNode.injector.path).toContain(containerNode.injector.id);
+    expect(cardNode.dependencies).toEqual([
+      { from: 'Card', token: 'Logger', flags: [], providedBy: containerNode.injector.id },
+    ]);
+  });
+
+  it('finds a provider whose value is null on the lookup path', () => {
+    const { ng } = fakeNg();
+    const lookup = ng.ɵgetDependenciesFromInjectable;
+    ng.ɵgetDependenciesFromInjectable = (inj: any, ctor: unknown) =>
+      ctor === Card
+        ? {
+            dependencies: [
+              { token: API_URL, flags: {} },
+              { token: Logger, flags: { skipSelf: true } },
+            ],
+          }
+        : lookup(inj, ctor);
+    const { roots, environment } = collectInjectorTree(ng);
+    const rootId = environment[0].children[0].injector.id;
+    expect(roots[0].children[0].dependencies).toEqual([
+      { from: 'Card', token: 'API_URL', flags: [], providedBy: rootId },
+      { from: 'Card', token: 'Logger', flags: ['skipSelf'], providedBy: null },
+    ]);
   });
 
   it('returns nothing without the Angular debug APIs', () => {

@@ -1,3 +1,5 @@
+import { addProfilerListener } from './change-detection.ts';
+
 type AnyRecord = Record<string, any>;
 
 export interface InstrumentCall {
@@ -206,8 +208,7 @@ export interface RenderCounter {
   stop(): void;
 }
 
-export function countRenders(ng: AnyRecord): RenderCounter | null {
-  if (typeof ng?.['ɵsetProfiler'] !== 'function') return null;
+export function countRenders(ng: AnyRecord, doc: Document = document): RenderCounter | null {
   let counts: Map<string, number> | null = null;
   const profiler = (event: number, instance: unknown) => {
     if (!counts || event !== TEMPLATE_UPDATE_START || !instance) return;
@@ -215,7 +216,8 @@ export function countRenders(ng: AnyRecord): RenderCounter | null {
     const name = String((instance as AnyRecord).constructor?.name ?? '?').replace(/^_+/, '');
     counts.set(name, (counts.get(name) ?? 0) + 1);
   };
-  const remove = ng['ɵsetProfiler'](profiler);
+  const remove = addProfilerListener(ng, profiler, doc);
+  if (!remove) return null;
   return {
     start() {
       counts = new Map();
@@ -229,7 +231,7 @@ export function countRenders(ng: AnyRecord): RenderCounter | null {
     },
     stop() {
       counts = null;
-      if (typeof remove === 'function') remove();
+      remove();
     },
   };
 }

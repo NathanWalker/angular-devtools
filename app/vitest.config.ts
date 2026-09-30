@@ -13,11 +13,13 @@ export default defineConfig({
     angular({
       tsconfig: join(import.meta.dirname, 'tsconfig.json'),
       inlineStylesExtension: 'scss',
+      jit: false,
     }),
   ],
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
+    setupFiles: ['src/test-setup.ts'],
     execArgv: ['--no-experimental-webstorage'],
   },
 });

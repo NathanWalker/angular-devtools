@@ -1,16 +1,8 @@
-import '@angular/compiler';
 import { TestBed } from '@angular/core/testing';
-import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
 import type { DevframeRpcClient } from 'devframe/client';
 import { afterEach, describe, expect, it } from 'vitest';
 import { StoreInspector } from '../pages/store-inspector';
 import type { NgrxPage, NgrxState } from '../pages/store-types';
-
-try {
-  TestBed.initTestEnvironment(BrowserTestingModule, platformBrowserTesting());
-} catch {
-  // already initialized in this worker
-}
 
 afterEach(() => {
   TestBed.resetTestingModule();

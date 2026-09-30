@@ -1,6 +1,7 @@
 import {
   Component,
   DestroyRef,
+  ElementRef,
   computed,
   effect,
   inject,
@@ -12,7 +13,8 @@ import {
 import { JsonPipe } from '@angular/common';
 import type { DevframeRpcClient } from 'devframe/client';
 import { hostPageId } from '../page-id';
-import { actionAllowed, actionBlockedMessage } from '../devtools-config';
+import { actionAllowed, actionBlockedMessage, panelConfig } from '../devtools-config';
+import { LimitNote } from '../ui/limit-note';
 import { FormsFieldDetail } from './forms-field-detail';
 import { FormsLint, FormsSubmit } from './forms-report';
 import { FormsTimeline } from './forms-timeline';
@@ -66,6 +68,7 @@ interface FormsSnapshot {
   forms?: CollectedForm[];
   events?: FormEvent[];
   instrumented?: string[];
+  dropped?: Record<string, number>;
 }
 
 interface FieldRow {
@@ -84,7 +87,7 @@ function countFields(node: FormFieldNode): number {
 
 @Component({
   selector: 'app-forms-inspector',
-  imports: [JsonPipe, FormsFieldDetail, FormsTimeline, FormsSubmit, FormsLint],
+  imports: [JsonPipe, FormsFieldDetail, FormsTimeline, FormsSubmit, FormsLint, LimitNote],
   template: `
     @if (!rpc()) {
       <div class="empty" role="status">
@@ -359,13 +362,13 @@ function countFields(node: FormFieldNode): number {
                                 type="button"
                                 class="field"
                                 [attr.aria-label]="
-                                  'Highlight ' + (row.node.path || 'the form') + ' on the page'
+                                  'Show details for ' + (row.node.path || 'the form')
                                 "
                                 [attr.aria-pressed]="row.node.path === fieldPath()"
                                 [attr.title]="row.node.path || '(form)'"
                                 (focus)="highlight(form.id, row.node.path)"
                                 (blur)="highlight(null, '')"
-                                (click)="fieldPath.set(row.node.path)"
+                                (click)="toggleField(row.node.path)"
                               >
                                 {{ row.node.key || '(form)' }}
                               </button>
@@ -505,10 +508,17 @@ function countFields(node: FormFieldNode): number {
                       [node]="node"
                       [version]="version()"
                       [rpc]="rpc()"
+                      (closed)="closeField()"
                     />
                   }
                 }
                 @case ('timeline') {
+                  <app-limit-note
+                    [dropped]="droppedEvents()"
+                    [max]="maxEvents()"
+                    what="form events on this page"
+                    limit="formTimeline"
+                  />
                   <app-forms-timeline
                     [events]="selectedEvents()"
                     [recording]="recording()"
@@ -1251,6 +1261,7 @@ export class FormsInspector {
 
   private unsubscribe: (() => void) | null = null;
   private readonly destroyRef = inject(DestroyRef);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   readonly counts = computed(
     () =>
@@ -1310,6 +1321,13 @@ export class FormsInspector {
     return find(form.root);
   });
 
+  readonly dropped = signal<Record<string, number>>({});
+  readonly droppedEvents = computed(() => {
+    const id = this.selected()?.id;
+    return id ? (this.dropped()[pageOf(id)] ?? 0) : 0;
+  });
+  readonly maxEvents = computed(() => panelConfig(this.rpc()).limits.formTimeline);
+
   readonly selectedEvents = computed(() => {
     const id = this.selected()?.id;
     return this.events()
@@ -1347,6 +1365,7 @@ export class FormsInspector {
         this.forms.set(snapshot?.forms ?? []);
         this.events.set(snapshot?.events ?? []);
         this.instrumented.set(snapshot?.instrumented ?? []);
+        this.dropped.set(snapshot?.dropped ?? {});
         this.version.update((v) => v + 1);
       };
       apply(state.value());
@@ -1399,6 +1418,19 @@ export class FormsInspector {
     this.fieldPath.set(null);
     this.snapshot.set(null);
     this.armed.set(null);
+  }
+
+  toggleField(path: string) {
+    this.fieldPath.update((current) => (current === path ? null : path));
+  }
+
+  closeField() {
+    const host = this.host.nativeElement;
+    const row =
+      host.querySelector<HTMLElement>('button.field[aria-pressed="true"]') ??
+      host.querySelector<HTMLElement>('.table-scroll');
+    this.fieldPath.set(null);
+    row?.focus();
   }
 
   toggleChip(chip: Chip) {

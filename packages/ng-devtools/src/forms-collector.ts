@@ -133,6 +133,7 @@ export function attachForms(
   let lastPayload = '';
   let lastPushAt = 0;
   const formEvents: FormEvent[] = [];
+  let droppedEvents = 0;
   const watched = new Map<object, { formId: string; stop: () => void }>();
   const lastStatus = new Map<string, string>();
   const lastValue = new Map<string, string>();
@@ -201,6 +202,7 @@ export function attachForms(
     }
     formEvents.push(event);
     if (formEvents.length > maxEvents) {
+      droppedEvents += formEvents.length - maxEvents;
       formEvents.splice(0, formEvents.length - maxEvents);
     }
   }
@@ -395,6 +397,7 @@ export function attachForms(
         events: formEvents,
         setupErrors,
         instrumented: !!instrumentation,
+        ...(droppedEvents ? { dropped: droppedEvents } : {}),
       };
       const payload = JSON.stringify(report);
       if (payload === lastPayload && now - lastPushAt < HEARTBEAT_MS) return;

@@ -46,6 +46,8 @@ export interface NgrxDiffEntry {
   after?: unknown;
 }
 
+export type NgrxActionOrigin = 'dispatch' | 'effect' | 'reactive';
+
 export interface NgrxLogEntry {
   seq: number;
   source: 'signal-store' | 'store';
@@ -53,6 +55,7 @@ export interface NgrxLogEntry {
   type: string;
   args?: unknown[];
   action?: unknown;
+  origin?: NgrxActionOrigin;
   timestamp: number;
   diff: NgrxDiffEntry[];
   restorable: boolean;
@@ -65,6 +68,7 @@ export interface NgrxPage {
   stores: NgrxSignalStoreInfo[];
   classic: NgrxClassicStoreInfo | null;
   log: NgrxLogEntry[];
+  dropped?: number;
   reportedAt: number;
 }
 

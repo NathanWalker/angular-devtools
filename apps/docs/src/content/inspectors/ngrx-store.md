@@ -36,9 +36,15 @@ Select a store to see:
 
 ### Change log
 
-Signal stores get a **Change log**. The classic Store gets an **Action log**. Each entry shows its number, its type, the number of changes and the time.
+Signal stores get a **Change log**. The classic Store gets an **Action log**. Each entry shows its number, its type, the number of changes and the time. An action also shows a badge for where it came from:
 
-Open an entry to see its arguments, or the action for the classic Store, and a **State diff** with the value before and after each change. The diff lists up to 50 changes.
+| Badge      | Sent by                                                                       |
+| ---------- | ----------------------------------------------------------------------------- |
+| `dispatch` | A `store.dispatch(action)` call, usually from a component or a service.       |
+| `effect`   | An NgRx effect. Effects send their actions through `Store.next`.              |
+| `reactive` | `store.dispatch(() => action)`, which dispatches again when a signal changes. |
+
+Open an entry to see its arguments, or the action and its **Origin** for the classic Store, and a **State diff** with the value before and after each change. The diff lists up to 50 changes.
 
 ### Source declarations
 
@@ -66,7 +72,9 @@ Filter by kind with the chips.
 
 The overlay wraps the state signals of each signal store and the store's methods. A method call becomes one log entry with its arguments. Nested method calls fold into the outer one. The overlay batches writes made outside a method and logs them as `patchState`.
 
-For the classic Store, the overlay listens to the dispatched actions.
+For the classic Store, the overlay listens to the dispatched actions. It also wraps `dispatch` and `next` on the Store to tag each action with its origin, and puts them back when the page disconnects.
+
+The overlay diffs a copy of the state that keeps the first 100 items of each array or object. When a change is past that limit, it compares the live state instead, so the entry still lists the change.
 
 ### Development builds
 
@@ -95,7 +103,7 @@ The overlay finds stores through Angular's debug API, so the live section needs 
     Pick the change you want to go back to.
   </ngmd-step>
   <ngmd-step title="Restore this state">
-    Click <strong>Restore this state</strong>, then <strong>Restore</strong> to confirm.
+    Click <strong>Restore this state</strong>, then <strong>Restore</strong> to confirm. Focus moves to <strong>Cancel</strong>. Press <kbd>Escape</kbd> or <strong>Cancel</strong> to back out.
   </ngmd-step>
   <ngmd-step title="Check the page">
     Components that read the store update at once. The log gets a <code>Restore #N</code> entry.
@@ -115,10 +123,10 @@ The overlay finds stores through Angular's debug API, so the live section needs 
 
 ## Agent tools
 
-| Tool or resource             | Kind     | What it does                                                                             |
-| ---------------------------- | -------- | ---------------------------------------------------------------------------------------- |
-| `ng-devtools:get-ngrx-store` | tool     | NgRx declarations from source, with the members of each `signalStore`.                   |
-| `ng-devtools:ngrx-store`     | resource | The live stores per page, with state, computeds, methods, references and the change log. |
+| Tool or resource             | Kind     | What it does                                                                                                                      |
+| ---------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `ng-devtools:get-ngrx-store` | tool     | NgRx declarations from source, with the members of each `signalStore`.                                                            |
+| `ng-devtools:ngrx-store`     | resource | The live stores per page, with state, computeds, methods, references and the change log. Classic Store actions carry an `origin`. |
 
 Agent access is read-only. No tool can restore a state. See [Tools](../agents/tools.md) and [Resources](../agents/resources.md).
 
@@ -140,9 +148,13 @@ Use `provideStore()` or `StoreModule.forRoot()`. The overlay stops looking after
 
 The devtools replace state keys with secret-looking names with `[redacted]`, at any depth. See [what the devtools redact](../security.md).
 
+### Action origin
+
+The origin comes from the Store calls made while the page is connected. A `store.dispatch(() => action)` that started before the overlay connected shows as `dispatch`. An action sent straight to `ActionsSubject` has no origin.
+
 ### Log size
 
-The log keeps the last 200 entries. The overlay logs a method call that changes nothing at most once per second.
+The log keeps the last 200 entries. Set the count with [`limits.changeLog`](../getting-started/configuration.md#limits). Once older entries are dropped, the log says how many. The overlay logs a method call that changes nothing at most once per second.
 
 ## FAQ
 

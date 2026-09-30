@@ -8,7 +8,7 @@ import {
   type FormsDebugApi,
   type FoundForm,
 } from './forms.ts';
-import { isSecretKey, redactReason } from './forms-privacy.ts';
+import { isRedactedKey, redactReason } from './forms-privacy.ts';
 import { fieldPath, submitSetup } from './forms-read.ts';
 import { clip } from './text.ts';
 
@@ -103,7 +103,7 @@ export function secretInside(
   seen.add(value);
   for (const [key, child] of Object.entries(value as AnyRecord)) {
     const path = prefix ? `${prefix}.${key}` : key;
-    if (!/^\d+$/.test(key) && isSecretKey(key)) return path;
+    if (!/^\d+$/.test(key) && isRedactedKey(key)) return path;
     const nested = secretInside(child, path, seen);
     if (nested) return nested;
   }
@@ -121,7 +121,7 @@ export function keepSecrets(
   const out: AnyRecord = Array.isArray(saved) ? [...saved] : { ...(saved as AnyRecord) };
   for (const key of Object.keys(out)) {
     const now = (current as AnyRecord)[key];
-    out[key] = !/^\d+$/.test(key) && isSecretKey(key) ? now : keepSecrets(out[key], now, seen);
+    out[key] = !/^\d+$/.test(key) && isRedactedKey(key) ? now : keepSecrets(out[key], now, seen);
   }
   return out;
 }

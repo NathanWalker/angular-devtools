@@ -1,4 +1,5 @@
 import { untracked } from '@angular/core';
+import { walkElements } from './dom-walk.ts';
 import { className, tokenName } from './injector-tree.ts';
 import {
   diff,
@@ -7,6 +8,7 @@ import {
   serializeSlice,
   type NgrxClassicStoreInfo,
   type NgrxDiffEntry,
+  type NgrxActionOrigin,
   type NgrxLogEntry,
   type NgrxRequest,
   type NgrxRequestResult,
@@ -46,10 +48,14 @@ interface Classic {
   devtools: AnyRecord | null;
   scope: string;
   last: unknown;
+  lastRaw: unknown;
+  origins: WeakMap<object, NgrxActionOrigin>;
   stop: () => void;
 }
 
 type Snapshot = Record<PropertyKey, unknown>;
+
+type Method = (this: unknown, ...args: unknown[]) => unknown;
 
 type Saved =
   { kind: 'signal'; tracked: Tracked; after: Snapshot } | { kind: 'classic'; action: unknown };
@@ -100,12 +106,7 @@ function stripped(token: unknown): string {
 
 function componentElements(ng: NgrxDebugNg, doc: Document): Element[] {
   const out: Element[] = [];
-  const walker = doc.createTreeWalker(doc.body ?? doc.documentElement, 1);
-  for (
-    let el = walker.currentNode as Element | null;
-    el;
-    el = walker.nextNode() as Element | null
-  ) {
+  for (const el of walkElements(doc.body ?? doc.documentElement) as Generator<Element>) {
     if (read(() => !!ng.getComponent?.(el), false)) out.push(el);
   }
   return out;
@@ -372,13 +373,22 @@ export function createNgrxCollector(
   };
 
   const logClassic = (c: Classic, type: string, action: unknown, withAction: boolean) => {
-    const next = serialize(classicState(c.store));
-    const changes = diff(c.last, next).map((entry) => ({
+    const raw = classicState(c.store);
+    const next = serialize(raw);
+    let changes = diff(c.last, next, MAX_DIFF).map((entry) => ({
       ...entry,
       ...('before' in entry ? { before: serialize(entry.before, SMALL) } : {}),
       ...('after' in entry ? { after: serialize(entry.after, SMALL) } : {}),
     }));
+    if (!changes.length && !Object.is(c.lastRaw, raw)) {
+      changes = referenceDiff(c.lastRaw, raw, '', SMALL, MAX_DIFF).map((entry) =>
+        entry.path ? entry : { ...entry, path: '(root)' },
+      );
+    }
+    const origin =
+      withAction && action && typeof action === 'object' ? c.origins.get(action) : undefined;
     c.last = next;
+    c.lastRaw = raw;
     append(
       {
         source: 'store',
@@ -389,6 +399,7 @@ export function createNgrxCollector(
               action: serialize(action, { depth: 5, maxKeys: 50, maxString: 1000, budget: 2000 }),
             }
           : {}),
+        ...(origin ? { origin } : {}),
         timestamp: Date.now(),
         diff: changes,
         restorable: !!c.devtools,
@@ -408,6 +419,63 @@ export function createNgrxCollector(
     return typeof index === 'number' && Array.isArray(states) && index < states.length - 1;
   };
 
+  const wrapDispatch = (store: AnyRecord, origins: WeakMap<object, NgrxActionOrigin>) => {
+    let active = true;
+    let reactive: unknown;
+    const tag = (action: unknown, origin: NgrxActionOrigin) => {
+      if (active && action && typeof action === 'object') origins.set(action, origin);
+    };
+    const undo: (() => void)[] = [];
+    const replace = (name: 'dispatch' | 'next', wrapper: (original: Method) => Method) => {
+      const original = store[name] as Method;
+      if (typeof original !== 'function') return;
+      const own = Object.prototype.hasOwnProperty.call(store, name);
+      const ok = read(() => {
+        store[name] = wrapper(original);
+        return store[name] !== original;
+      }, false);
+      if (!ok) return;
+      undo.push(() =>
+        read(() => {
+          if (own) store[name] = original;
+          else delete store[name];
+        }, undefined),
+      );
+    };
+    replace(
+      'dispatch',
+      (original) =>
+        function (this: unknown, action: unknown, ...rest: unknown[]) {
+          if (typeof action === 'function') {
+            const fn = action as () => unknown;
+            const wrapped = function (this: unknown) {
+              const next = fn.call(this);
+              if (active) reactive = next;
+              return next;
+            };
+            return original.call(this, wrapped, ...rest);
+          }
+          const fromSignal = action !== undefined && action === reactive;
+          reactive = undefined;
+          tag(action, fromSignal ? 'reactive' : 'dispatch');
+          return original.call(this, action, ...rest);
+        },
+    );
+    replace(
+      'next',
+      (original) =>
+        function (this: unknown, action: unknown, ...rest: unknown[]) {
+          tag(action, 'effect');
+          return original.call(this, action, ...rest);
+        },
+    );
+    return () => {
+      active = false;
+      reactive = undefined;
+      for (const fn of undo.splice(0).reverse()) fn();
+    };
+  };
+
   const attachClassic = ({
     parts: found,
     scope,
@@ -417,13 +485,17 @@ export function createNgrxCollector(
   }) => {
     const store = found['Store'];
     const devtools = found['StoreDevtools'] ?? null;
+    const raw = classicState(store);
     const c: Classic = {
       store,
       devtools,
       scope,
-      last: serialize(classicState(store)),
+      last: serialize(raw),
+      lastRaw: raw,
+      origins: new WeakMap(),
       stop: () => {},
     };
+    const undo = wrapDispatch(store, c.origins);
     const record = (action: unknown) => {
       const type = read(() => String((action as AnyRecord)['type'] ?? 'action'), 'action');
       logClassic(c, type, action, true);
@@ -447,7 +519,10 @@ export function createNgrxCollector(
         undefined,
       );
     }
-    c.stop = () => read(() => sub?.['unsubscribe']?.(), undefined);
+    c.stop = () => {
+      read(() => sub?.['unsubscribe']?.(), undefined);
+      undo();
+    };
     return c;
   };
 

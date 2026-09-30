@@ -3,7 +3,7 @@ import type { SignalChange, SignalGraphNode } from './types.ts';
 export const MAX_CHANGES = 50;
 const MAX_TRACKS = 500;
 export const MAX_NODES = 500;
-const VALUE_KINDS = new Set(['signal', 'computed', 'linkedSignal']);
+const VALUE_KINDS = new Set(['signal', 'computed', 'linkedSignal', 'resource']);
 
 /** The fields Angular's `setPostSignalSetFn` hook exposes on a signal node. */
 export interface RawSignalNode {
@@ -34,6 +34,7 @@ export function createSignalHistory(
   const trackIds = new WeakMap<RawSignalNode, string>();
   const bound = new Map<string, string>();
   const history = new Map<string, SignalChange[]>();
+  const totals = new Map<string, number>();
   const sent = new Map<string, number>();
   let trackSeq = 0;
 
@@ -108,14 +109,17 @@ export function createSignalHistory(
       if (!VALUE_KINDS.has(node.kind)) continue;
       const list = history.get(node.id) ?? [];
       let lastEpoch = list.at(-1)?.epoch ?? -1;
+      let total = totals.get(node.id) ?? 0;
       for (const change of findTrack(node, taken)?.changes ?? []) {
         if (change.epoch > node.epoch) break;
         if (change.epoch <= lastEpoch) continue;
         append(list, change);
+        total += lastEpoch >= 0 ? change.epoch - lastEpoch : 1;
         lastEpoch = change.epoch;
       }
       if (node.epoch > lastEpoch) {
         const missed = lastEpoch >= 0 ? node.epoch - lastEpoch - 1 : 0;
+        if (lastEpoch >= 0) total += 1 + missed;
         append(list, {
           epoch: node.epoch,
           value: node.value,
@@ -126,14 +130,21 @@ export function createSignalHistory(
       }
       history.delete(node.id);
       history.set(node.id, list);
+      totals.set(node.id, total);
       out[node.id] = list.slice();
     }
     for (const id of history.keys()) {
       if (history.size <= MAX_NODES) break;
       history.delete(id);
+      totals.delete(id);
       bound.delete(id);
     }
     return out;
+  }
+
+  /** Changes counted for a node since it was first collected, past the list cap. */
+  function changesOf(id: string): number {
+    return totals.get(id) ?? 0;
   }
 
   function collectDelta(nodes: SignalGraphNode[], full = false): Record<string, SignalChange[]> {
@@ -154,5 +165,5 @@ export function createSignalHistory(
     return out;
   }
 
-  return { onWrite, collect, collectDelta };
+  return { onWrite, collect, collectDelta, changesOf };
 }

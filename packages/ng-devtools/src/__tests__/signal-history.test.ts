@@ -71,6 +71,36 @@ describe('createSignalHistory', () => {
     expect(list.at(-1)?.value).toBe('last');
   });
 
+  it('keeps counting changes past the list cap', () => {
+    const h = createSignalHistory(identity);
+    const raw: RawSignalNode = { debugName: 'count', kind: 'signal', value: 0, version: 0 };
+    h.collect([graphNode('a', 'count', 0, 0)]);
+    for (let i = 1; i <= 500; i++) write(h.onWrite, raw, i);
+    const list = h.collect([graphNode('a', 'count', 500, 500)])['a'];
+    expect(list).toHaveLength(MAX_CHANGES);
+    expect(h.changesOf('a')).toBe(500);
+    h.collect([graphNode('a', 'count', 510, 510)]);
+    expect(h.changesOf('a')).toBe(510);
+  });
+
+  it('counts no change for the initial value', () => {
+    const h = createSignalHistory(identity);
+    h.collect([graphNode('a', 'x', 3, 'v')]);
+    expect(h.changesOf('a')).toBe(0);
+    expect(h.changesOf('unknown')).toBe(0);
+  });
+
+  it('records resource status changes', () => {
+    const h = createSignalHistory(identity);
+    h.collect([graphNode('resource:1', 'trips', 1, 'loading', 'resource')]);
+    const out = h.collect([graphNode('resource:1', 'trips', 3, 'resolved', 'resource')]);
+    expect(out['resource:1'].map((c) => [c.value, c.source, c.missed])).toEqual([
+      ['loading', 'initial', undefined],
+      ['resolved', 'sample', 1],
+    ]);
+    expect(h.changesOf('resource:1')).toBe(2);
+  });
+
   it('keeps history of nodes that left the graph, so switching components back keeps it', () => {
     const h = createSignalHistory(identity);
     h.collect([graphNode('a', 'x', 1, 1)]);

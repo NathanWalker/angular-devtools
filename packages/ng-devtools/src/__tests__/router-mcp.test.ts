@@ -265,6 +265,35 @@ describe('router MCP tools', () => {
     expect(text).toContain('`link-aria-current`');
   });
 
+  it('router-lint says when it could not check instead of returning no findings', async () => {
+    const { push } = await boot();
+    expect(await push('router-lint', 'p1')).toEqual({ checked: false, reason: 'no-page' });
+    await push('push-router', report({ config: undefined }));
+    expect(await push('router-lint', 'p1')).toEqual({ checked: false, reason: 'no-config' });
+    await push(
+      'push-router',
+      report({
+        pageId: 'p2',
+        config: undefined,
+        setup: { ...report().setup, mode: 'events-only' },
+      }),
+    );
+    expect(await push('router-lint', 'p2')).toEqual({ checked: false, reason: 'events-only' });
+    await push('push-router', report());
+    const result = (await push('router-lint', 'p1')) as { checked: boolean; findings: unknown[] };
+    expect(result.checked).toBe(true);
+    expect(result.findings.length).toBeGreaterThan(0);
+  });
+
+  it('lint-routes says an events-only page was not checked', async () => {
+    const { push, call } = await boot();
+    await push(
+      'push-router',
+      report({ config: undefined, setup: { ...report().setup, mode: 'events-only' } }),
+    );
+    expect(await call('lint-routes')).toMatch(/No checks ran: page `p1` runs in events-only mode/);
+  });
+
   it('explains a redirect loop in explain-navigation, export-navigation and lint-routes', async () => {
     const { push, call } = await boot();
     const hop = (id: number, url: string, to: string, guard: string, from?: number) => ({
@@ -392,8 +421,12 @@ describe('router MCP tools', () => {
     await push('push-router', { ...report(), pageId: 'bare', snapshot: null });
     const broadcast = vi.spyOn(ctx.rpc, 'broadcast');
     expect(await call('navigate', { action: 'probe', url: '/', page: 'bare' })).toMatch(
-      /no router state/i,
+      /Page `bare` reports no Router/,
     );
+    const unknown = await call('navigate', { action: 'probe', url: '/', page: 'gone' });
+    expect(unknown).toMatch(/^No page `gone` is reporting router state\. Pages that report/);
+    expect(unknown).toContain('`bare`');
+    expect(unknown).not.toMatch(/stdio/);
     expect(await call('navigate', { action: 'resolve-lazy' })).toContain('routeId is required');
     expect(broadcast).not.toHaveBeenCalled();
   });

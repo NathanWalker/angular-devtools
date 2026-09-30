@@ -14,12 +14,14 @@ import type { DevframeRpcClient } from 'devframe/client';
 import { time } from '../format';
 import { hostPageId } from '../page-id';
 import { rpcCall as call } from '../rpc';
-import { actionAllowed, actionBlockedMessage } from '../devtools-config';
+import { actionAllowed, actionBlockedMessage, panelConfig } from '../devtools-config';
+import { LimitNote } from '../ui/limit-note';
 import { Select, type SelectOption } from '../ui/select';
 import {
   pretty,
   short,
   type LiveStore,
+  type NgrxActionOrigin,
   type NgrxLogEntry,
   type NgrxPage,
   type NgrxState,
@@ -47,6 +49,12 @@ const KIND_LABELS: Record<string, string> = {
   store: '@ngrx/store',
 };
 
+const ORIGIN_TEXT: Record<NgrxActionOrigin, string> = {
+  dispatch: 'store.dispatch(action)',
+  effect: 'NgRx effect (Store.next)',
+  reactive: 'store.dispatch(() => action)',
+};
+
 const CLASSIC_KINDS = new Set([
   'action',
   'reducer',
@@ -58,7 +66,7 @@ const CLASSIC_KINDS = new Set([
 
 @Component({
   selector: 'app-store-inspector',
-  imports: [Select],
+  imports: [LimitNote, Select],
   template: `
     <div class="toolbar">
       <input
@@ -257,6 +265,12 @@ const CLASSIC_KINDS = new Set([
                   {{ current.classic ? 'Action log' : 'Change log' }}
                   <span class="pill">{{ storeLog().length }}</span>
                 </h4>
+                <app-limit-note
+                  [dropped]="page()?.dropped ?? 0"
+                  [max]="maxLog()"
+                  what="changes on this page"
+                  limit="changeLog"
+                />
                 <div class="log-layout">
                   <ul class="log-list" [attr.aria-label]="current.classic ? 'Actions' : 'Changes'">
                     @for (entry of storeLog(); track entry.seq) {
@@ -270,8 +284,11 @@ const CLASSIC_KINDS = new Set([
                         >
                           <span class="seq">#{{ entry.seq }}</span>
                           <span class="log-type" [title]="entry.type">{{ entry.type }}</span>
-                          <span class="log-meta"
-                            >{{
+                          <span class="log-meta">
+                            @if (entry.origin) {
+                              <span class="tag">{{ entry.origin }}</span>
+                            }
+                            {{
                               entry.diff.length === 0
                                 ? 'no change'
                                 : entry.diff.length +
@@ -302,6 +319,10 @@ const CLASSIC_KINDS = new Set([
                       <dl class="kv">
                         <dt>Time</dt>
                         <dd>{{ formatTime(selected.timestamp) }}</dd>
+                        @if (selected.origin) {
+                          <dt>Origin</dt>
+                          <dd>{{ originText(selected.origin) }}</dd>
+                        }
                         @if (selected.action !== undefined) {
                           <dt>Action</dt>
                           <dd>
@@ -343,7 +364,12 @@ const CLASSIC_KINDS = new Set([
 
                       @if (selected.restorable) {
                         @if (confirmSeq() === selected.seq) {
-                          <div class="confirm" role="group" aria-labelledby="ngrx-confirm-text">
+                          <div
+                            class="confirm"
+                            role="group"
+                            aria-labelledby="ngrx-confirm-text"
+                            (keydown.escape)="cancelRestore($event)"
+                          >
                             <p id="ngrx-confirm-text">
                               @if (selected.source === 'store') {
                                 Store DevTools jumps the app state to the state right after action
@@ -364,7 +390,12 @@ const CLASSIC_KINDS = new Set([
                               >
                                 Restore
                               </button>
-                              <button type="button" class="btn" (click)="confirmSeq.set(null)">
+                              <button
+                                type="button"
+                                class="btn"
+                                (click)="cancelRestore()"
+                                #cancelButton
+                              >
                                 Cancel
                               </button>
                             </div>
@@ -375,7 +406,8 @@ const CLASSIC_KINDS = new Set([
                             class="btn restore"
                             [disabled]="!canRestore()"
                             [attr.aria-describedby]="canRestore() ? null : 'store-writes-off'"
-                            (click)="confirmSeq.set(selected.seq)"
+                            (click)="askRestore(selected.seq)"
+                            #restoreButton
                           >
                             Restore this state
                           </button>
@@ -1168,11 +1200,15 @@ export class StoreInspector {
   readonly failed = signal(false);
   readonly selectedPageId = signal<string | null>(null);
   private readonly hostPageId = hostPageId();
+  readonly maxLog = computed(() => panelConfig(this.rpc()).limits.changeLog);
   readonly selectedStoreId = signal<string | null>(null);
   readonly selectedSeq = signal<number | null>(null);
   readonly confirmSeq = signal<number | null>(null);
   readonly busy = signal(false);
   private readonly focusLatest = signal(false);
+  private readonly focusConfirm = signal<'cancel' | 'restore' | null>(null);
+  private readonly cancelButton = viewChild<ElementRef<HTMLButtonElement>>('cancelButton');
+  private readonly restoreButton = viewChild<ElementRef<HTMLButtonElement>>('restoreButton');
   private readonly stateTree = viewChild<ElementRef<HTMLElement>>('stateTree');
   private readonly latestButton = viewChild<ElementRef<HTMLButtonElement>>('latestButton');
   readonly message = signal('');
@@ -1300,6 +1336,13 @@ export class StoreInspector {
       this.focusLatest.set(false);
       button.nativeElement.focus();
     });
+    effect(() => {
+      const target = this.focusConfirm();
+      const button = target === 'cancel' ? this.cancelButton() : this.restoreButton();
+      if (!target || !button) return;
+      this.focusConfirm.set(null);
+      button.nativeElement.focus();
+    });
     this.destroyRef.onDestroy(() => this.unsubscribe?.());
   }
 
@@ -1339,17 +1382,31 @@ export class StoreInspector {
     this.selectedStoreId.set(null);
     this.selectedSeq.set(null);
     this.confirmSeq.set(null);
+    this.message.set('');
   }
 
   selectStore(id: string) {
     this.selectedStoreId.set(id);
     this.selectedSeq.set(null);
     this.confirmSeq.set(null);
+    this.message.set('');
   }
 
   selectEntry(seq: number) {
     this.selectedSeq.set(this.selectedSeq() === seq ? null : seq);
     this.confirmSeq.set(null);
+    this.message.set('');
+  }
+
+  askRestore(seq: number) {
+    this.confirmSeq.set(seq);
+    this.focusConfirm.set('cancel');
+  }
+
+  cancelRestore(event?: Event) {
+    event?.preventDefault();
+    this.confirmSeq.set(null);
+    this.focusConfirm.set('restore');
   }
 
   async restore(seq: number, pauses: boolean) {
@@ -1409,6 +1466,10 @@ export class StoreInspector {
 
   kindLabel(kind: string) {
     return KIND_LABELS[kind] ?? kind;
+  }
+
+  originText(origin: NgrxActionOrigin) {
+    return ORIGIN_TEXT[origin] ?? origin;
   }
 
   opLabel(op: string) {

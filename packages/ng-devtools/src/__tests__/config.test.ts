@@ -1,10 +1,11 @@
 import { createHostContext } from 'devframe/node';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AGENT_INSPECTOR,
   NG_DEVTOOLS_INSPECTORS,
   RPC_INSPECTOR,
   agentAllowed,
+  ngDevtoolsConfigProblems,
   pickNgDevtoolsConfig,
   resolveNgDevtoolsConfig,
   summarizeNgDevtoolsConfig,
@@ -15,7 +16,7 @@ import { initNgDevtoolsHub } from '../hub.ts';
 import { makeProject } from './analog-fixture.ts';
 import { isSecretKey, setRedaction } from '../forms-privacy.ts';
 
-const SHARED_RPC = ['build-meta'];
+const SHARED_RPC = ['build-meta', 'report-page-visibility', 'list-pages'];
 
 async function boot(config?: NgDevtoolsConfig) {
   const host = {
@@ -143,6 +144,7 @@ describe('resolveNgDevtoolsConfig', () => {
       formTimeline: 200,
       httpCalls: 200,
       changeLog: 200,
+      cdCycles: 200,
     });
     expect(
       resolveNgDevtoolsConfig({
@@ -152,6 +154,7 @@ describe('resolveNgDevtoolsConfig', () => {
           formTimeline: 99.6,
           httpCalls: Number.NaN,
           changeLog: '500',
+          cdCycles: 5,
         },
       }).limits,
     ).toEqual({
@@ -160,6 +163,7 @@ describe('resolveNgDevtoolsConfig', () => {
       formTimeline: 100,
       httpCalls: 200,
       changeLog: 200,
+      cdCycles: 10,
     });
     expect(resolveNgDevtoolsConfig({ limits: { refreshMs: 60_000 } }).limits.refreshMs).toBe(8000);
   });
@@ -347,3 +351,56 @@ describe('hub', () => {
 function offAll() {
   return Object.fromEntries(NG_DEVTOOLS_INSPECTORS.map((key) => [key, false]));
 }
+
+describe('ngDevtoolsConfigProblems', () => {
+  it('reports nothing for the defaults, a valid config and its own resolved output', () => {
+    expect(ngDevtoolsConfigProblems(undefined)).toEqual([]);
+    expect(ngDevtoolsConfigProblems({})).toEqual([]);
+    const valid = {
+      inspectors: { signals: false },
+      agent: { readOnly: true, tools: { router: false } },
+      actions: { ngrx: false },
+      redaction: { secretNames: ['passport'], unmask: ['pin'] },
+      limits: { refreshMs: 1000 },
+    };
+    expect(ngDevtoolsConfigProblems(valid)).toEqual([]);
+    expect(ngDevtoolsConfigProblems(resolveNgDevtoolsConfig(valid))).toEqual([]);
+    const hubOptions = { base: '/x/', auth: false, inspectors: {} };
+    expect(ngDevtoolsConfigProblems(pickNgDevtoolsConfig(hubOptions).config)).toEqual([]);
+  });
+
+  it('names unknown keys with a suggestion, wrong types and clamped limits', () => {
+    const problems = ngDevtoolsConfigProblems({
+      actions: 'false',
+      agent: { readonly: true },
+      inspectors: { form: false, route: false, http: 'no' },
+      redaction: { secretNames: 'passport' },
+      limits: { refreshMs: 100, navigations: 'many' },
+      inspector: {},
+    });
+    expect(problems).toEqual([
+      'Unknown option `inspector` was ignored. Did you mean `inspectors`?',
+      'Unknown option `inspectors.form` was ignored. Did you mean `forms`?',
+      'Unknown option `inspectors.route` was ignored. Did you mean `router`?',
+      '`inspectors.http` should be true or false, got the string "no". It was ignored, so it is on.',
+      'Unknown option `agent.readonly` was ignored. Did you mean `readOnly`?',
+      '`actions` should be true, false or an object, got the string "false". It was ignored, so every action is allowed.',
+      '`redaction.secretNames` should be an array of names, got the string "passport". It was ignored.',
+      '`limits.refreshMs` is 100, which is outside 500 to 8000 or not whole. It was set to 500.',
+      '`limits.navigations` should be a number, got the string "many". It was ignored, so it is 50.',
+    ]);
+    expect(ngDevtoolsConfigProblems({ agent: { readOnly: 'true' } })).toEqual([
+      '`agent.readOnly` should be true or false, got the string "true". It was ignored, so it is off.',
+    ]);
+  });
+
+  it('prints one warning from createNgDevtools and none for a clean config', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    createNgDevtools({ inspectors: { signals: false } });
+    expect(warn).not.toHaveBeenCalled();
+    createNgDevtools({ agent: { readonly: true } } as never);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/^\[ng-devtools\] The devtools config has a problem:/);
+    warn.mockRestore();
+  });
+});

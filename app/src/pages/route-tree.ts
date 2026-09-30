@@ -458,7 +458,9 @@ export class RouteTree {
     this.message.set(
       result['matched']
         ? `The app recognized ${url} and its canMatch guards passed. The probe stopped before canActivate guards and resolvers, so those did not run. See the probe entry in Navigations.`
-        : `The app could not recognize ${url}: ${String(result['reason'] ?? '')}`,
+        : typeof result['redirectedTo'] === 'string'
+          ? `A canMatch guard or the navigation error handler redirected ${url} to ${result['redirectedTo']}. The probe stopped that navigation before it rendered anything.`
+          : `The app could not recognize ${url}: ${String(result['reason'] ?? '')}`,
     );
   }
 

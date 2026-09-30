@@ -84,7 +84,7 @@ It also adds the [floating button](./popup-and-hub.md). With the hub mounted, th
 
 ### Snapshots and events
 
-On Angular 20 and later, the overlay reads the page about 250 ms after Angular runs change detection. It also reads it every 4 seconds as a heartbeat. On older versions, it reads the page every 3 seconds instead. Change that interval with [`limits.refreshMs`](./configuration.md#limits).
+On Angular 20 and later, the overlay reads the page about 250 ms after Angular runs change detection. It also reads it every 4 seconds as a heartbeat. Until the app bootstraps, it reads the page every 3 seconds instead. Change that interval with [`limits.refreshMs`](./configuration.md#limits).
 
 Each read skips data that did not change. Router events are sent as they happen.
 
@@ -178,6 +178,12 @@ The overlay and the button do not start inside the devtools panel frame, so a mi
 
 When you hover a component in the devtools, the overlay draws an amber box around its element in the page. The box follows the element and clears after 2 seconds.
 
+- The box also works for SVG hosts, like `g[app-bar]` in a chart.
+- A host with `display: contents` has no box of its own, so the box goes around its children.
+- A hidden host (`display: none`, an inactive tab panel) gets no box.
+- The box is shown in the browser top layer, so it stays visible over an open `<dialog>`, a popover or a CDK overlay.
+- The `highlight` agent tool and a click on a component chip in the Pipes tab also scroll the element into view.
+
 ## FAQ
 
 <ngmd-accordion>
@@ -185,7 +191,7 @@ When you hover a component in the devtools, the overlay draws an amber box aroun
     No. The overlay adds the floating button itself. See <a href="./popup-and-hub.md">Popup and hub</a>.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Does it slow down my app?">
-    It reads the page after change detection, at most once every 250 ms, plus a heartbeat every 4 seconds. It only sends data that changed. With the dynamic import above, it never loads in production builds.
+    It reads the page after change detection, at most once every 250 ms, plus a heartbeat every 4 seconds. It sends an inspector's data only when it changed. The HTTP inspector sends only the calls made since its last report. When the data of the components, signals, injectors, router or HTTP inspector stays the same for 5 to 8 seconds, the page sends a short ping instead, so the server keeps the page. With the dynamic import above, it never loads in production builds.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Which values leave the page?">
     Live values are sent to the devtools server. Secret-looking values are redacted first. See <a href="../security.md">Access and redaction</a>.

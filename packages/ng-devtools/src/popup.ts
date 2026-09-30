@@ -228,6 +228,7 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
   closeBtn.setAttribute('aria-label', 'Close Angular DevTools');
   closeBtn.addEventListener('click', togglePanel);
 
+  toolbar.title = 'Drag to move. Double click to reset the position.';
   toolbar.append(title, dockGroup, closeBtn);
 
   // Iframe
@@ -272,6 +273,9 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
       position: fixed;
       z-index: 2147483646;
       inset: auto 16px 16px auto;
+      margin: 0;
+      padding: 0;
+      overflow: visible;
       width: 44px;
       height: 44px;
       border-radius: 50%;
@@ -308,6 +312,9 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
     .panel {
       position: fixed;
       z-index: 2147483647;
+      inset: auto;
+      margin: 0;
+      padding: 0;
       display: flex;
       flex-direction: column;
       opacity: 0;
@@ -329,6 +336,10 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
       pointer-events: auto;
       transform: none;
       transition: opacity 160ms ease, transform 160ms ease, visibility 0s;
+    }
+    :host([data-picking]) .panel.open {
+      opacity: 0.2;
+      pointer-events: none;
     }
     @media (prefers-reduced-motion: reduce) {
       .panel, .panel.open, .fab { transition: none; }
@@ -367,6 +378,7 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
       background: #18181b;
       border-bottom: 1px solid #27272a;
       user-select: none;
+      touch-action: none;
       min-height: 36px;
     }
     .toolbar:active { cursor: grabbing; }
@@ -429,48 +441,113 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
   `;
 
   fab.classList.add('fab');
+  // Dialogs, popovers and CDK overlays sit in the top layer, above any
+  // z-index, so the launcher and panel join it and stay reachable.
+  const topLayer = typeof fab.showPopover === 'function';
+  if (topLayer) {
+    fab.setAttribute('popover', 'manual');
+    panel.setAttribute('popover', 'manual');
+  }
   shadow.append(style, fab, panel);
   document.body.appendChild(popupRoot);
 
-  // Drag support for floating mode
-  let dragging = false;
-  let dragOffsetX = 0;
-  let dragOffsetY = 0;
+  /** Shows the launcher and panel again, which puts them on top of the top layer. */
+  function raise() {
+    if (!topLayer) return;
+    for (const el of [fab, panel]) {
+      try {
+        el.hidePopover();
+        el.showPopover();
+      } catch {
+        // detached; the z-index still applies
+      }
+    }
+  }
+  raise();
 
-  toolbar.addEventListener('mousedown', (e) => {
-    if (state.docked !== 'float') return;
-    dragging = true;
-    dragOffsetX = e.clientX - panel.offsetLeft;
-    dragOffsetY = e.clientY - panel.offsetTop;
+  // A modal dialog makes the rest of the page inert, so the launcher could be
+  // seen but not used above it; only popovers and overlays raise it.
+  const onTopLayerOpen = (event: Event) => {
+    if ((event as Event & { newState?: string }).newState !== 'open') return;
+    const target = event.target as Element | null;
+    if (!target || target === popupRoot) return;
+    try {
+      if (target.matches(':modal')) return;
+    } catch {
+      // `:modal` is unknown here, so it cannot be a modal dialog either
+    }
+    raise();
+  };
+  if (topLayer) document.addEventListener('toggle', onTopLayerOpen, true);
+
+  // Drag support for floating mode. Pointer events with capture, so touch and
+  // pen can move it too, and the drag survives the pointer leaving the toolbar.
+  let drag: { id: number; offsetX: number; offsetY: number } | null = null;
+
+  toolbar.addEventListener('pointerdown', (e) => {
+    if (state.docked !== 'float' || drag) return;
+    if ((e.target as Element | null)?.closest?.('button')) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    drag = {
+      id: e.pointerId,
+      offsetX: e.clientX - panel.offsetLeft,
+      offsetY: e.clientY - panel.offsetTop,
+    };
+    try {
+      toolbar.setPointerCapture(e.pointerId);
+    } catch {
+      // the pointer is already gone; the move events still reach the toolbar
+    }
     e.preventDefault();
   });
 
-  const onMouseMove = (e: MouseEvent) => {
-    if (!dragging) return;
+  toolbar.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
     // Clamped at both ends: dragging the toolbar off the right or bottom edge
     // would leave the panel with no reachable handle.
     const maxX = Math.max(0, window.innerWidth - panel.offsetWidth);
     const maxY = Math.max(0, window.innerHeight - panel.offsetHeight);
-    state.x = Math.min(Math.max(0, e.clientX - dragOffsetX), maxX);
-    state.y = Math.min(Math.max(0, e.clientY - dragOffsetY), maxY);
+    state.x = Math.min(Math.max(0, e.clientX - drag.offsetX), maxX);
+    state.y = Math.min(Math.max(0, e.clientY - drag.offsetY), maxY);
     panel.style.left = state.x + 'px';
     panel.style.top = state.y + 'px';
-  };
+  });
 
-  const onMouseUp = () => {
-    if (dragging) {
-      dragging = false;
-      saveState(state);
-    }
+  const endDrag = (e: PointerEvent) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    drag = null;
+    saveState(state);
   };
+  toolbar.addEventListener('pointerup', endDrag);
+  toolbar.addEventListener('pointercancel', endDrag);
+  toolbar.addEventListener('lostpointercapture', endDrag);
 
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
+  // Dragging is not the only way to move it: a double click on the toolbar
+  // puts the floating panel back in its default place.
+  toolbar.addEventListener('dblclick', (e) => {
+    if (state.docked !== 'float' || (e.target as Element | null)?.closest?.('button')) return;
+    state.x = DEFAULT_STATE.x;
+    state.y = DEFAULT_STATE.y;
+    applyDock();
+    saveState(state);
+  });
 
   // Scoped to the popup's own chrome: a listener on the window would take
   // Escape away from the host application.
+  // A search box with text clears itself on Escape, which is that key's whole
+  // job there. By the time the event bubbles up the text is already gone, so
+  // the box is looked at on the way down.
+  const clearsField = new WeakSet<Event>();
+  const noteSearchField = (event: Event) => {
+    if ((event as KeyboardEvent).key !== 'Escape') return;
+    const field = event.composedPath()[0] as Partial<HTMLInputElement> | undefined;
+    if (field?.nodeName === 'INPUT' && field.type === 'search' && field.value) {
+      clearsField.add(event);
+    }
+  };
+
   const onEscape = (event: Event) => {
-    if (event.defaultPrevented) return;
+    if (event.defaultPrevented || clearsField.has(event)) return;
     if ((event as KeyboardEvent).key === 'Escape' && isOpen) togglePanel();
   };
   popupRoot.addEventListener('keydown', onEscape);
@@ -488,6 +565,7 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
         const doc = frame.contentDocument;
         if (!doc || hookedDocs.has(doc)) return;
         hookedDocs.add(doc);
+        doc.addEventListener('keydown', noteSearchField, true);
         doc.addEventListener('keydown', onEscape);
         doc.querySelectorAll('iframe').forEach(hookFrame);
         new MutationObserver((records) => {
@@ -702,10 +780,9 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
   handle = {
     toggle: togglePanel,
     destroy: () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
       window.removeEventListener('resize', applyLauncher);
       window.removeEventListener('resize', applyDock);
+      document.removeEventListener('toggle', onTopLayerOpen, true);
       resizeObserver?.disconnect();
       popupRoot?.remove();
       popupRoot = null;

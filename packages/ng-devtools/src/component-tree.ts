@@ -1,3 +1,4 @@
+import { childElements, parentOf } from './dom-walk.ts';
 import { elementById, elementId, pruneElementIds } from './element-id.ts';
 import { className, dependenciesOf, type DebugNg } from './injector-tree.ts';
 import { isSecretName, serializeNamed } from './serialize.ts';
@@ -55,19 +56,6 @@ function componentAt(ng: ComponentDebugNg, el: Element): object | null {
 function directivesAt(ng: ComponentDebugNg, el: Element): object[] {
   const found = read(() => ng.getDirectives?.(el) ?? [], [] as unknown[]);
   return found.filter((d): d is object => !!d && typeof d === 'object');
-}
-
-export function childElements(el: Element): Element[] {
-  const children = Array.from(el.children);
-  const shadow = (el as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
-  if (shadow) children.push(...Array.from(shadow.children));
-  return children;
-}
-
-function parentOf(el: Element): Element | null {
-  if (el.parentElement) return el.parentElement;
-  const root = el.parentNode;
-  return root && 'host' in root ? ((root as ShadowRoot).host ?? null) : null;
 }
 
 export function angularRoots(doc: Document = document): Element[] {
@@ -151,6 +139,74 @@ function readInputs(
     });
 }
 
+function resourceOf(ng: ComponentDebugNg, value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  const ref = value as Record<string, unknown>;
+  const isSignal = (field: unknown) => read(() => !!ng.isSignal?.(field), false);
+  if (
+    !isSignal(ref['value']) ||
+    !isSignal(ref['status']) ||
+    typeof ref['hasValue'] !== 'function'
+  ) {
+    return null;
+  }
+  const call = (field: unknown) => read(() => (field as () => unknown)(), undefined);
+  const snapshot: Record<string, unknown> = {
+    status: call(ref['status']),
+    value: call(ref['value']),
+  };
+  if (isSignal(ref['error'])) {
+    const error = call(ref['error']);
+    if (error !== undefined) snapshot['error'] = error;
+  }
+  return snapshot;
+}
+
+function injectedValues(ng: ComponentDebugNg, injector: unknown, owner: unknown): Set<unknown> {
+  const values = new Set<unknown>();
+  const result = read(() => ng.ɵgetDependenciesFromInjectable?.(injector, owner) ?? null, null);
+  for (const dep of result?.dependencies ?? []) {
+    if (dep.value !== null && typeof dep.value === 'object') values.add(dep.value);
+  }
+  return values;
+}
+
+function readProperties(
+  ng: ComponentDebugNg,
+  instance: object,
+  skip: Set<string>,
+  injected: Set<unknown>,
+): ComponentProp[] {
+  const out: ComponentProp[] = [];
+  const keys = read(() => Object.keys(instance), [] as string[]);
+  for (const name of keys) {
+    if (out.length >= MAX_PROPS) break;
+    if (skip.has(name) || name.startsWith('__ng') || name.startsWith('ɵ')) continue;
+    const raw = read(() => (instance as Record<string, unknown>)[name], undefined);
+    if (injected.has(raw)) continue;
+    const resource = resourceOf(ng, raw);
+    if (resource) {
+      out.push({
+        name,
+        prop: name,
+        kind: 'resource',
+        value: serializeNamed(name, resource, VALUE_LIMITS),
+      });
+      continue;
+    }
+    const isSignal = typeof raw === 'function' && read(() => !!ng.isSignal?.(raw), false);
+    if (typeof raw === 'function' && !isSignal) continue;
+    const prop: ComponentProp = {
+      name,
+      prop: name,
+      value: serializeNamed(name, unwrap(ng, raw), VALUE_LIMITS),
+    };
+    if (isSignal) prop.kind = 'signal';
+    out.push(prop);
+  }
+  return out;
+}
+
 function readOutputs(
   outputs: Record<string, unknown> | undefined,
   listened: Set<string>,
@@ -171,6 +227,13 @@ export function componentDetail(ng: ComponentDebugNg, el: Element): ComponentDet
   const listened = new Set(listeners.filter((l) => l.type === 'output').map((l) => l.name));
   const dom = [...new Set(listeners.filter((l) => l.type !== 'output').map((l) => l.name))];
   const directives = directivesAt(ng, el).filter((d) => d !== instance);
+  const injector = read(() => ng.getInjector?.(el) ?? null, null);
+  const bound = new Set(
+    [...Object.entries(meta?.inputs ?? {}), ...Object.entries(meta?.outputs ?? {})].map(
+      ([name, entry]) => propName(entry, name),
+    ),
+  );
+  const injected = injector ? injectedValues(ng, injector, instance.constructor) : new Set();
 
   const detail: ComponentDetail = {
     id: elementId(el),
@@ -179,6 +242,7 @@ export function componentDetail(ng: ComponentDebugNg, el: Element): ComponentDet
     path: hostPath(ng, el),
     inputs: readInputs(ng, instance, meta?.inputs),
     outputs: readOutputs(meta?.outputs, listened),
+    properties: readProperties(ng, instance, bound, injected),
     listeners: dom.slice(0, MAX_PROPS),
     directives: directives.map((directive) => {
       const dirMeta = read(() => ng.getDirectiveMetadata?.(directive) ?? null, null);
@@ -195,7 +259,6 @@ export function componentDetail(ng: ComponentDebugNg, el: Element): ComponentDet
   const enc = meta?.encapsulation;
   if (typeof enc === 'number' && ENCAPSULATION[enc]) detail.encapsulation = ENCAPSULATION[enc];
 
-  const injector = read(() => ng.getInjector?.(el) ?? null, null);
   if (injector) {
     detail.dependencies = dependenciesOf(ng, injector, [instance.constructor], true);
   }

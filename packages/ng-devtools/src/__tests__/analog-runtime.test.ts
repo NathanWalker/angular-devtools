@@ -63,6 +63,29 @@ describe('Analog runtime reader', () => {
     expect(summary.preview).toBe('{"id":"1","token":"[redacted]"}');
   });
 
+  it('redacts load data by whole words, not substrings', () => {
+    const visible = {
+      author: 'Ada',
+      authorId: 3,
+      compassHeading: 'N',
+      passengers: 2,
+      footprint: 'x',
+      discardReason: 'y',
+      cardinality: 1,
+      title: 't',
+    };
+    const hidden = { token: 'a', password: 'b', sessionId: 'c', apiKey: 'd', cardNumber: 'e' };
+    const preview = JSON.parse(loadSummary({ ...visible, ...hidden })!.preview);
+    expect(preview).toEqual({
+      ...visible,
+      token: '[redacted]',
+      password: '[redacted]',
+      sessionId: '[redacted]',
+      apiKey: '[redacted]',
+      cardNumber: '[redacted]',
+    });
+  });
+
   it('replaces load data nested past the depth limit instead of keeping it raw', () => {
     const summary = loadSummary({
       a: { b: { c: { d: { e: { f: { g: { password: 'hunter2' } } } } } } },

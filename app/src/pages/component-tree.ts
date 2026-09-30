@@ -2,19 +2,31 @@ import { JsonPipe } from '@angular/common';
 import {
   Component,
   DestroyRef,
+  ElementRef,
   Injector,
   afterNextRender,
   computed,
   effect,
   inject,
   input,
+  linkedSignal,
   output,
   signal,
   untracked,
 } from '@angular/core';
 import type { DevframeRpcClient } from 'devframe/client';
 import { hostPageId } from '../page-id';
+import { pickPage } from '../live-pages';
 import { isStaticReport } from '../rpc';
+import { Select, type SelectOption } from '../ui/select';
+import {
+  countText,
+  filterAnnouncement,
+  filterTree,
+  nearestRow,
+  reconcileSelection,
+} from './component-tree-state';
+import { CdRecording, type CdPage } from './cd-recording';
 
 interface SourceComponent {
   selector: string;
@@ -40,6 +52,7 @@ interface Prop {
   prop: string;
   value?: unknown;
   listened?: boolean;
+  kind?: 'signal' | 'resource';
 }
 
 interface Dependency {
@@ -59,13 +72,27 @@ interface Detail {
   encapsulation?: string;
   inputs: Prop[];
   outputs: Prop[];
+  properties?: Prop[];
   listeners: string[];
   directives: { name: string; inputs: Prop[]; outputs: Prop[] }[];
   dependencies: Dependency[];
 }
 
+interface DeferBlock {
+  id: string;
+  owner?: { id: string; name: string; tag: string };
+  state: string;
+  hydration: string;
+  hydrateNever?: boolean;
+  triggers: string[];
+  rootIds: string[];
+}
+
 interface Page {
   pageId: string;
+  url?: string;
+  title?: string;
+  deferBlocks?: DeferBlock[];
   roots: LiveNode[];
   count: number;
   truncated?: boolean;
@@ -87,6 +114,14 @@ interface RoutedHit {
   outlet: string;
 }
 
+interface PickResult {
+  ok?: boolean;
+  id?: string;
+  name?: string;
+  pageId?: string;
+  error?: string;
+}
+
 interface Row {
   node: LiveNode;
   depth: number;
@@ -100,13 +135,14 @@ function bare(name: string): string {
 
 @Component({
   selector: 'app-component-tree',
-  imports: [JsonPipe],
+  imports: [JsonPipe, Select, CdRecording],
+  host: { '(keydown.escape)': 'cancelPick()' },
   template: `
     @if (live()) {
       <p class="intro">
         Every component instance on the page, in the order Angular rendered them. Hover a row to
-        highlight its host in the page, and select it to read its live inputs, outputs and injected
-        services.
+        highlight its host in the page, and select it to read its live inputs, properties, outputs
+        and injected services.
       </p>
 
       <div class="toolbar">
@@ -122,14 +158,37 @@ function bare(name: string): string {
             autocomplete="off"
             spellcheck="false"
             [value]="filter()"
-            (input)="filter.set($any($event.target).value)"
-            (keydown.escape)="filter.set('')"
+            (input)="setFilter($any($event.target).value)"
+            (keydown.escape)="setFilter('')"
           />
         </div>
-        <span class="count" aria-live="polite">
-          {{ page()!.count }} {{ page()!.count === 1 ? 'instance' : 'instances' }}
-        </span>
+        @if (pageOptions().length > 1) {
+          <span class="sr-only" id="ct-page-label">Page</span>
+          <app-select
+            class="page-select"
+            labelledBy="ct-page-label"
+            [options]="pageOptions()"
+            [value]="page()?.pageId ?? null"
+            (valueChange)="selectPage($event)"
+          />
+        }
+        <span class="count">{{ countLabel() }}</span>
+        <button
+          type="button"
+          class="pick"
+          [class.on]="picking()"
+          (click)="picking() ? cancelPick() : pick()"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 4l6.5 16 2.3-6.7L19.5 11z" />
+          </svg>
+          {{ picking() ? 'Cancel pick' : 'Pick component on page' }}
+        </button>
       </div>
+      <p class="sr-only" role="status">{{ announcement() }}</p>
+      @if (pickMessage()) {
+        <p class="pick-message">{{ pickMessage() }}</p>
+      }
       @if (page()!.truncated) {
         <p class="notice">The page has more components than the tree shows.</p>
       }
@@ -140,7 +199,7 @@ function bare(name: string): string {
           @if (!rows().length) {
             <div class="state compact tree">
               <p class="state-title">No components match “{{ filter().trim() }}”</p>
-              <button type="button" (click)="filter.set('')">Clear filter</button>
+              <button type="button" (click)="setFilter('')">Clear filter</button>
             </div>
           }
           <div
@@ -183,6 +242,14 @@ function bare(name: string): string {
                 <span class="tag mono">&lt;{{ row.node.tag }}&gt;</span>
                 @for (hit of routedById().get(row.node.id) ?? []; track hit.outlet + hit.route) {
                   <span class="routed">{{ hit.route || '/' }}</span>
+                }
+                @if (cdHosts()[row.node.id]; as checks) {
+                  <span class="checks">
+                    {{ checks
+                    }}<span class="sr-only">
+                      {{ checks === 1 ? 'check' : 'checks' }} while recording</span
+                    >
+                  </span>
                 }
                 @if (row.node.directives?.length) {
                   <span class="dirs" [attr.title]="row.node.directives!.join(', ')">
@@ -272,6 +339,29 @@ function bare(name: string): string {
                 }
               </div>
 
+              <div class="block">
+                <h3>
+                  Properties <span class="pill">{{ d.properties?.length ?? 0 }}</span>
+                </h3>
+                @if (d.properties?.length) {
+                  <ul class="props">
+                    @for (p of d.properties; track p.name) {
+                      <li class="prop">
+                        <span class="prop-name mono">
+                          {{ p.name }}
+                          @if (p.kind) {
+                            <span class="flag">{{ p.kind }}</span>
+                          }
+                        </span>
+                        <pre>{{ p.value | json }}</pre>
+                      </li>
+                    }
+                  </ul>
+                } @else {
+                  <p class="empty-line">No other properties.</p>
+                }
+              </div>
+
               @if (d.listeners.length) {
                 <div class="block">
                   <h3>
@@ -357,13 +447,59 @@ function bare(name: string): string {
           </section>
         } @else {
           <div class="detail placeholder">
-            <p class="state-hint">
-              Select a component to see its live inputs, outputs, change detection and injected
-              services.
-            </p>
+            @if (destroyed(); as name) {
+              <p class="state-title">The selected component was destroyed</p>
+              <p class="state-hint">
+                <span class="mono">{{ name }}</span> is no longer on the page. Select another
+                component to see its live values.
+              </p>
+            } @else {
+              <p class="state-hint">
+                Select a component to see its live inputs, properties, outputs, change detection and
+                injected services.
+              </p>
+            }
           </div>
         }
       </div>
+
+      @if (deferBlocks().length) {
+        <section class="defer" aria-labelledby="ct-defer-title">
+          <h2 id="ct-defer-title" class="defer-title">
+            Defer blocks <span class="pill">{{ deferBlocks().length }}</span>
+          </h2>
+          <ul class="defer-list">
+            @for (block of deferBlocks(); track block.id) {
+              <li>
+                <button
+                  type="button"
+                  class="defer-row"
+                  [disabled]="!block.owner"
+                  (click)="showOwner(block)"
+                  (focus)="highlightBlock(block)"
+                  (blur)="highlight(null)"
+                  (mouseenter)="highlightBlock(block)"
+                  (mouseleave)="highlight(null)"
+                >
+                  <span class="name mono">{{ block.owner?.name ?? 'Unknown component' }}</span>
+                  <span class="state" [class]="'state-' + block.state">{{ block.state }}</span>
+                  @if (block.hydrateNever) {
+                    <span class="flag">hydrate never</span>
+                  } @else if (block.hydration !== 'not-configured') {
+                    <span class="flag">{{ block.hydration }}</span>
+                  }
+                  <span class="triggers mono">{{
+                    block.triggers.join(', ') || 'no triggers'
+                  }}</span>
+                </button>
+              </li>
+            }
+          </ul>
+        </section>
+      }
+      @if (!staticReport()) {
+        <app-cd-recording [page]="cdPage()" [pageId]="page()!.pageId" [rpc]="rpc()" />
+      }
     } @else {
       @if (page()) {
         <p class="notice" role="status">
@@ -635,6 +771,75 @@ function bare(name: string): string {
     .refresh.spinning svg {
       animation: spin 0.8s linear infinite;
     }
+    .page-select {
+      flex: 0 1 220px;
+      min-width: 0;
+    }
+    .pick.on {
+      background: var(--accent-soft);
+      border-color: var(--accent-line);
+      color: var(--text-strong);
+    }
+    .defer {
+      margin-top: 16px;
+    }
+    .defer-title {
+      @include m.label;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0 0 8px;
+    }
+    .defer-list {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .defer-row {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      width: 100%;
+      height: auto;
+      min-height: var(--control-h);
+      padding: 6px 12px;
+      background: var(--surface);
+      border-color: var(--border);
+      text-align: left;
+    }
+    .defer-row:disabled {
+      cursor: default;
+    }
+    .state {
+      padding: 0 8px;
+      border-radius: 99px;
+      background: var(--surface-3);
+      color: var(--text-2);
+      font-size: 11px;
+      line-height: 18px;
+    }
+    .state-complete {
+      @include m.soft(var(--ok));
+    }
+    .state-error {
+      @include m.soft(var(--danger));
+    }
+    .state-loading,
+    .state-placeholder {
+      @include m.soft(var(--warn));
+    }
+    .triggers {
+      min-width: 0;
+      color: var(--text-2);
+      font-size: 12px;
+      @include m.truncate;
+    }
+    .pick-message {
+      margin: 0 0 12px;
+      color: var(--text-2);
+      line-height: 1.5;
+    }
     .layout {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
@@ -746,6 +951,20 @@ function bare(name: string): string {
       font-size: 11px;
       line-height: 18px;
       @include m.truncate;
+    }
+    .checks {
+      flex: none;
+      margin-left: auto;
+      padding: 0 7px;
+      border-radius: 99px;
+      background: var(--accent-soft);
+      color: var(--text);
+      font-size: 11px;
+      line-height: 18px;
+      font-variant-numeric: tabular-nums;
+    }
+    .checks + .dirs {
+      margin-left: 0;
     }
     .dirs {
       flex: none;
@@ -1110,7 +1329,12 @@ export class ComponentTree {
   readonly source = signal<SourceComponent[]>([]);
   readonly formOwners = signal<{ formId: string; label: string; file: string | null }[]>([]);
   readonly pages = signal<Record<string, Page>>({});
+  readonly chosenPageId = signal<string | null>(null);
   readonly selectedId = signal<string | null>(null);
+  readonly destroyed = signal<string | null>(null);
+  readonly announcement = signal('');
+  readonly picking = signal(false);
+  readonly pickMessage = signal('');
   readonly focusId = signal<string | null>(null);
   readonly collapsed = signal<ReadonlySet<string>>(new Set());
   readonly openKey = signal<string | null>(null);
@@ -1118,19 +1342,40 @@ export class ComponentTree {
   private readonly pageId = hostPageId();
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly cleanups: (() => void)[] = [];
+  private selection = { pageId: null as string | null, detailId: null as string | null };
 
-  readonly page = computed<Page | null>(() => {
-    const pages = this.pages();
-    if (this.pageId) return pages[this.pageId] ?? null;
-    let latest: Page | null = null;
-    for (const page of Object.values(pages)) {
-      if (!latest || page.reportedAt > latest.reportedAt) latest = page;
-    }
-    return latest;
+  private readonly shownPageId = linkedSignal<
+    { pages: Record<string, Page>; chosen: string | null },
+    string | null
+  >({
+    source: () => ({ pages: this.pages(), chosen: this.chosenPageId() }),
+    computation: ({ pages, chosen }, previous) =>
+      pickPage(pages, { chosen, host: this.pageId, previous: previous?.value ?? null }),
   });
 
+  readonly page = computed<Page | null>(() => {
+    const id = this.shownPageId();
+    return id ? (this.pages()[id] ?? null) : null;
+  });
+
+  readonly pageOptions = computed<SelectOption[]>(() =>
+    Object.values(this.pages()).map((page) => ({
+      value: page.pageId,
+      label: page.title || page.url || `Page ${page.pageId}`,
+      hint: page.url,
+    })),
+  );
+
   readonly live = computed(() => (this.page()?.roots.length ?? 0) > 0);
+
+  private readonly cdPages = signal<Record<string, CdPage>>({});
+  readonly cdPage = computed(() => {
+    const pageId = this.page()?.pageId;
+    return pageId ? (this.cdPages()[pageId] ?? null) : null;
+  });
+  readonly cdHosts = computed(() => this.cdPage()?.hosts ?? {});
 
   private readonly index = computed(() => {
     const map = new Map<string, LiveNode>();
@@ -1148,21 +1393,13 @@ export class ComponentTree {
 
   private readonly query = computed(() => this.filter().trim().toLowerCase());
 
-  private readonly visible = computed(() => {
-    const roots = this.page()?.roots ?? [];
-    const q = this.query();
-    if (!q) return roots;
-    const keep = (node: LiveNode) =>
-      node.name.toLowerCase().includes(q) ||
-      node.tag.toLowerCase().includes(q) ||
-      !!node.directives?.some((d) => d.toLowerCase().includes(q));
-    const prune = (nodes: LiveNode[]): LiveNode[] =>
-      nodes.flatMap((node) => {
-        const children = prune(node.children);
-        return keep(node) || children.length ? [{ ...node, children }] : [];
-      });
-    return prune(roots);
-  });
+  private readonly filtered = computed(() => filterTree(this.page()?.roots ?? [], this.query()));
+
+  readonly deferBlocks = computed(() => this.page()?.deferBlocks ?? []);
+
+  readonly countLabel = computed(() =>
+    countText(this.page()?.count ?? 0, this.filtered().matches, !!this.query()),
+  );
 
   readonly rows = computed<Row[]>(() => {
     const rows: Row[] = [];
@@ -1175,7 +1412,7 @@ export class ComponentTree {
         if (expanded) walk(node.children, depth + 1);
       }
     };
-    walk(this.visible(), 0);
+    walk(this.filtered().nodes, 0);
     return rows;
   });
 
@@ -1270,12 +1507,24 @@ export class ComponentTree {
       if (this.destroyRef.destroyed) return;
       const applyTree = (value: unknown) => {
         const pages = (value as { pages?: Record<string, Page> } | null)?.pages;
-        this.pages.set(pages && typeof pages === 'object' ? pages : {});
+        this.applyPages(pages && typeof pages === 'object' ? pages : {});
       };
       applyTree(tree.value());
       this.cleanups.push(tree.on('updated', applyTree));
     } catch {
-      this.pages.set({});
+      this.applyPages({});
+    }
+    try {
+      const cd = await my.rpc.sharedState('change-detection');
+      if (this.destroyRef.destroyed) return;
+      const applyCd = (value: unknown) => {
+        const pages = (value as { pages?: Record<string, CdPage> } | null)?.pages;
+        this.cdPages.set(pages && typeof pages === 'object' ? pages : {});
+      };
+      applyCd(cd.value());
+      this.cleanups.push(cd.on('updated', applyCd));
+    } catch {
+      this.cdPages.set({});
     }
     try {
       const router = await my.rpc.sharedState('router');
@@ -1343,16 +1592,110 @@ export class ComponentTree {
     return bare(name);
   }
 
-  select(id: string) {
-    const next = this.selectedId() === id ? null : id;
-    this.selectedId.set(next);
-    this.focusId.set(id);
+  private applyPages(pages: Record<string, Page>) {
+    const active = document.activeElement;
+    const focused =
+      active instanceof HTMLElement && this.host.nativeElement.contains(active)
+        ? (active.closest<HTMLElement>('.row')?.dataset['id'] ?? null)
+        : null;
+    const before = focused ? this.rows().map((row) => row.node.id) : [];
+    const known = this.index().map;
+    this.pages.set(pages);
+    this.syncSelection(known);
+    if (!focused) return;
+    const after = new Set(this.rows().map((row) => row.node.id));
+    if (after.has(focused)) return;
+    const next = nearestRow(before, after, focused);
+    if (!next) return;
+    this.focusId.set(next);
+    afterNextRender(() => this.rowElement(next)?.focus(), { injector: this.injector });
+  }
+
+  private syncSelection(known = this.index().map) {
+    const page = this.page();
+    const next = reconcileSelection(
+      { ...this.selection, selectedId: this.selectedId() },
+      page
+        ? { pageId: page.pageId, roots: page.roots, detail: page.detail, truncated: page.truncated }
+        : null,
+    );
+    const name = next.destroyed ? known.get(next.destroyed)?.name : undefined;
+    this.selection = { pageId: next.pageId, detailId: next.detailId };
+    if (next.selectedId !== this.selectedId()) this.selectedId.set(next.selectedId);
+    if (next.selectedId) this.destroyed.set(null);
+    if (!next.destroyed) return;
+    this.destroyed.set(name ?? 'The component');
+    this.announcement.set('The selected component was destroyed.');
+    this.sendSelection(null);
+  }
+
+  selectPage(pageId: string | null) {
+    if (!pageId) return;
+    this.chosenPageId.set(pageId);
+    this.destroyed.set(null);
+    this.syncSelection();
+  }
+
+  setFilter(value: string) {
+    this.filter.set(value);
+    const { matches } = this.filtered();
+    this.announcement.set(filterAnnouncement(this.page()?.count ?? 0, matches, value));
+  }
+
+  async pick() {
+    const client = this.rpc();
+    if (!client || this.picking()) return;
+    this.picking.set(true);
+    this.say('Click a component in the app. Press Escape to cancel.');
+    const result = (await client
+      .scope('ng-devtools')
+      .rpc.call('request-component-pick', { pageId: this.page()?.pageId })
+      .catch(() => ({ ok: false, error: 'Could not reach the devtools server.' }))) as PickResult;
+    this.picking.set(false);
+    if (!result?.ok || !result.id) {
+      this.say(result?.error ?? 'No component was picked.');
+      return;
+    }
+    if (result.pageId && result.pageId !== this.page()?.pageId) this.selectPage(result.pageId);
+    this.say(`Picked ${result.name ?? 'a component'}.`);
+    this.destroyed.set(null);
+    if (this.index().map.has(result.id)) this.reveal(result.id);
+    else this.selectedId.set(result.id);
+  }
+
+  cancelPick() {
+    const client = this.rpc();
+    if (!client || !this.picking()) return;
+    void client
+      .scope('ng-devtools')
+      .rpc.call('cancel-component-pick', { pageId: this.page()?.pageId })
+      .catch(() => {});
+  }
+
+  private say(message: string) {
+    this.pickMessage.set(message);
+    this.announcement.set(message);
+  }
+
+  private sendSelection(id: string | null) {
     const client = this.rpc();
     if (!client) return;
     void client
       .scope('ng-devtools')
-      .rpc.call('select-component', { pageId: this.page()?.pageId, id: next })
+      .rpc.call('select-component', { pageId: this.page()?.pageId, id })
       .catch(() => {});
+  }
+
+  private rowElement(id: string) {
+    return this.host.nativeElement.querySelector<HTMLElement>(`.row[data-id="${CSS.escape(id)}"]`);
+  }
+
+  select(id: string) {
+    const next = this.selectedId() === id ? null : id;
+    this.selectedId.set(next);
+    this.destroyed.set(null);
+    this.focusId.set(id);
+    this.sendSelection(next);
   }
 
   private reveal(id: string) {
@@ -1362,7 +1705,7 @@ export class ComponentTree {
       for (let parent = parents.get(id); parent; parent = parents.get(parent)) next.delete(parent);
       return next;
     });
-    if (!this.rows().some((row) => row.node.id === id)) this.filter.set('');
+    if (!this.rows().some((row) => row.node.id === id)) this.setFilter('');
     if (this.selectedId() !== id) this.select(id);
     afterNextRender(
       () =>
@@ -1392,6 +1735,14 @@ export class ComponentTree {
       .scope('ng-devtools')
       .rpc.call('request-page-highlight', target)
       .catch(() => {});
+  }
+
+  highlightBlock(block: DeferBlock) {
+    this.highlight(block.rootIds[0] ?? block.owner?.id ?? null);
+  }
+
+  showOwner(block: DeferBlock) {
+    if (block.owner && this.index().map.has(block.owner.id)) this.reveal(block.owner.id);
   }
 
   onTreeKey(event: KeyboardEvent) {

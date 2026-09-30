@@ -173,6 +173,7 @@ export interface RouterPage {
     pending?: { id: number; url: string };
   } | null;
   navigations: NavigationRecord[];
+  dropped?: number;
   generation?: number;
   config?: RouteNode[];
   configTruncated?: number;
@@ -193,6 +194,10 @@ export interface LintFinding {
   fix: string;
   angular: string;
 }
+
+export type LintResult =
+  | { checked: true; findings: LintFinding[] }
+  | { checked: false; reason: 'no-page' | 'events-only' | 'no-config' };
 
 export const routerCall = rpcTry;
 

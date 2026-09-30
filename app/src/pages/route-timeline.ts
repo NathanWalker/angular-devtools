@@ -1,6 +1,7 @@
 import { Component, computed, input, signal } from '@angular/core';
 import type { DevframeRpcClient } from 'devframe/client';
-import { actionAllowed, actionBlockedMessage } from '../devtools-config';
+import { actionAllowed, actionBlockedMessage, panelConfig } from '../devtools-config';
+import { LimitNote } from '../ui/limit-note';
 import { time } from '../format';
 import {
   SHARED_STYLES,
@@ -23,6 +24,7 @@ const PHASE_COLORS: Record<string, string> = {
 
 @Component({
   selector: 'app-route-timeline',
+  imports: [LimitNote],
   template: `
     <div class="toolbar">
       <input
@@ -58,6 +60,12 @@ const PHASE_COLORS: Record<string, string> = {
     @if (!navigationAllowed()) {
       <p id="route-timeline-writes-off" class="message">{{ navigationOff }}</p>
     }
+    <app-limit-note
+      [dropped]="page().dropped ?? 0"
+      [max]="maxNavigations()"
+      what="navigations"
+      limit="navigations"
+    />
     @if (loops().length) {
       <section class="loops" aria-labelledby="loops-heading">
         <h3 id="loops-heading">
@@ -553,6 +561,7 @@ const PHASE_COLORS: Record<string, string> = {
 export class RouteTimeline {
   page = input.required<RouterPage>();
   rpc = input<DevframeRpcClient | null>(null);
+  readonly maxNavigations = computed(() => panelConfig(this.rpc()).limits.navigations);
   readonly navigationAllowed = computed(() => actionAllowed(this.rpc(), 'router'));
   protected readonly navigationOff = actionBlockedMessage('router');
 

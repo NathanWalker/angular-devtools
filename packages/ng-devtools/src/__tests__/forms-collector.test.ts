@@ -121,6 +121,8 @@ describe('forms collector', () => {
     expect(events).toHaveLength(10);
     expect(events.map((e) => e.detail)).toContain('"v14@x.io"');
     expect(events.map((e) => e.detail)).not.toContain('"v0@x.io"');
+    expect(h.reports().at(-1).dropped).toBeGreaterThanOrEqual(5);
+    expect(h.reports()[0].dropped).toBeUndefined();
   });
 
   it('records Signal Forms submits as blocked or ran', async () => {

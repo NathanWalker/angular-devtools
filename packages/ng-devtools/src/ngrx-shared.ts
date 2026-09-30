@@ -1,4 +1,4 @@
-import { isSecretKey, REDACTED } from './forms-privacy.ts';
+import { isRedactedKey, REDACTED, redactMessage } from './forms-privacy.ts';
 
 export interface NgrxSignalStoreInfo {
   id: string;
@@ -29,6 +29,8 @@ export interface NgrxDiffEntry {
   after?: unknown;
 }
 
+export type NgrxActionOrigin = 'dispatch' | 'effect' | 'reactive';
+
 export interface NgrxLogEntry {
   seq: number;
   source: 'signal-store' | 'store';
@@ -36,6 +38,7 @@ export interface NgrxLogEntry {
   type: string;
   args?: unknown[];
   action?: unknown;
+  origin?: NgrxActionOrigin;
   timestamp: number;
   diff: NgrxDiffEntry[];
   restorable: boolean;
@@ -53,6 +56,8 @@ export interface NgrxPageReport {
 
 export interface NgrxPage extends Omit<NgrxPageReport, 'session'> {
   reportedAt: number;
+  /** Older change log entries removed at `limits.changeLog`. */
+  dropped?: number;
 }
 
 export interface NgrxState {
@@ -91,7 +96,7 @@ export function serialize(value: unknown, options: SerializeOptions = {}): unkno
       case 'undefined':
         return { [TYPE_KEY]: 'undefined' };
       case 'string':
-        return val.length > maxString ? `${val.slice(0, maxString)}…` : val;
+        return redactMessage(val.length > maxString ? `${val.slice(0, maxString)}…` : val);
       case 'number':
         return Number.isFinite(val) ? val : { [TYPE_KEY]: 'number', value: String(val) };
       case 'boolean':
@@ -112,7 +117,9 @@ export function serialize(value: unknown, options: SerializeOptions = {}): unkno
       };
     }
     if (obj instanceof RegExp) return { [TYPE_KEY]: 'RegExp', value: String(obj) };
-    if (obj instanceof Error) return { [TYPE_KEY]: 'Error', name: obj.name, message: obj.message };
+    if (obj instanceof Error) {
+      return { [TYPE_KEY]: 'Error', name: obj.name, message: redactMessage(obj.message) };
+    }
     if (depth >= maxDepth) {
       if (Array.isArray(obj)) return `[Array(${obj.length})]`;
       if (obj instanceof Map) return `[Map(${obj.size})]`;
@@ -131,7 +138,7 @@ export function serialize(value: unknown, options: SerializeOptions = {}): unkno
           .slice(0, maxKeys)
           .map(([k, v]) => [
             walk(k, depth + 1),
-            typeof k === 'string' && isSecretKey(k) ? REDACTED : walk(v, depth + 1),
+            typeof k === 'string' && isRedactedKey(k) ? REDACTED : walk(v, depth + 1),
           ]);
         return { [TYPE_KEY]: 'Map', size: obj.size, entries };
       }
@@ -145,7 +152,7 @@ export function serialize(value: unknown, options: SerializeOptions = {}): unkno
       const out: Record<string, unknown> = {};
       const keys = Object.keys(obj);
       for (const key of keys.slice(0, maxKeys)) {
-        if (isSecretKey(key)) {
+        if (isRedactedKey(key)) {
           out[key] = REDACTED;
           continue;
         }
@@ -172,7 +179,7 @@ export function serializeSlice(
   value: unknown,
   options: SerializeOptions = {},
 ): unknown {
-  return typeof key === 'string' && isSecretKey(key) ? REDACTED : serialize(value, options);
+  return typeof key === 'string' && isRedactedKey(key) ? REDACTED : serialize(value, options);
 }
 
 function isPlain(value: unknown): value is Record<string, unknown> {
@@ -273,7 +280,7 @@ export function referenceDiff(
       const y = b as Record<string, unknown>;
       for (const key of new Set([...Object.keys(x), ...Object.keys(y)])) {
         if (out.length >= limit) break;
-        const secret = isSecretKey(key);
+        const secret = isRedactedKey(key);
         if (!(key in y)) {
           out.push({
             path: join(at, key),
