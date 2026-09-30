@@ -1,11 +1,12 @@
-import { Server as HttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Plugin } from 'vite';
+import { normalizeHubBase } from '@devframes/hub/constants';
 import type { WsOriginRegistry } from 'devframe/rpc/transports/ws-server';
 import { isLoopbackHostname } from 'devframe/utils/origin';
 import { NG_DEVTOOLS_HUB_BASE, initNgDevtoolsHub } from './hub.ts';
 import { analogMiddleware, setDevOrigin } from './analog-server-log.ts';
-import { analogConfig } from './rpc/analog-scan.ts';
+import { analogConfig, setAnalogRoot } from './rpc/analog-scan.ts';
 import { stopAnalog } from './rpc/analog-register.ts';
 import { httpRegistry } from './http-rules.ts';
 import { pickNgDevtoolsConfig, resolveNgDevtoolsConfig, type NgDevtoolsConfig } from './config.ts';
@@ -98,8 +99,9 @@ function requestPath(url: string | undefined): string {
 }
 
 export function isHubPath(url: string | undefined, base: string): boolean {
+  const hubBase = normalizeHubBase(base);
   const path = requestPath(url);
-  return path === base.replace(/\/$/, '') || path.startsWith(base);
+  return path === hubBase.slice(0, -1) || path.startsWith(hubBase);
 }
 
 export function isAllowedHubRequest(req: IncomingMessage, policy: HubOriginPolicy = {}): boolean {
@@ -125,25 +127,26 @@ export function hubRequestGate(base: string, policy: HubOriginPolicy = {}) {
 
 type UpgradeListener = (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
 
-export function guardNewUpgrades(
-  server: HttpServer,
-  before: readonly Function[],
+export function hubUpgradeListener(
   base: string,
-  policy: HubOriginPolicy = {},
-) {
-  for (const listener of server.listeners('upgrade') as UpgradeListener[]) {
-    if (before.includes(listener)) continue;
-    server.off('upgrade', listener);
-    server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      if (!isHubPath(req.url, base) || isAllowedHubRequest(req, policy)) {
-        listener(req, socket, head);
-      } else socket.destroy();
-    });
-  }
+  policy: HubOriginPolicy,
+  handleUpgrade: UpgradeListener,
+): UpgradeListener {
+  return (req, socket, head) => {
+    if (!isHubPath(req.url, base)) return;
+    if (isAllowedHubRequest(req, policy)) handleUpgrade(req, socket, head);
+    else socket.destroy();
+  };
+}
+
+export function releaseServerState(owner: unknown) {
+  const registry = httpRegistry();
+  if (registry.owner === owner) registry.dispose?.();
+  stopAnalog(owner);
 }
 
 export default function ngDevtoolsVite(options: NgDevtoolsViteOptions = {}): Plugin {
-  const base = options.base ?? NG_DEVTOOLS_HUB_BASE;
+  const base = normalizeHubBase(options.base ?? NG_DEVTOOLS_HUB_BASE);
   const { config } = pickNgDevtoolsConfig(options);
   const analog = resolveNgDevtoolsConfig(config).inspectors.analog;
   return {
@@ -157,29 +160,27 @@ export default function ngDevtoolsVite(options: NgDevtoolsViteOptions = {}): Plu
       };
       server.middlewares.use(hubRequestGate(base, policy));
       if (analog) {
+        setAnalogRoot(server.config.root);
         const apiPrefix = options.apiPrefix ?? analogConfig(server.config.root).apiPrefix;
         server.middlewares.use(analogMiddleware(apiPrefix));
       }
-      const shared = server.httpServer instanceof HttpServer ? server.httpServer : null;
-      const upgradesBefore = shared?.listeners('upgrade') ?? [];
+      const httpServer = server.httpServer;
       const devtools = initNgDevtoolsHub({
         ...config,
         base,
-        ...(server.httpServer instanceof HttpServer
-          ? { server: server.httpServer }
-          : { ws: { sidecar: true } }),
+        ...(httpServer ? {} : { ws: { sidecar: true } }),
         auth: hubAuthFor(policy, options.auth),
         allowedOrigins: hubOriginRegistryFor(policy),
       });
-      if (shared) guardNewUpgrades(shared, upgradesBefore, base, policy);
+      httpServer?.on('upgrade', hubUpgradeListener(base, policy, devtools.handleUpgrade));
       server.middlewares.use(devtools.nodeMiddleware);
-      server.httpServer?.once('listening', () => {
+      httpServer?.once('listening', () => {
         setDevOrigin(server.resolvedUrls?.local[0]);
       });
-      server.httpServer?.once('close', () => {
-        httpRegistry().dispose?.();
-        stopAnalog();
-        void devtools.close();
+      httpServer?.once('close', () => {
+        void devtools.context
+          .then(releaseServerState, () => undefined)
+          .finally(() => devtools.close());
       });
     },
   };

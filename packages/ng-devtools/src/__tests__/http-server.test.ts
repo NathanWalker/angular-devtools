@@ -1,16 +1,18 @@
 import { createHostContext } from 'devframe/node';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import ngDevtools from '../devframe.ts';
+import type { NgDevtoolsConfig } from '../config.ts';
+import ngDevtools, { createNgDevtools } from '../devframe.ts';
+import { httpRegistry, type HttpRule } from '../http-rules.ts';
 import type { HttpState } from '../types.ts';
 
-async function boot() {
+async function boot(config?: NgDevtoolsConfig) {
   const host = {
     mountStatic: () => {},
     resolveOrigin: () => 'http://localhost',
     getStorageDir: () => '',
   };
   const ctx = await createHostContext({ cwd: process.cwd(), mode: 'dev', host: host as never });
-  await ngDevtools.setup(ctx as never);
+  await (config ? createNgDevtools(config) : ngDevtools).setup(ctx as never);
   const push = (name: string, payload: unknown) =>
     ctx.rpc.invokeLocal(
       `ng-devtools:${name}` as never,
@@ -75,5 +77,42 @@ describe('push-http', () => {
       await push('push-http', report('c', { payload: { found: true, size: 1, entries: [] } })),
     ).toEqual({ needPayload: false });
     expect((await state()).pages).toMatchObject([{ pageId: 'c', payload: { found: true } }]);
+  });
+});
+
+describe('http rules across restarts', () => {
+  const rule: HttpRule = {
+    id: 'r1',
+    pattern: '/api',
+    enabled: true,
+    target: 'server',
+    status: 503,
+  };
+
+  afterEach(() => {
+    httpRegistry().dispose?.();
+    delete httpRegistry().rules;
+  });
+
+  it('shows the rules that still apply after a restart', async () => {
+    httpRegistry().rules = [rule];
+    const { state } = await boot();
+    expect(httpRegistry().rules).toEqual([rule]);
+    expect((await state()).rules).toEqual([rule]);
+  });
+
+  it('clears the rules when http actions are turned off', async () => {
+    httpRegistry().rules = [rule];
+    const { push, state } = await boot({ actions: { http: false } });
+    expect(httpRegistry().rules).toEqual([]);
+    expect((await state()).rules).toEqual([]);
+    expect(await push('get-http-rules', undefined)).toEqual([]);
+  });
+
+  it('clears the rules when the http inspector is turned off', async () => {
+    httpRegistry().rules = [rule];
+    const { state } = await boot({ inspectors: { http: false } });
+    expect(httpRegistry().rules).toEqual([]);
+    expect((await state()).rules).toEqual([]);
   });
 });

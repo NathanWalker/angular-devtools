@@ -153,7 +153,7 @@ window.__NG_DEVTOOLS_FORMS__ = {mask: ['iban'], unmask: ['passport']};
 
 `[data-ng-devtools="unmask"]` opts a field back in. The `window` setting does the same by key.
 
-You can also name secret and unmasked fields on the server, with the `redaction` option. `redaction.secretNames` adds secret names for forms, the router, components, signals, NgRx and Analog, and `redaction.unmask` joins the `window` list. See [Redaction options](./getting-started/configuration.md#redaction).
+You can also name secret and unmasked fields on the server, with the `redaction` option. `redaction.secretNames` adds secret names for forms, the router, components, signals, NgRx, pipes and Analog, and `redaction.unmask` joins the `window` list. See [Redaction options](./getting-started/configuration.md#redaction).
 
 Unmasking also changes what the devtools can write. A key listed in `unmask` on `window` can be written. The element marker only lifts the checks that come from the element (password type, `autocomplete` and mask markers), so a field with a secret-looking name is still not written.
 
@@ -177,13 +177,13 @@ A secret route param is only known once the route is recognized or found in the 
   A navigation whose URL was redacted cannot be replayed.
 </ngmd-alert>
 
-### Components, signals and NgRx
+### Components, signals, NgRx and pipes
 
-Component inputs, signal values and NgRx state use the same secret names as forms. A value whose name looks secret is replaced with `[redacted]`. JWTs and bearer tokens inside strings and error messages are replaced too.
+Component inputs, signal values, NgRx state, and pipe inputs, outputs and async values use the same secret names as forms. A value whose name looks secret is replaced with `[redacted]`. JWTs and bearer tokens inside strings and error messages are replaced too.
 
 ### Analog
 
-Server call previews and URLs are redacted: secret-looking keys in JSON bodies, secret query parameters, JWTs and bearer tokens. Only JSON and plain text responses get a preview, and it is cut at 1000 characters. The `load()` data preview on the open page redacts secret-looking keys too.
+Server call previews and URLs are redacted: secret-looking keys in JSON bodies, secret query parameters, JWTs and bearer tokens. Only JSON and plain text responses get a preview, and it is cut at 1000 characters. The devtools keep the first 16 KB of a body, and a cut JSON body still has its secret-looking keys redacted. The `load()` data preview on the open page redacts secret-looking keys too. JSON nested deeper than the preview reads is shown as `[Truncated]`.
 
 ### Not redacted
 

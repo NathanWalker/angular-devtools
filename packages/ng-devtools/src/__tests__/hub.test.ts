@@ -1,3 +1,4 @@
+import { connect } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hubDefaultOrigins, initNgDevtoolsHub, type NgDevtoolsHubOptions } from '../hub.ts';
 import { makeProject } from './analog-fixture.ts';
@@ -45,6 +46,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   for (const hub of hubs.splice(0)) await hub.close();
+  delete (globalThis as { __NG_DEVTOOLS_HUB__?: unknown }).__NG_DEVTOOLS_HUB__;
 });
 
 describe('ng-devtools hub', () => {
@@ -182,5 +184,59 @@ describe('ng-devtools hub MCP route', () => {
     const mcp = await bootMcp({ auth: true, mcp: { authorization: 'own-secret' } });
     expect((await mcp()).status).toBe(401);
     expect((await mcp('own-secret')).status).toBe(200);
+  });
+});
+
+function listening(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ port, host: 'localhost' });
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('error', () => resolve(false));
+  });
+}
+
+describe('ng-devtools hub on a server that reloads server.ts', () => {
+  it('keeps the generated token and closes the previous hub', async () => {
+    vi.stubEnv('NG_DEVTOOLS_MCP_TOKEN', '');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const boot = async () => {
+      const hub = initNgDevtoolsHub({
+        cwd: makeProject({ 'package.json': '{}' }),
+        ws: { sidecar: true },
+        auth: true,
+        allowedOrigins: false,
+      });
+      hubs.push(hub);
+      await hub.ready;
+      const meta = hub.connectionMeta() as { websocket: { port: number } };
+      return { hub, port: meta.websocket.port };
+    };
+    const first = await boot();
+    const second = await boot();
+    await first.hub.close();
+    const tokens = log.mock.calls
+      .flat()
+      .join('\n')
+      .match(/MCP token: \S+/g);
+    expect(tokens).toHaveLength(1);
+    const token = tokens![0].slice('MCP token: '.length);
+    const mcp = await second.hub.handler(
+      new Request('http://localhost/__devframes/__mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          origin: 'http://localhost:4000',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      }),
+    );
+    expect(mcp.status).toBe(200);
+    expect(await listening(second.port)).toBe(true);
+    if (first.port !== second.port) expect(await listening(first.port)).toBe(false);
   });
 });

@@ -46,6 +46,7 @@ export const getNgrxStore = defineRpcFunction({
   name: 'get-ngrx-store',
   type: 'query',
   jsonSerializable: true,
+  snapshot: true,
   args: [],
   returns: describable(v.array(NgrxStoreEntrySchema)),
   agent: {

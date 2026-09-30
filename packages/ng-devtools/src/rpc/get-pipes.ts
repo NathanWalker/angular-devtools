@@ -39,6 +39,7 @@ export const getPipes = defineRpcFunction({
   name: 'get-pipes',
   type: 'query',
   jsonSerializable: true,
+  snapshot: true,
   args: [],
   returns: describable(v.array(PipeSchema)),
   agent: {

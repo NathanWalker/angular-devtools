@@ -28,6 +28,7 @@ function append(list: SignalChange[], change: SignalChange) {
 export function createSignalHistory(
   serialize: (value: unknown, name?: string) => unknown,
   now = Date.now,
+  snapshot = serialize,
 ) {
   const tracks = new Map<string, Track>();
   const trackIds = new WeakMap<RawSignalNode, string>();
@@ -61,10 +62,20 @@ export function createSignalHistory(
     });
   }
 
+  function sameValue(raw: RawSignalNode, node: SignalGraphNode): boolean {
+    if (!('value' in node)) return true;
+    return JSON.stringify(snapshot(raw.value, node.label)) === JSON.stringify(node.value);
+  }
+
   function findTrack(node: SignalGraphNode, taken: Set<string>): Track | undefined {
     const boundId = bound.get(node.id);
-    if (boundId && tracks.has(boundId)) return tracks.get(boundId);
-    bound.delete(node.id);
+    if (boundId) {
+      const track = tracks.get(boundId);
+      const raw = track?.ref.deref();
+      if (track && raw?.version === node.epoch && sameValue(raw, node)) return track;
+      bound.delete(node.id);
+      taken.delete(boundId);
+    }
     if (!node.label) return undefined;
     const matches: string[] = [];
     for (const [id, track] of tracks) {
@@ -77,7 +88,8 @@ export function createSignalHistory(
         !taken.has(id) &&
         track.label === node.label &&
         track.kind === node.kind &&
-        raw.version === node.epoch
+        raw.version === node.epoch &&
+        sameValue(raw, node)
       ) {
         matches.push(id);
       }
@@ -97,6 +109,7 @@ export function createSignalHistory(
       const list = history.get(node.id) ?? [];
       let lastEpoch = list.at(-1)?.epoch ?? -1;
       for (const change of findTrack(node, taken)?.changes ?? []) {
+        if (change.epoch > node.epoch) break;
         if (change.epoch <= lastEpoch) continue;
         append(list, change);
         lastEpoch = change.epoch;

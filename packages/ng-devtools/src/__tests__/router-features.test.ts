@@ -46,6 +46,9 @@ const slowResolver = () => new Promise((resolve) => setTimeout(() => resolve('la
 function throwingResolver(): never {
   throw new Error('db down');
 }
+function codedResolver(): never {
+  throw new Error('NG04002: db down');
+}
 
 const routes: Routes = [
   { path: '', component: Page, title: 'Home' },
@@ -72,6 +75,7 @@ const routes: Routes = [
         { path: 'deep', component: Page },
       ]),
   },
+  { path: 'coded', component: Page, resolve: { x: codedResolver } },
   { path: '**', component: Page },
 ];
 
@@ -170,6 +174,26 @@ describe('router features on a real Router', () => {
     await router.navigateByUrl('/broken').catch(() => {});
     const broken = navigations.find((n) => n.url === '/broken')!;
     expect(broken.errorHandler).toMatch(/redirected to \/login/);
+    expect(broken).toMatchObject({
+      outcome: 'redirected',
+      code: 'Redirect',
+      redirectTo: '/login',
+      redirectKind: 'error handler',
+      reason: 'Error: db down',
+    });
+    expect(broken.errorCode).toBeUndefined();
+    expect(last()).toMatchObject({ url: '/login', redirectedFrom: broken.id });
+  });
+
+  it('keeps the error code of an error the handler redirected away from', async () => {
+    await router.navigateByUrl('/coded').catch(() => {});
+    const coded = navigations.find((n) => n.url === '/coded')!;
+    expect(coded).toMatchObject({
+      outcome: 'redirected',
+      redirectKind: 'error handler',
+      reason: 'Error: NG04002: db down',
+      errorCode: 'NG04002',
+    });
   });
 
   it('records calls that throw before a navigation starts', () => {

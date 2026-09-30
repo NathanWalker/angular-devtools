@@ -113,7 +113,7 @@ If the hub asks for the one-time code, the HTTP endpoint also asks for a bearer 
 | [Express hub](../getting-started/express.md) | Yes, unless you pass `auth: false` or your own `mcp` option.                                          |
 | [Vite plugin](../getting-started/vite.md)    | Only when the one-time code is on. See the plugin's [`auth` option](../getting-started/vite.md#auth). |
 
-The hub prints a generated token in the terminal when it starts. The token changes on every restart. To keep the same token across restarts, set `NG_DEVTOOLS_MCP_TOKEN` in the environment of the server. The hub then uses that value and prints nothing.
+The hub prints a generated token in the terminal when it starts. The token changes when the server process restarts, but not when `ng serve` rebuilds `server.ts`. To keep the same token across restarts, set `NG_DEVTOOLS_MCP_TOKEN` in the environment of the server. The hub then uses that value and prints nothing.
 
 Send the token in an `Authorization: Bearer <token>` header, next to the `Origin` header. If your setup needs no token, leave the `Authorization` header out.
 

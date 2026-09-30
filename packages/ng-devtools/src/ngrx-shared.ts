@@ -19,6 +19,7 @@ export interface NgrxClassicStoreInfo {
   state: unknown;
   devtools: boolean;
   scope: string;
+  paused?: boolean;
 }
 
 export interface NgrxDiffEntry {
@@ -58,12 +59,13 @@ export interface NgrxState {
   pages: NgrxPage[];
 }
 
-export type NgrxRequest = { type: 'restore'; seq: number };
+export type NgrxRequest = { type: 'restore'; seq: number } | { type: 'latest' };
 
 export interface NgrxRequestResult {
   ok?: boolean;
   message?: string;
   error?: string;
+  paused?: boolean;
 }
 
 export interface SerializeOptions {

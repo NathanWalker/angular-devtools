@@ -183,6 +183,34 @@ describe('Analog server call log', () => {
     expect(previewOf('<html>', 'text/html')).toBeUndefined();
     expect(previewOf('x'.repeat(2000), 'text/plain')!.length).toBeLessThan(1100);
   });
+
+  it('redacts secret keys in JSON bodies cut at the capture limit', () => {
+    const body = JSON.stringify({
+      user: { password: 'hunter2', apiKey: 'k123', name: 'ada', note: 'say \\"token\\": x' },
+      credentials: { user: 'ada', value: 'nested-secret' },
+      items: Array.from({ length: 2000 }, (_, i) => ({ id: i, sessionToken: `t${i}` })),
+    }).slice(0, 16_000);
+    const preview = previewOf(body, 'application/json')!;
+    expect(
+      preview.startsWith('{"user":{"password":"[redacted]","apiKey":"[redacted]","name":"ada"'),
+    ).toBe(true);
+    expect(preview).toContain(
+      '"credentials":"[redacted]","items":[{"id":0,"sessionToken":"[redacted]"}',
+    );
+    expect(preview).not.toMatch(/hunter2|k123|nested-secret|"t\d+"/);
+    expect(previewOf('{"a":1,"token":"abc', 'application/json')).toBe(
+      '{"a":1,"token":"[redacted]"',
+    );
+  });
+
+  it('replaces JSON nested past the depth limit instead of keeping it raw', () => {
+    const body = JSON.stringify({
+      a: { b: { c: { d: { e: { f: { g: { password: 'hunter2' } } } } } } },
+    });
+    const preview = previewOf(body, 'application/json')!;
+    expect(preview).not.toContain('hunter2');
+    expect(preview).toContain('[Truncated]');
+  });
 });
 
 describe('Vite plugin', () => {
@@ -194,7 +222,12 @@ describe('Vite plugin', () => {
     const server = {
       config: { root: process.cwd() },
       middlewares: { use: (fn: unknown) => used.push(fn) },
-      httpServer: { once: (_event: string, fn: () => void) => (onListening = fn) },
+      httpServer: {
+        on: () => {},
+        once: (event: string, fn: () => void) => {
+          if (event === 'listening') onListening = fn;
+        },
+      },
       resolvedUrls: { local: ['http://localhost:5174/'] },
     };
     (plugin.configureServer as (server: unknown) => void)(server);

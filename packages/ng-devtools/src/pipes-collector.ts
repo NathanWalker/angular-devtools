@@ -1,4 +1,6 @@
 import { elementId } from './element-id.ts';
+import { serialize } from './serialize.ts';
+import { clip } from './text.ts';
 import {
   instrumentPipes,
   readBoundArg,
@@ -54,18 +56,25 @@ function componentName(component: unknown): string {
 }
 
 const MAX_DESCRIBE_CHARS = 200;
+const DESCRIBE_LIMITS = { depth: 4, keys: 20, items: 20, text: MAX_DESCRIBE_CHARS, budget: 200 };
+
+function parsedJson(text: string): unknown {
+  if (!/^\s*[[{]/.test(text)) return text;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
 
 function describeValue(value: unknown): string {
   if (value === undefined) return 'undefined';
-  if (typeof value === 'string') {
-    return value.length > MAX_DESCRIBE_CHARS ? `${value.slice(0, MAX_DESCRIBE_CHARS)}…` : value;
-  }
+  const safe = serialize(typeof value === 'string' ? parsedJson(value) : value, DESCRIBE_LIMITS);
+  if (typeof safe === 'string') return clip(safe, MAX_DESCRIBE_CHARS);
   try {
-    const json = JSON.stringify(value);
-    if (json === undefined) return String(value);
-    return json.length > MAX_DESCRIBE_CHARS ? `${json.slice(0, MAX_DESCRIBE_CHARS)}…` : json;
+    return clip(JSON.stringify(safe) ?? String(safe), MAX_DESCRIBE_CHARS);
   } catch {
-    return String(value);
+    return '[Unreadable]';
   }
 }
 

@@ -17,6 +17,10 @@ const MAX_NODES = 400;
 const MAX_FALLBACK_HOSTS = 50;
 const VALUE_LIMITS = { depth: 4, keys: 40, items: 40, text: 500 };
 
+export function graphValue(label: string | undefined, value: unknown): unknown {
+  return serializeNamed(label, value, VALUE_LIMITS);
+}
+
 function read<T>(fn: () => T, fallback: T): T {
   try {
     return fn();
@@ -133,11 +137,11 @@ function graphFor(
     };
     if (n.label) node.label = n.label;
     if ('value' in n) {
-      node.value = serializeNamed(n.label, n.value, VALUE_LIMITS);
+      node.value = graphValue(n.label, n.value);
     } else if (n.kind === 'linkedSignal' && n.label) {
       linked ??= linkedSignalReaders(ng, instance);
       const getter = linked.get(n.label);
-      if (getter) node.value = serializeNamed(n.label, read(getter, undefined), VALUE_LIMITS);
+      if (getter) node.value = graphValue(n.label, read(getter, undefined));
     }
     return node;
   });

@@ -150,7 +150,7 @@ The server refuses a blocked action. The panel disables its controls and shows a
 | `redaction.secretNames` | `[]`    | Extra field names to treat as secret, on top of the built-in list. They match by words, like the built-in list, so `passport` also covers `passportNumber`. |
 | `redaction.unmask`      | `[]`    | Field names to show even when they look secret. They join the `unmask` list of `window.__NG_DEVTOOLS_FORMS__`.                                              |
 
-Forms, the router, component inputs, signals, NgRx and Analog previews use the extra secret names. Each list keeps up to 100 names. See [Access and redaction](../security.md#what-is-redacted) for what is redacted and what unmasking allows.
+Forms, the router, component inputs, signals, NgRx, pipes and Analog previews use the extra secret names. Each list keeps up to 100 names. See [Access and redaction](../security.md#what-is-redacted) for what is redacted and what unmasking allows.
 
 ### Limits
 

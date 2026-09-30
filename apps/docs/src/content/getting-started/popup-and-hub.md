@@ -15,7 +15,12 @@ When the overlay loads, a floating button appears in the bottom-right corner of 
 
 ### Where it comes from
 
-Importing the [overlay](./overlay.md) adds the button. The overlay first checks whether the page's server mounts the hub at `/__devframes/`. If it does, the button opens the whole hub. If not, it opens the devtools panel on its own.
+Importing the [overlay](./overlay.md) adds the button. The first time the panel opens, it looks for the devtools server:
+
+1. If the overlay connected, it uses that path. When the path is `<base>ng-devtools/` and a hub answers at `<base>`, it opens the hub.
+2. Otherwise it checks for the hub at `/__devframes/`, then for the devtools alone at `/__ng-devtools/` and `/__devframes/ng-devtools/`.
+
+A path counts only when it answers with JSON. If nothing answers, the panel says **No devtools server found** and looks again the next time it opens.
 
 ### Create it yourself
 
@@ -28,7 +33,18 @@ import {createDevtoolsPopup} from '@santoshyadavdev/ng-devtools/popup';
 createDevtoolsPopup();
 ```
 
-It adds the button and opens the full devtools UI in an iframe. Calling it again returns the same popup. Importing the popup module in the browser also adds the button on its own.
+It adds the button and returns a handle with `toggle()` and `destroy()`. The panel finds the devtools server as described above. Importing the popup module in the browser also adds the button on its own, so calling it again returns the same handle.
+
+To open a fixed page instead, pass `src`:
+
+```ts
+// src/main.ts
+import {createDevtoolsPopup} from '@santoshyadavdev/ng-devtools/popup';
+
+createDevtoolsPopup({src: '/__my-devtools/'});
+```
+
+A `src` given to a later call replaces the one before. `showDevtools()` adds the button when it is missing, and `hideDevtools()` removes it.
 
 <ngmd-alert severity="helpful">
   The popup alone sends no live data. Load the overlay for that.
@@ -147,7 +163,10 @@ If the panel cannot reach the server, check that the dev server is running, then
     Remove the <code>ng-devtools-popup</code> key from <code>localStorage</code> and reload.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="The button opens the panel, not the hub">
-    The overlay did not find the hub at <code>/__devframes/</code>. Check that your server mounts <code>initNgDevtoolsHub()</code> or the Vite plugin on the default base.
+    The overlay did not find the hub at <code>/__devframes/</code>. Check that your server mounts <code>initNgDevtoolsHub()</code> or the Vite plugin on the default base. On a custom base, pass <code>&lt;base&gt;ng-devtools/</code> to <a href="./overlay.md#a-custom-mount-path"><code>initOverlay</code></a>.
+  </ngmd-accordion-item>
+  <ngmd-accordion-item title="The panel says No devtools server found">
+    No devtools path answered with JSON. Mount the hub or the Vite plugin, before the SSR handler. See <a href="./overlay.md#no-devtools-server-found">No devtools server found</a>.
   </ngmd-accordion-item>
 </ngmd-accordion>
 

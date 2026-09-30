@@ -138,6 +138,59 @@ describe('forms collector', () => {
     expect(submits.map((e) => e.outcome)).toEqual(['blocked', 'ran']);
   });
 
+  it('lets go of a Signal Form once it leaves the page', async () => {
+    const fixture = await mount(Profile);
+    const root = fixture.componentInstance.form() as any;
+    const flag = root.submitState.selfSubmitting;
+    const model = root.structure.value;
+    const original = { flag: flag.set, set: model.set, update: model.update };
+    const h = harness();
+    h.collector.push();
+    await tick();
+    const formId = h.reports().at(-1).forms[0].id;
+    h.handlers.get('form-action')!({
+      requestId: 'i1',
+      request: { action: 'instrument', formId, value: true },
+    });
+    await tick();
+    expect(flag.set).not.toBe(original.flag);
+    expect(model.set).not.toBe(original.set);
+
+    fixture.destroy();
+    fixture.nativeElement.remove();
+    await tick();
+    h.collector.push();
+    await tick();
+    expect(h.reports().at(-1).forms).toEqual([]);
+    expect(flag.set).toBe(original.flag);
+    expect(model.set).toBe(original.set);
+    expect(model.update).toBe(original.update);
+  });
+
+  it('wraps a Signal Form again when a new one appears after the old one left', async () => {
+    const first = await mount(Profile);
+    const h = harness();
+    h.collector.push();
+    await tick();
+    first.destroy();
+    first.nativeElement.remove();
+    await tick();
+    h.collector.push();
+    await tick();
+    const second = await mount(Profile);
+    h.collector.push();
+    await tick();
+    const formEl = second.nativeElement.querySelector('form') as HTMLFormElement;
+    formEl.requestSubmit();
+    await tick();
+    expect(
+      h
+        .lastEvents()
+        .filter((e) => e.type === 'submit')
+        .map((e) => e.outcome),
+    ).toEqual(['blocked']);
+  });
+
   it('tags Signal Forms changes found by diffing as user or unknown', async () => {
     const fixture = await mount(Profile);
     const h = harness();

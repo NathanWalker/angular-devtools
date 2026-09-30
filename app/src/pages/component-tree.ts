@@ -14,6 +14,7 @@ import {
 } from '@angular/core';
 import type { DevframeRpcClient } from 'devframe/client';
 import { hostPageId } from '../page-id';
+import { isStaticReport } from '../rpc';
 
 interface SourceComponent {
   selector: string;
@@ -428,7 +429,13 @@ function bare(name: string): string {
       } @else if (error() && !source().length) {
         <div class="state" role="alert">
           <p class="state-title">Could not load components</p>
-          <p class="state-hint">Check that the dev server is running, then try again.</p>
+          <p class="state-hint">
+            @if (staticReport()) {
+              Run <code>ng-devtools build</code> again to rebuild the report.
+            } @else {
+              Check that the dev server is running, then try again.
+            }
+          </p>
           <button type="button" (click)="refresh()">Retry</button>
         </div>
       } @else if (!source().length) {
@@ -1092,6 +1099,7 @@ function bare(name: string): string {
 })
 export class ComponentTree {
   readonly rpc = input<DevframeRpcClient | null>(null);
+  readonly staticReport = computed(() => isStaticReport(this.rpc()));
   readonly focus = input<{ id: string } | null>(null);
   readonly showForm = output<string>();
   readonly focusHandled = output<void>();

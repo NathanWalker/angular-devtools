@@ -90,7 +90,7 @@ No page is connected to the CLI server. The tabs show what your source declares:
 
 ### Build it
 
-`build` writes a self-contained static copy of the devtools with the source scan baked in.
+`build` writes a self-contained static copy of the devtools with the source scan baked in: components, routes, signals, providers, pipes, NgRx declarations and build metadata.
 
 ```bash
 npx @santoshyadavdev/ng-devtools build --outDir dist-report
@@ -98,10 +98,18 @@ npx @santoshyadavdev/ng-devtools build --outDir dist-report
 
 ### Report flags
 
-| Flag             | What it does                                          |
-| ---------------- | ----------------------------------------------------- |
-| `--outDir <dir>` | Output directory. The default is `dist-static`.       |
-| `--pretty`       | Pretty-print the data files. They get larger on disk. |
+| Flag             | What it does                                                              |
+| ---------------- | ------------------------------------------------------------------------- |
+| `--outDir <dir>` | Output directory. The default is `dist-static`. It is emptied first.      |
+| `--pretty`       | Pretty-print the data files. They get larger on disk.                     |
+| `--force`        | Empty `--outDir` even when it holds files that are not a previous report. |
+
+### Output folder checks
+
+The build deletes everything in `--outDir` before it writes the report. To protect your files, it stops with an error when `--outDir` is:
+
+- the working directory or one of its parents, even with `--force`,
+- a file, or a folder that is not empty and has no `__connection.json` (so it is not a previous report), unless you pass `--force`.
 
 ### Open or host it
 

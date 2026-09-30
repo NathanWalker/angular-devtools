@@ -14,6 +14,7 @@ import {
   type ResolvedNgDevtoolsConfig,
 } from '@santoshyadavdev/ng-devtools/config';
 import { hostPageId } from '../page-id';
+import { isStaticReport } from '../rpc';
 import { panelConfig, tabEnabled } from '../devtools-config';
 import { TabIcon } from './tab-icon';
 
@@ -151,7 +152,13 @@ export function storeCard(rows: Row[]): Card {
           }
         </h2>
         @if (metaState() === 'error') {
-          <p class="hint">Check that the dev server is running, then reload the panel.</p>
+          <p class="hint">
+            @if (staticReport()) {
+              Run <code>ng-devtools build</code> again to rebuild the report.
+            } @else {
+              Check that the dev server is running, then reload the panel.
+            }
+          </p>
         }
       </div>
       <ul class="chips" [class.pending]="metaState() === 'loading'">
@@ -482,6 +489,7 @@ export function storeCard(rows: Row[]): Card {
 export class Dashboard {
   rpc = input<DevframeRpcClient | null>(null);
   navigate = output<StatTab>();
+  staticReport = computed(() => isStaticReport(this.rpc()));
 
   meta = signal<BuildMeta | null>(null);
   private readonly config = computed(() => panelConfig(this.rpc()));

@@ -483,12 +483,12 @@ const ngDevtools = defineDevframe({
     });
 
     const httpPages = new Map<string, HttpPage>();
-    const httpState = await my.rpc.sharedState('http', {
-      initialValue: { serverCalls: [], pages: [], rules: [] } as HttpState,
-    });
     const registry = httpRegistry();
     registry.dispose?.();
-    registry.rules ??= [];
+    registry.rules = on.http && config.actions.http ? (registry.rules ?? []) : [];
+    const httpState = await my.rpc.sharedState('http', {
+      initialValue: { serverCalls: [], pages: [], rules: [...registry.rules] } as HttpState,
+    });
     let pendingServerCalls: HttpCall[] = [];
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     const flushServerCalls = () => {
@@ -624,6 +624,7 @@ const ngDevtools = defineDevframe({
       if (expireNgrxPages(ngrxPages)) applyNgrx();
     }, 5000);
     expiry.unref?.();
+    registry.owner = ctx;
     registry.dispose = () => {
       clearInterval(expiry);
       clearTimeout(flushTimer);
@@ -995,7 +996,7 @@ const ngDevtools = defineDevframe({
       id: 'ng-devtools:ngrx-store',
       name: 'NgRx Store State',
       description:
-        'Live NgRx state per connected page: each @ngrx/signals store (state, computed values, methods, the component fields that reference it) and the @ngrx/store state, plus a change log with a per-entry state diff (method calls, patchState writes and dispatched actions). Empty when no page is connected.',
+        'Live NgRx state per connected page: each @ngrx/signals store (state, computed values, methods, the component fields that reference it) and the @ngrx/store state, plus a change log with a per-entry state diff (method calls, patchState writes, dispatched actions and restores). `classic.paused` is true after a restore jumped Store DevTools to a past state: new actions are logged but do not change the state until the panel goes back to the latest state. Empty when no page is connected.',
       mimeType: 'application/json',
       read: () => ({ text: JSON.stringify(ngrxStoreState.value(), null, 2) }),
     });
@@ -1757,7 +1758,7 @@ const ngDevtools = defineDevframe({
     agent.registerTool({
       id: 'ng-devtools:fill-form',
       description:
-        'Fill several fields at once, by dotted path, through the inputs like a user would (so parsing, dirty and touched run for real). Reports written and skipped fields (secret, hidden, readonly, disabled, missing) and the resulting status. Optionally submits afterwards (needs confirm: true).',
+        'Fill several fields at once, by dotted path, through the inputs like a user would (so parsing, dirty and touched run for real). Reports written and skipped fields (secret, hidden, readonly, disabled, missing, or a <select> with no option for the value) and the resulting status. A <select> value must equal the value of one of its options ([ngValue] or value); a multiple select takes an array. Optionally submits afterwards (needs confirm: true).',
       safety: 'action',
       inputSchema: {
         type: 'object',
@@ -1790,6 +1791,7 @@ const ngDevtools = defineDevframe({
     if (on.analog) {
       await registerAnalog(my as never, { cwd: ctx.cwd, agent } as never, {
         blockCalls: config.actions.analog ? undefined : actionBlockedMessage('analog'),
+        owner: ctx,
       });
     }
     registerHubDocks(ctx, 'ng-devtools', config);

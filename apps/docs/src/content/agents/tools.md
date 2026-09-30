@@ -185,6 +185,8 @@ Both tools are action tools and need a development build. They don't write secre
 | `form-action` | One action on a form or field.                                                                     | `action` (required), `form` (required, the full id), `path`, `value`, `mode` (`code` or `user`), `confirm`, `force`, `snapshot` |
 | `fill-form`   | Fills several fields by path, through the inputs like a user would. Optionally submits afterwards. | `form` (required), `values` (required, a map of path to value), `mode`, `submit`, `confirm`                                     |
 
+When a write goes through a native `<select>` (`mode: user`, the default for `fill-form`, or any write to a template-driven form), the value must equal the value of one of its options (`[ngValue]` or `value`). A multiple select takes an array. If no option matches, the field is not written and the result says `has no option with the value ...`. A `mode: code` write to a reactive form or Signal Form sets the model directly and does not check the options.
+
 `form-action` accepts these actions: `set-value`, `mark-touched`, `mark-untouched`, `mark-dirty`, `mark-pristine`, `touch-all`, `revalidate`, `reset`, `enable`, `disable`, `submit`, `focus`, `focus-first-invalid`, `store-as-global`, `snapshot`, `restore` and `instrument`.
 
 <ngmd-callout type="warning" title="Some actions need confirm">

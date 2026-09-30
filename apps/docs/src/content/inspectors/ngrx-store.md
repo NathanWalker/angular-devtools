@@ -109,7 +109,7 @@ The overlay finds stores through Angular's debug API, so the live section needs 
     Restore sets every state key that differs back to its value right after that change. Every state signal must be writable.
   </ngmd-tab>
   <ngmd-tab title="&#64;ngrx/store" icon="box">
-    Restore uses Store DevTools to jump to the state right after that action. Later actions continue from there. It needs <code>provideStoreDevtools()</code>. Without it, the log is read-only.
+    Restore uses Store DevTools to jump to the state right after that action, and the log gets a <code>Restore #N</code> entry. Unless you restored the newest action, the store is then paused on that state: a <strong>Viewing a past state</strong> banner appears, and new actions are logged but do not change the state. Select <strong>Back to latest</strong> to resume. It needs <code>provideStoreDevtools()</code>. Without it, the log is read-only.
   </ngmd-tab>
 </ngmd-tabs>
 

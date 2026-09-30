@@ -4,7 +4,7 @@ import { attachAnalog } from './analog-runtime.ts';
 import { attachForms } from './forms-collector.ts';
 import { attachPipes } from './pipes-collector.ts';
 import { attachHttp } from './http-overlay.ts';
-import { httpRegistry } from './http-rules.ts';
+import { httpRegistry, storeRules } from './http-rules.ts';
 import { attachNgrx } from './ngrx-overlay.ts';
 import { collectInjectorTree } from './injector-tree.ts';
 import {
@@ -34,11 +34,18 @@ import {
 import { createSignalHistory, type RawSignalNode } from './signal-history.ts';
 import { collectComponentTree, componentHostOf } from './component-tree.ts';
 import { elementById, elementId } from './element-id.ts';
-import { collectSignalGraph, graphKey, toSignalTarget, type SignalTarget } from './signal-graph.ts';
+import {
+  collectSignalGraph,
+  graphKey,
+  graphValue,
+  toSignalTarget,
+  type SignalTarget,
+} from './signal-graph.ts';
 import { serializeNamed } from './serialize.ts';
 import { configFromConnection } from './config.ts';
 import { setRedaction } from './forms-privacy.ts';
 import { outsideAngular, watchChangeDetection } from './change-detection.ts';
+import { SETUP_URL, insideDevtoolsPanel } from './panel-frame.ts';
 
 declare global {
   interface Window {
@@ -134,6 +141,8 @@ export function initOverlay(options: OverlayOptions = {}): Promise<() => void> {
   return outsideAngular(() => startOverlay(options, own)).then(
     () => instance.stop,
     (error) => {
+      // A stopped or replaced overlay failing to connect is expected, not an error.
+      if (stopped) return instance.stop;
       instance.stop();
       throw error;
     },
@@ -147,17 +156,35 @@ export async function disposeOverlay(): Promise<void> {
   await loaded?.hideDevtools();
 }
 
+// `connectDevframe()` alone looks for the connection next to the page, which
+// misses the documented `/__ng-devtools/` mount in a host app.
+const DEFAULT_BASES = ['./', '/__ng-devtools/', '/__devframes/ng-devtools/'];
+
+function noServerError(bases: string | string[], cause: unknown): Error {
+  const tried = (Array.isArray(bases) ? bases : [bases]).join(', ');
+  return new Error(
+    `[ng-devtools] No devtools server found (tried ${tried}). ` +
+      'Mount initNgDevtoolsHub() or the ngDevtools() Vite plugin in your dev server, before the SSR handler. ' +
+      `On a custom path, pass it to initOverlay({baseURL}). See ${SETUP_URL}`,
+    { cause },
+  );
+}
+
 async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) => boolean) {
-  // `connectDevframe()` alone looks for the connection next to the page, which
-  // misses the documented `/__ng-devtools/` mount in a host app.
-  const rpc = await connectDevframe({
-    baseURL: options.baseURL ?? ['./', '/__ng-devtools/', '/__devframes/ng-devtools/'],
+  const bases = options.baseURL ?? DEFAULT_BASES;
+  const rpc = await connectDevframe({ baseURL: bases }).catch((error: unknown) => {
+    throw noServerError(bases, error);
   });
   if (!own(() => rpc.close?.())) return;
+  const metaUrl = rpc.connection?.metaBaseUrl;
+  if (metaUrl) {
+    void popup?.then((m) => m.useDevtoolsBase(new URL('.', metaUrl).href)).catch(() => {});
+  }
   const my = rpc.scope('ng-devtools');
   const devtoolsConfig = configFromConnection(rpc.connectionMeta);
   const on = devtoolsConfig.inspectors;
   const limits = devtoolsConfig.limits;
+  if (!on.http) storeRules([]);
   setRedaction(devtoolsConfig.redaction);
   setNavigationLimit(limits.navigations);
   if (on.http) httpRegistry().maxCalls = limits.httpCalls;
@@ -174,8 +201,10 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     await my.rpc.call('push-component-tree', { ...tree, pageId });
   }
 
-  const signalHistory = createSignalHistory((value, name) =>
-    serializeNamed(name, value, { budget: 1000 }),
+  const signalHistory = createSignalHistory(
+    (value, name) => serializeNamed(name, value, { budget: 1000 }),
+    Date.now,
+    (value, name) => graphValue(name, value),
   );
   const restoreSignalHook = on.signals
     ? await installSignalWriteHook(signalHistory.onWrite)
@@ -244,6 +273,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   let stopInstrument: (() => void) | null = null;
   let instrumented = storedInstrumented();
   let config: RouteNode[] | undefined;
+  let configTruncated = 0;
   let setup: RouterSetup | undefined;
   let sentGeneration = -1;
   let routerMisses = 0;
@@ -317,7 +347,9 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
       const report: Record<string, unknown> = { pageId, snapshot, navigations };
       if (router && ng) {
         if (configTracker.update(router) || !config) {
-          config = walkConfig(router);
+          const cut = { routes: 0 };
+          config = walkConfig(router, cut);
+          configTruncated = cut.routes;
           setup = detectSetup(ng, router, routerCount, routerRoot);
           setGeneration(configTracker.generation);
           if (instrumented) {
@@ -327,6 +359,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
         }
         report['generation'] = configTracker.generation;
         if (sentGeneration !== configTracker.generation) report['config'] = config;
+        if (configTruncated) report['configTruncated'] = configTruncated;
         report['activeIds'] = activeIds(router);
         report['setup'] = setup;
         if (routerDomDirty) {
@@ -593,7 +626,8 @@ function getNg(): any {
 // Auto-init when loaded as a script (skip during test environment)
 if (
   typeof document !== 'undefined' &&
-  !(typeof process !== 'undefined' && process.env?.['VITEST'])
+  !(typeof process !== 'undefined' && process.env?.['VITEST']) &&
+  !insideDevtoolsPanel()
 ) {
   initOverlay().catch(console.error);
   popup = import('./popup.ts');

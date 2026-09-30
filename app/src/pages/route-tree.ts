@@ -85,6 +85,10 @@ interface MatchResult {
         <p class="muted summary">
           Generation {{ page().generation }} · {{ rows().length }} route(s). Lazy routes show their
           children once loaded.
+          @if (page().configTruncated; as left) {
+            {{ left }} route(s) left out: the page lists at most 200 routes per level and 1000 in
+            total.
+          }
         </p>
       }
     </div>

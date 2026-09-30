@@ -7,7 +7,7 @@ import {
   recentCalls,
   type AnalogCall,
 } from '../analog-server-log.ts';
-import { explainUrl, scanAnalog, type AnalogProject } from './analog-scan.ts';
+import { explainUrl, scanAnalog, servedAnalogRoot, type AnalogProject } from './analog-scan.ts';
 import {
   analogApiRoutesText,
   analogContentText,
@@ -35,6 +35,7 @@ const MAX_BODY = 2000;
 const PAGE_TTL_MS = 15_000;
 
 let disposeAnalog: (() => void) | undefined;
+let analogOwner: unknown;
 
 interface Scoped {
   rpc: {
@@ -103,17 +104,20 @@ export async function callApi(request: ApiRequest, origin = devOrigin()): Promis
   }
 }
 
-export function stopAnalog() {
+export function stopAnalog(owner?: unknown) {
+  if (owner !== undefined && owner !== analogOwner) return;
   disposeAnalog?.();
   disposeAnalog = undefined;
+  analogOwner = undefined;
 }
 
 export async function registerAnalog(
   my: Scoped,
   ctx: AgentHost,
-  options: { blockCalls?: string } = {},
+  options: { blockCalls?: string; owner?: unknown } = {},
 ) {
   disposeAnalog?.();
+  analogOwner = options.owner;
   const sendApi = (request: ApiRequest): Promise<AnyRecord> =>
     options.blockCalls ? Promise.resolve({ error: options.blockCalls }) : callApi(request);
   const state = await my.rpc.sharedState('analog', {
@@ -156,7 +160,7 @@ export async function registerAnalog(
   let cache: { at: number; project: AnalogProject } | null = null;
   const project = () => {
     if (!cache || Date.now() - cache.at > SCAN_CACHE_MS) {
-      cache = { at: Date.now(), project: scanAnalog(ctx.cwd) };
+      cache = { at: Date.now(), project: scanAnalog(servedAnalogRoot(ctx.cwd)) };
     }
     return cache.project;
   };

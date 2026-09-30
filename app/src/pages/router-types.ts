@@ -175,6 +175,7 @@ export interface RouterPage {
   navigations: NavigationRecord[];
   generation?: number;
   config?: RouteNode[];
+  configTruncated?: number;
   activeIds?: string[];
   setup?: RouterSetup;
   outlets?: OutletInfo[];

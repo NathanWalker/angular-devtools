@@ -10,6 +10,7 @@ export interface InstrumentCall {
 export interface Instrumentation {
   addControl(control: AnyRecord): void;
   addSignalRoot(root: AnyRecord): void;
+  forgetSignalRoot(root: object): void;
   stop(): void;
 }
 
@@ -99,9 +100,15 @@ export function instrumentForms(
   const restores: (() => void)[] = [];
   const seenProtos = new WeakSet<object>();
   const seenRoots = new WeakSet<object>();
+  const signalRestores = new Map<object, { model: AnyRecord; restore: (() => void)[] }>();
   let depth = 0;
 
-  const wrap = (holder: AnyRecord, method: string, signalRoot?: AnyRecord) => {
+  const wrap = (
+    holder: AnyRecord,
+    method: string,
+    signalRoot?: AnyRecord,
+    into: (() => void)[] = restores,
+  ) => {
     const original = holder[method];
     if (typeof original !== 'function' || original[WRAPPED]) return;
     const wrapper = function (this: AnyRecord, ...args: unknown[]) {
@@ -130,9 +137,17 @@ export function instrumentForms(
     } catch {
       return;
     }
-    restores.push(() => {
+    into.push(() => {
       if (holder[method] === wrapper) holder[method] = original;
     });
+  };
+
+  const forgetSignalRoot = (root: object) => {
+    const entry = signalRestores.get(root);
+    if (!entry) return;
+    signalRestores.delete(root);
+    seenRoots.delete(entry.model);
+    for (const restore of entry.restore.splice(0).reverse()) restore();
   };
 
   const wrapPrototypes = (control: AnyRecord) => {
@@ -171,9 +186,13 @@ export function instrumentForms(
       const model = root?.['structure']?.['value'] as AnyRecord | undefined;
       if (!model || seenRoots.has(model)) return;
       seenRoots.add(model);
-      for (const method of ['set', 'update']) wrap(model, method, root);
+      const restore: (() => void)[] = [];
+      signalRestores.set(root, { model, restore });
+      for (const method of ['set', 'update']) wrap(model, method, root, restore);
     },
+    forgetSignalRoot,
     stop() {
+      for (const root of [...signalRestores.keys()]) forgetSignalRoot(root);
       for (const restore of restores.splice(0).reverse()) restore();
     },
   };

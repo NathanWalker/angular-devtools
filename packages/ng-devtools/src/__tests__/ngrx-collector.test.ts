@@ -303,6 +303,129 @@ describe('ngrx collector', () => {
   });
 });
 
+describe('ngrx collector with Store DevTools', () => {
+  function setupDevtools() {
+    document.body.innerHTML = '<app-root ng-version="22"></app-root>';
+    const root = document.querySelector('app-root')!;
+    const reducer = (s: { n: number }, a: { type: string }) =>
+      a.type === 'inc' ? { n: s.n + 1 } : s;
+    const listeners: ((a: unknown) => void)[] = [];
+    const lifted = {
+      actionsById: { 0: { action: { type: '@ngrx/store/init' } } } as Record<
+        number,
+        { action: { type: string } }
+      >,
+      stagedActionIds: [0],
+      computedStates: [{ state: { n: 0 } }],
+      currentStateIndex: 0,
+      nextActionId: 1,
+    };
+    const current = () => lifted.computedStates[lifted.currentStateIndex].state;
+    class _Store {
+      source = { getValue: current };
+      dispatch(action: { type: string }) {
+        const id = lifted.nextActionId++;
+        const atEnd = lifted.currentStateIndex === lifted.stagedActionIds.length - 1;
+        lifted.actionsById[id] = { action };
+        lifted.stagedActionIds.push(id);
+        lifted.computedStates.push({ state: reducer(lifted.computedStates.at(-1)!.state, action) });
+        if (atEnd) lifted.currentStateIndex = lifted.stagedActionIds.length - 1;
+        for (const l of listeners) l(action);
+      }
+      select() {}
+    }
+    class ScannedActionsSubject {
+      subscribe(fn: (a: unknown) => void) {
+        listeners.push(fn);
+        return { unsubscribe: () => {} };
+      }
+    }
+    class StoreDevtools {
+      liftedState = { getValue: () => lifted };
+      jumpToAction(id: number) {
+        lifted.currentStateIndex = lifted.stagedActionIds.indexOf(id);
+      }
+      jumpToState(index: number) {
+        lifted.currentStateIndex = index;
+      }
+    }
+    const store = new _Store();
+    const values = new Map<unknown, unknown>([
+      [_Store, store],
+      [ScannedActionsSubject, new ScannedActionsSubject()],
+      [StoreDevtools, new StoreDevtools()],
+    ]);
+    const rootEnv = {
+      scopes: new Set(['root']),
+      records: new Map([...values.keys()].map((k) => [k, { value: undefined }])),
+    };
+    const node = { get: (token: unknown) => values.get(token) ?? null };
+    const ng = {
+      getInjector: () => node,
+      getComponent: (el: Element) => (el === root ? {} : null),
+      ɵgetInjectorResolutionPath: () => [node, rootEnv],
+      ɵgetInjectorProviders: () => [],
+    };
+    const collector = createNgrxCollector(
+      () => ng as any,
+      () => {},
+    );
+    collector.collect();
+    return { store, collector, current };
+  }
+
+  it('logs a restore with its diff so the next action is not blamed for it', () => {
+    const { store, collector } = setupDevtools();
+    store.dispatch({ type: 'inc' });
+    store.dispatch({ type: 'inc' });
+    store.dispatch({ type: 'inc' });
+    const first = collector.logSince(0)[0];
+    const result = collector.run({ type: 'restore', seq: first.seq });
+    expect(result).toMatchObject({ ok: true, paused: true });
+    expect(result.message).toMatch(/paused/);
+    const after = collector.lastSeq();
+    expect(collector.logSince(after - 1)[0]).toMatchObject({
+      type: `Restore #${first.seq}`,
+      diff: [{ path: 'n', op: 'change', before: 3, after: 1 }],
+    });
+    store.dispatch({ type: 'noop' });
+    store.dispatch({ type: 'inc' });
+    expect(collector.logSince(after).map((e) => [e.type, e.diff])).toEqual([
+      ['noop', []],
+      ['inc', []],
+    ]);
+  });
+
+  it('reports a paused store and goes back to the latest state', () => {
+    const { store, collector, current } = setupDevtools();
+    store.dispatch({ type: 'inc' });
+    store.dispatch({ type: 'inc' });
+    expect(collector.collect().classic?.paused).toBeUndefined();
+    collector.run({ type: 'restore', seq: collector.logSince(0)[0].seq });
+    store.dispatch({ type: 'inc' });
+    expect(current()).toEqual({ n: 1 });
+    expect(collector.collect().classic).toMatchObject({ state: { n: 1 }, paused: true });
+    const result = collector.run({ type: 'latest' });
+    expect(result).toMatchObject({ ok: true });
+    expect(current()).toEqual({ n: 3 });
+    expect(collector.collect().classic?.paused).toBeUndefined();
+    expect(collector.logSince(collector.lastSeq() - 1)[0]).toMatchObject({
+      type: 'Back to latest',
+      diff: [{ path: 'n', op: 'change', before: 1, after: 3 }],
+      restorable: true,
+    });
+    expect(collector.run({ type: 'latest' }).message).toMatch(/already/);
+  });
+
+  it('does not call a restore to the newest action paused', () => {
+    const { store, collector } = setupDevtools();
+    store.dispatch({ type: 'inc' });
+    const result = collector.run({ type: 'restore', seq: collector.lastSeq() });
+    expect(result).toMatchObject({ ok: true, paused: false });
+    expect(result.message).not.toMatch(/paused/);
+  });
+});
+
 describe('serialize', () => {
   it('handles Map, Set, Date, circular and depth limits', () => {
     const circular: Record<string, unknown> = { a: 1 };

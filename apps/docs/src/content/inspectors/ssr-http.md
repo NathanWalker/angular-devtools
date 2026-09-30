@@ -169,7 +169,9 @@ The devtools don't write SSR mocks to TransferState, so the browser requests the
 
 ### When rules apply
 
-Client rules apply right away. SSR rules apply from the next page load. The page also keeps client rules in `sessionStorage`, so they apply on reload before the overlay connects. Rules live in the devtools server's memory, so a server restart clears them.
+Client rules apply right away. SSR rules apply from the next page load. The page also keeps client rules in `sessionStorage`, so they apply on reload before the overlay connects. Rules live in the memory of the server process. They survive a Vite restart in the same process, such as after a config edit, and the **SSR & HTTP** tab keeps showing them. A new process starts with none.
+
+If the `http` inspector or `actions.http` is off, the server clears its rules when it starts. The overlay removes the stored client rules when it connects with the `http` inspector off, so requests made before it connects on that load can still fail.
 
 ### Timeline and rule caps
 

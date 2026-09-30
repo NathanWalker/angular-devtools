@@ -105,10 +105,85 @@ describe('createSignalHistory', () => {
     const one: RawSignalNode = { debugName: 'n', kind: 'signal', version: 0 };
     const two: RawSignalNode = { debugName: 'n', kind: 'signal', version: 0 };
     write(h.onWrite, one, 'a');
+    write(h.onWrite, two, 'a');
+    const out = h.collect([graphNode('x', 'n', 1, 'a'), graphNode('y', 'n', 1, 'a')]);
+    expect(out['x']).toEqual([expect.objectContaining({ source: 'initial', value: 'a' })]);
+    expect(out['y']).toEqual([expect.objectContaining({ source: 'initial', value: 'a' })]);
+  });
+
+  it('tells same-name signals apart by value', () => {
+    const h = createSignalHistory(identity);
+    const one: RawSignalNode = { debugName: 'n', kind: 'signal', version: 0 };
+    const two: RawSignalNode = { debugName: 'n', kind: 'signal', version: 0 };
+    write(h.onWrite, one, 'a');
     write(h.onWrite, two, 'b');
     const out = h.collect([graphNode('x', 'n', 1, 'a'), graphNode('y', 'n', 1, 'b')]);
-    expect(out['x']).toEqual([expect.objectContaining({ source: 'initial', value: 'a' })]);
-    expect(out['y']).toEqual([expect.objectContaining({ source: 'initial', value: 'b' })]);
+    expect(out['x']).toEqual([expect.objectContaining({ source: 'write', value: 'a' })]);
+    expect(out['y']).toEqual([expect.objectContaining({ source: 'write', value: 'b' })]);
+  });
+
+  it("does not attach another signal's writes to a node without its own track", () => {
+    const h = createSignalHistory(identity, () => 1);
+    const rowB: RawSignalNode = { debugName: 'count', kind: 'signal', value: 'Beta', version: 1 };
+    h.onWrite(rowB);
+    const a = graphNode('A', 'count', 1, 'Alpha');
+    expect(h.collect([a])['A']).toEqual([{ epoch: 1, value: 'Alpha', at: 1, source: 'initial' }]);
+    write(h.onWrite, rowB, 'Gamma');
+    expect(h.collect([a])['A'].map((c) => c.value)).toEqual(['Alpha']);
+  });
+
+  it('drops a binding once the track no longer matches the node', () => {
+    const h = createSignalHistory(identity, () => 1);
+    const rowB: RawSignalNode = { debugName: 'count', kind: 'signal', value: 'Alpha', version: 1 };
+    h.onWrite(rowB);
+    h.collect([graphNode('A', 'count', 1, 'Alpha')]);
+    write(h.onWrite, rowB, 'Gamma');
+    write(h.onWrite, rowB, 'Delta');
+    const out = h.collect([graphNode('A', 'count', 1, 'Alpha')])['A'];
+    expect(out.map((c) => [c.epoch, c.value])).toEqual([[1, 'Alpha']]);
+    const later = h.collect([graphNode('A', 'count', 5, 'Omega')])['A'];
+    expect(later.map((c) => [c.epoch, c.value, c.source])).toEqual([
+      [1, 'Alpha', 'write'],
+      [5, 'Omega', 'sample'],
+    ]);
+  });
+
+  it('drops a binding when the bound track reaches the same epoch with another value', () => {
+    const h = createSignalHistory(identity, () => 1);
+    const rowB: RawSignalNode = { debugName: 'count', kind: 'signal', value: 'Alpha', version: 1 };
+    h.onWrite(rowB);
+    h.collect([graphNode('A', 'count', 1, 'Alpha')]);
+    write(h.onWrite, rowB, 'Beta');
+    const out = h.collect([graphNode('A', 'count', 2, 'Gamma')])['A'];
+    expect(out.map((c) => c.value)).not.toContain('Beta');
+    expect(out.at(-1)).toMatchObject({ epoch: 2, value: 'Gamma', source: 'sample' });
+  });
+
+  it('never appends a write newer than the node epoch', () => {
+    const h = createSignalHistory(identity);
+    const raw: RawSignalNode = { debugName: 'n', kind: 'signal', value: 0, version: 0 };
+    h.collect([graphNode('a', 'n', 0, 0)]);
+    write(h.onWrite, raw, 1);
+    h.collect([graphNode('a', 'n', 1, 1)]);
+    write(h.onWrite, raw, 2);
+    raw.version = 1;
+    const out = h.collect([graphNode('a', 'n', 1, 1)])['a'];
+    expect(out.map((c) => c.epoch)).toEqual([0, 1]);
+  });
+
+  it('matches values with the snapshot serializer', () => {
+    const h = createSignalHistory(
+      (v) => `h:${String(v)}`,
+      Date.now,
+      (v) => `g:${String(v)}`,
+    );
+    const raw: RawSignalNode = { debugName: 'n', kind: 'signal', version: 0 };
+    h.collect([graphNode('a', 'n', 0, 'g:undefined')]);
+    write(h.onWrite, raw, 5);
+    expect(h.collect([graphNode('a', 'n', 1, 'g:5')])['a'][1]).toMatchObject({
+      value: 'h:5',
+      source: 'write',
+    });
   });
 
   it('serializes written values', () => {

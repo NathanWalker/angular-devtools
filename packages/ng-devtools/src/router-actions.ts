@@ -186,6 +186,8 @@ export function captureDiagnostics(router: AnyRecord, navigations: NavigationRec
         redirect
           ? `error handler redirected to ${read(() => String(router['serializeUrl'](redirect)), '?')}`
           : `error handler returned ${result === undefined ? 'nothing (error rethrown to the navigation promise)' : typeof result}`,
+        error,
+        !!redirect,
       );
       return result;
     };

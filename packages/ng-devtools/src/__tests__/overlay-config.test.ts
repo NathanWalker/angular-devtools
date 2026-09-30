@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NgDevtoolsConfig } from '../config.ts';
 import { isSecretKey, setRedaction } from '../forms-privacy.ts';
-import { httpRegistry } from '../http-rules.ts';
+import { RULES_STORAGE_KEY, clientRules, httpRegistry, storeRules } from '../http-rules.ts';
 import { noteFailedCall, setNavigationLimit, type NavigationRecord } from '../router.ts';
 
 const calls: string[] = [];
@@ -40,6 +40,7 @@ afterEach(() => {
   setRedaction();
   setNavigationLimit(50);
   delete httpRegistry().maxCalls;
+  delete httpRegistry().rules;
   vi.restoreAllMocks();
 });
 
@@ -92,6 +93,14 @@ describe('overlay collectors', () => {
     const list: NavigationRecord[] = [];
     for (let i = 0; i < 15; i++) noteFailedCall(list, `/x/${i}`, new Error('nope'), i);
     expect(list).toHaveLength(10);
+  });
+
+  it('drop stored fault rules when the http inspector is off', async () => {
+    storeRules([{ id: 'r1', pattern: '/api', enabled: true, target: 'client', status: 500 }]);
+    await start({ inspectors: { http: false } });
+    expect(sessionStorage.getItem(RULES_STORAGE_KEY)).toBeNull();
+    delete httpRegistry().rules;
+    expect(clientRules()).toEqual([]);
   });
 
   it('apply the redaction config from the server before collecting', async () => {

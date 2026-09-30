@@ -24,3 +24,8 @@ export function rpcTry<T>(
     () => null,
   );
 }
+
+/** True when the panel reads a report written by `ng-devtools build`, not a live server. */
+export function isStaticReport(client: DevframeRpcClient | null): boolean {
+  return client?.connectionMeta.backend === 'static';
+}

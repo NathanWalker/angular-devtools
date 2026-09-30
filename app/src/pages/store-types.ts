@@ -36,6 +36,7 @@ export interface NgrxClassicStoreInfo {
   state: unknown;
   devtools: boolean;
   scope: string;
+  paused?: boolean;
 }
 
 export interface NgrxDiffEntry {

@@ -125,8 +125,8 @@ Agents can't turn recording on. To give `explain-pipe` call data, click **Record
 
 ## Limits and gotchas
 
-<ngmd-callout type="danger" title="Values are not redacted">
-  The devtools send pipe inputs, outputs and async values as they are, cut to 200 characters. Keep the dev server on localhost. See <a href="../security.md">Security</a>.
+<ngmd-callout type="info" title="Values are redacted">
+  Pipe inputs, outputs and async values are redacted like component inputs, then cut to 200 characters. A string that holds JSON, such as the output of the <code>json</code> pipe, is parsed and redacted too, and shown without its line breaks. See <a href="../security.md#what-is-redacted">Access and redaction</a>.
 </ngmd-callout>
 
 ### The stale warning is experimental

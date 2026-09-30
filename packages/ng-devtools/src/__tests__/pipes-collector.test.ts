@@ -9,11 +9,14 @@ import {
   type PipeTransform,
 } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { AsyncPipe, CurrencyPipe, UpperCasePipe } from '@angular/common';
+import { AsyncPipe, CurrencyPipe, JsonPipe, UpperCasePipe } from '@angular/common';
 import { BrowserTestingModule, platformBrowserTesting } from '@angular/platform-browser/testing';
 import { BehaviorSubject } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { attachPipes } from '../pipes-collector.ts';
+import { setRedaction } from '../forms-privacy.ts';
+import { explainPipeText } from '../rpc/pipe-explain.ts';
+import { mergePipePageReport } from '../rpc/pipes-tools.ts';
 import type { PipePageReport } from '../rpc/pipes-tools.ts';
 
 try {
@@ -25,6 +28,7 @@ try {
 const stops: (() => void)[] = [];
 afterEach(() => {
   stops.splice(0).forEach((stop) => stop());
+  setRedaction();
   TestBed.resetTestingModule();
   document.body.innerHTML = '';
 });
@@ -411,6 +415,91 @@ describe('pipes collector', () => {
     expect(usage).toMatchObject({ hasSource: false, duplicate: false });
     expect(usage.latestValue).toBeUndefined();
     expect(usage.target).toEqual({ pageId: 'pg', id: expect.any(String) });
+  });
+
+  it('redacts secret keys, JWTs and bearer tokens in async values', async () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.c2lnbmF0dXJlLXZhbHVl';
+    class Session {
+      session$ = new BehaviorSubject({ accessToken: jwt, user: 'ada' });
+      header$ = new BehaviorSubject(`Bearer ${jwt}`);
+    }
+    Component({
+      selector: 'app-session',
+      imports: [AsyncPipe],
+      template: `<p>{{ (session$ | async)?.user }}</p><p>{{ header$ | async }}</p>`,
+    })(Session);
+    await mount(Session);
+    const h = harness();
+    h.collector.push();
+    await Promise.resolve();
+
+    const values = (h.reports().at(-1)!.async ?? []).map((a) => a.latestValue);
+    expect(values).toEqual(['{"accessToken":"[redacted]","user":"ada"}', 'Bearer [redacted]']);
+    expect(JSON.stringify(h.reports())).not.toContain(jwt);
+  });
+
+  it('redacts a JWT that runs past the text limit before cutting it', async () => {
+    const jwt = `eyJhbGciOiJIUzI1NiJ9.eyJ${'a'.repeat(900)}.c2lnbmF0dXJlLXZhbHVl`;
+    class LongToken {
+      token$ = new BehaviorSubject(`token ${jwt}`);
+    }
+    Component({
+      selector: 'app-long-token',
+      imports: [AsyncPipe],
+      template: `<p>{{ token$ | async }}</p>`,
+    })(LongToken);
+    await mount(LongToken);
+    const h = harness();
+    h.collector.push();
+    await Promise.resolve();
+
+    const [usage] = h.reports().at(-1)!.async ?? [];
+    expect(usage.latestValue).toBe('token [redacted]');
+    expect(JSON.stringify(h.reports())).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+  });
+
+  it('redacts instrumented inputs and outputs, including configured secret names', async () => {
+    setRedaction({ secretNames: ['voucher'] });
+    class Checkout {
+      form = signal({ email: 'ada@example.com', password: 'hunter2', voucher: 'ABC123' });
+    }
+    Component({
+      selector: 'app-checkout',
+      imports: [JsonPipe],
+      template: `<pre>{{ form() | json }}</pre>`,
+    })(Checkout);
+    const fixture = await mount(Checkout);
+    const h = harness();
+    h.handlers.get('instrument-pipes')!(true);
+    fixture.componentInstance.form.set({
+      email: 'bob@example.com',
+      password: 'hunter3',
+      voucher: 'XYZ789',
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    h.collector.push();
+    await Promise.resolve();
+
+    const report = h.reports().at(-1)!;
+    const call = report.pipes.find((p) => p.name === 'json')!.call!;
+    expect(call.lastArgs).toEqual([
+      '{"email":"bob@example.com","password":"[redacted]","voucher":"[redacted]"}',
+    ]);
+    expect(call.lastResult).toBe(
+      '{"email":"bob@example.com","password":"[redacted]","voucher":"[redacted]"}',
+    );
+    const payload = JSON.stringify(report);
+    expect(payload).not.toContain('hunter3');
+    expect(payload).not.toContain('XYZ789');
+
+    const markdown = explainPipeText(
+      'json',
+      '/nonexistent',
+      mergePipePageReport(new Map(), report, 0),
+    );
+    expect(markdown).toContain('[redacted]');
+    expect(markdown).not.toContain('hunter3');
   });
 
   it('does nothing harmful when Angular has no debug API on the page', async () => {

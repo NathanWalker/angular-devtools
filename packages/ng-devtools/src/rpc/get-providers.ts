@@ -26,6 +26,7 @@ export const getProviders = defineRpcFunction({
   name: 'get-providers',
   type: 'query',
   jsonSerializable: true,
+  snapshot: true,
   args: [],
   returns: describable(v.array(ProviderEntrySchema)),
   agent: {

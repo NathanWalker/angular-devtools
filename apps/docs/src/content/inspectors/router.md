@@ -32,6 +32,7 @@ Every navigation as one story:
 - A phase bar: recognize, guards, resolve, activate.
 - Guards and resolvers, lazy loads, reused components, HTTP requests, scroll, and the title afterwards.
 - Router warnings, and the cancel or error reason. The tab explains NG04xxx errors.
+- When the navigation error handler redirects, the navigation names the error handler as the cause and keeps the error that triggered it, with its error code.
 
 Filter by URL, or check **Only problems** to keep the navigations that did not succeed and the ones in a loop. Each row has **Replay** and **Copy repro** (a markdown repro). **Export JSON** saves the list.
 
@@ -195,7 +196,7 @@ The devtools replace query, matrix and fragment values with secret-looking keys 
 
 ### History and config caps
 
-The page keeps the last 50 navigations and 50 preloads. The live config stops at 1000 routes.
+The page keeps the last 50 navigations and 50 preloads. The live config lists at most 200 routes per level (a route's children and its loaded lazy routes count as one level) and 1000 routes in total. The **Routes** view and `ng-devtools:list-routes` say how many routes were left out.
 
 ## FAQ
 

@@ -76,7 +76,9 @@ The plugin applies to `vite serve` only. `vite build` is not affected, so nothin
 
 ### Mounts the hub
 
-It mounts the devtools hub on the Vite dev server. The WebSocket shares Vite's HTTP server when it can. Otherwise it runs on its own port.
+It mounts the devtools hub on the Vite dev server. The WebSocket shares the dev server's port, over HTTP or HTTPS (`server.https` or `@vitejs/plugin-basic-ssl`). In middleware mode, where Vite has no server of its own, the WebSocket runs on its own port.
+
+The hub keeps working after a dev server restart, for example after a config or `.env` change.
 
 ### Records Analog server activity
 
@@ -110,7 +112,7 @@ The plugin also takes the devtools options, such as `inspectors`, `agent`, `acti
 
 ### `base`
 
-Change `base` if `/__devframes/` clashes with a route of your own. The overlay looks for `/__devframes/ng-devtools/` and `/__ng-devtools/` by default, so a custom base also needs a custom overlay path. See [A custom mount path](./overlay.md#a-custom-mount-path).
+Change `base` if `/__devframes/` clashes with a route of your own. The leading and trailing slashes are optional: `'devtools'`, `'/devtools'` and `'/devtools/'` all mount the hub at `/devtools/`, and the loopback checks cover the whole path. The overlay looks for `/__devframes/ng-devtools/` and `/__ng-devtools/` by default, so a custom base also needs a custom overlay path: pass `<base>ng-devtools/` to `initOverlay`. The floating button follows that path. See [A custom mount path](./overlay.md#a-custom-mount-path).
 
 ### `apiPrefix`
 

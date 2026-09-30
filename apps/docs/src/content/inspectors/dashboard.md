@@ -55,11 +55,11 @@ Most of the Dashboard reads your workspace, not the running page. It works befor
 
 The server reads versions from the installed packages in `node_modules`. When a package is not installed, it falls back to the range in `package.json`.
 
-The project name comes from `angular.json`. When there is no `angular.json`, it comes from `package.json`.
+The project name comes from `angular.json`. The devtools pick `defaultProject` when it is set, then the project whose `root` is the workspace folder, then the first `application` project. In an Nx workspace without `angular.json`, the name comes from `project.json`. When neither file names a project, it comes from `package.json`.
 
 ### SSR status
 
-SSR is **On** when the build options set `ssr` or `server`. For *Analog apps, SSR follows the `ssr` option of `analog()`.
+SSR is **On** when the build options of that project set `ssr` or `server`, or when it has a `server` target (Angular Universal). The devtools read `architect` in `angular.json` and `targets` in `project.json`. For *Analog apps, SSR follows the `ssr` option of `analog()`.
 
 ### Counts
 

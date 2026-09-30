@@ -114,9 +114,13 @@ bootstrapApplication(App, appConfig).then(async () => {
 
 `baseURL` takes one path or a list of paths to try in order. `initOverlay` resolves to a function that stops the overlay it started and removes its hooks.
 
+The floating button follows the path the overlay connected to. If that path is `<base>ng-devtools/` and a hub answers at `<base>`, the button opens the hub. Otherwise it opens the devtools panel at that path.
+
 ### One overlay per page
 
 Only one overlay runs on a page. Importing the module already starts one on the default URLs. When you call `initOverlay`, it stops the running overlay first, the auto-started one included, and then starts yours. The page never ends up with two connections.
+
+An overlay that was stopped or replaced before it connected does not report its connection error.
 
 ## Stop the overlay
 
@@ -157,6 +161,18 @@ bootstrapApplication(App, appConfig).then(() => {
 ```
 
 See [Restore NgRx signal state](../guides/ngrx-signals-restore.md).
+
+## No devtools server found
+
+If no path answers, the overlay logs an error that starts with `[ng-devtools] No devtools server found` and lists the paths it tried. The floating button still appears, and its panel says **No devtools server found** with a link to the setup guide.
+
+Common causes:
+
+- No server part is mounted, for example plain `ng serve` without `initNgDevtoolsHub()` in `server.ts`.
+- The hub is mounted after `express.static` or the SSR handler, so the app answers first.
+- The hub runs on a custom `base`, and the overlay still uses the default paths. Pass the path to [`initOverlay`](#a-custom-mount-path).
+
+The overlay and the button do not start inside the devtools panel frame, so a misconfigured panel never shows a second button.
 
 ## Highlighting
 

@@ -18,5 +18,5 @@
     "strictInputAccessModifiers": true
   },
   "include": ["./**/*.ts", "../packages/ng-devtools/src/config.ts"],
-  "exclude": ["node_modules", "vite.config.ts"]
+  "exclude": ["node_modules", "vite.config.ts", "vitest.config.ts"]
 }

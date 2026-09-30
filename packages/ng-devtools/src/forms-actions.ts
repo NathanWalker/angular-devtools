@@ -408,12 +408,68 @@ function nativeWrite(element: Element, value: unknown): boolean {
     element.dispatchEvent(new Event('input', { bubbles: true }));
     return true;
   }
-  if (element instanceof HTMLSelectElement) {
-    element.value = value == null ? '' : String(value);
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-    return true;
-  }
   return false;
+}
+
+function label(value: unknown): string {
+  const text = read(() => JSON.stringify(value), undefined) ?? String(value);
+  return text.length > 60 ? `${text.slice(0, 57)}...` : text;
+}
+
+function selectWrite(
+  ctx: ActionContext,
+  select: HTMLSelectElement,
+  value: unknown,
+): { problem: string } | { expected: unknown } {
+  const accessor = directiveWith(ctx, select, '_getOptionValue');
+  const compare =
+    typeof accessor?.['_compareWith'] === 'function' ? accessor['_compareWith'] : Object.is;
+  const options = Array.from(select.options).map((option) => ({
+    option,
+    value: accessor
+      ? read(() => accessor['_getOptionValue'](option.value) as unknown, option.value)
+      : option.value,
+  }));
+  const matches = (candidate: unknown, wanted: unknown) =>
+    read(() => !!compare(candidate, wanted), false) ||
+    sameValue(candidate, wanted) ||
+    (typeof candidate === 'string' && wanted != null && candidate === String(wanted));
+  let expected: unknown;
+  if (select.multiple) {
+    if (!Array.isArray(value)) return { problem: 'is a multiple select; pass an array' };
+    const missing = value.find((wanted) => !options.some((o) => matches(o.value, wanted)));
+    if (missing !== undefined) return { problem: `has no option with the value ${label(missing)}` };
+    const chosen = options.filter((o) => value.some((wanted) => matches(o.value, wanted)));
+    for (const o of options) o.option.selected = chosen.includes(o);
+    expected = chosen.map((o) => o.value);
+  } else {
+    const index = options.findIndex((o) => matches(o.value, value));
+    if (index < 0) return { problem: `has no option with the value ${label(value)}` };
+    select.selectedIndex = index;
+    expected = options[index].value;
+  }
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  return { expected };
+}
+
+function sameOption(stored: unknown, expected: unknown): boolean {
+  return (
+    sameValue(stored, expected) ||
+    (stored != null &&
+      expected != null &&
+      typeof stored !== 'object' &&
+      typeof expected !== 'object' &&
+      String(stored) === String(expected))
+  );
+}
+
+function sameSelection(stored: unknown, expected: unknown): boolean {
+  if (!Array.isArray(expected)) return sameOption(stored, expected);
+  return (
+    Array.isArray(stored) &&
+    stored.length === expected.length &&
+    expected.every((item, index) => sameOption(stored[index], item))
+  );
 }
 
 function writeValue(
@@ -448,8 +504,19 @@ function writeValue(
     if (!value || typeof value !== 'object') return 'is a group or array; pass an object or array';
   }
   const leaf = !current || typeof current !== 'object' || current instanceof Date;
-  const element = leaf ? elementFor(ctx, found, path) : null;
-  const viaDom = element && (mode === 'user' || found.kind === 'template');
+  const element = elementFor(ctx, found, path);
+  const select = element instanceof HTMLSelectElement;
+  const viaDom = element && (leaf || select) && (mode === 'user' || found.kind === 'template');
+  if (viaDom && element instanceof HTMLSelectElement) {
+    const outcome = selectWrite(ctx, element, value);
+    if ('problem' in outcome) return outcome.problem;
+    if (mode === 'user') element.dispatchEvent(new Event('blur'));
+    const deferred = found.kind !== 'signal' && read(() => node['updateOn'], 'change') !== 'change';
+    const stored = deferred ? node['_pendingValue'] : rawValue(found, node);
+    return sameSelection(stored, outcome.expected)
+      ? null
+      : `holds ${label(stored)} after the write`;
+  }
   if (viaDom && nativeWrite(element, value)) {
     if (mode === 'user') element.dispatchEvent(new Event('blur'));
     return null;

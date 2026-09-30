@@ -234,6 +234,9 @@ export function listRoutesText(
     return `Page ${code(page.pageId)} has not reported its route config yet${page.setup?.mode === 'events-only' ? ' (events-only mode: this build has no debug utils, so the config cannot be read)' : ''}.${freshness(page, now)}`;
   }
   const active = new Set(page.activeIds ?? []);
+  const truncated = page.configTruncated
+    ? `${page.configTruncated} route(s) were left out: the page lists at most 200 routes per level and 1000 in total.`
+    : '';
   if (args.match) {
     const result = matchUrl(config, args.match);
     const lines = result.matched
@@ -244,10 +247,13 @@ export function listRoutesText(
             : '',
         ]
       : [
-          `${code(args.match)} matches no configured route (NG04002 at runtime).`,
+          truncated
+            ? `${code(args.match)} matches no route in the reported part of the config; a left-out route may still match it.`
+            : `${code(args.match)} matches no configured route (NG04002 at runtime).`,
           result.nearest.length ? `Nearest routes: ${list(result.nearest)}` : '',
         ];
     lines.push(...result.notes.map((note) => `- ${note}`));
+    if (truncated) lines.push(truncated);
     lines.push(
       'This is a prediction from the config; use the navigate tool with action "probe" to run the real matcher (runs canMatch and loads lazy chunks).',
     );
@@ -257,6 +263,7 @@ export function listRoutesText(
     const lines: string[] = [
       'Protection per route (client-side only: the server must enforce access too):',
     ];
+    if (truncated) lines.push(truncated);
     walk(config, (node, parents) => {
       if (node.children?.length || node.redirectTo !== undefined) return;
       const guards = effectiveGuards(node, parents);
@@ -289,7 +296,7 @@ export function listRoutesText(
     }
   };
   visit(config, 0);
-  const header = `Live route config (generation ${page.generation ?? '?'}): ${count} route(s)${needle ? ` matching ${code(args.filter!)}` : ''}. Lazy routes show their children once loaded.`;
+  const header = `Live route config (generation ${page.generation ?? '?'}): ${count} route(s)${needle ? ` matching ${code(args.filter!)}` : ''}. Lazy routes show their children once loaded.${truncated ? ` ${truncated}` : ''}`;
   return capped(
     `${UNTRUSTED}\n\n${header}\n\n${lines.join('\n')}${otherPages(state, page)}${freshness(page, now)}`,
   );

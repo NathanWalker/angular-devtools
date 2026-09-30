@@ -39,6 +39,8 @@ export interface HttpRegistry {
   /** How many calls to keep (`limits.httpCalls`). */
   maxCalls?: number;
   dispose?: () => void;
+  /** The hub context whose setup installed `record` and `dispose`. */
+  owner?: unknown;
 }
 
 export const MAX_CALLS = 200;

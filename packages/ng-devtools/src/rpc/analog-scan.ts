@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { IGNORED_DIRS, maskStrings, stripComments } from './source-scan.ts';
 
 export type AnalogRouteKind = 'page' | 'layout' | 'markdown' | 'group' | 'implicit';
@@ -450,9 +450,9 @@ export function analogConfig(root: string): AnalogConfig {
   return config;
 }
 
-export function analogVersion(root: string): string | undefined {
+function packageVersion(dir: string): string | undefined {
   try {
-    const pkg = JSON.parse(read(join(root, 'package.json')));
+    const pkg = JSON.parse(read(join(dir, 'package.json')));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     return deps['@analogjs/platform'] ?? deps['@analogjs/router'];
   } catch {
@@ -460,8 +460,64 @@ export function analogVersion(root: string): string | undefined {
   }
 }
 
-export function prerenderedPages(root: string): string[] {
-  const dir = join(root, 'dist/analog/public');
+function isWorkspaceBoundary(dir: string): boolean {
+  return dirname(dir) === dir || existsSync(join(dir, '.git')) || existsSync(join(dir, 'nx.json'));
+}
+
+function analogPackage(root: string): { dir: string; version: string } | undefined {
+  const own = packageVersion(root);
+  if (own) return { dir: root, version: own };
+  if (isWorkspaceBoundary(root) || !hasAnalogConfig(root)) return undefined;
+  for (let dir = dirname(root); ; dir = dirname(dir)) {
+    const version = packageVersion(dir);
+    if (version) return { dir, version };
+    if (isWorkspaceBoundary(dir)) return undefined;
+  }
+}
+
+function nxWorkspace(root: string): string | undefined {
+  for (let dir = root; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, 'nx.json'))) return dir;
+    if (isWorkspaceBoundary(dir)) return undefined;
+  }
+}
+
+export function analogVersion(root: string): string | undefined {
+  return analogPackage(root)?.version;
+}
+
+function hasAnalogConfig(dir: string): boolean {
+  const file = configFile(dir);
+  return !!file && /\banalog\s*\(/.test(stripComments(read(join(dir, file))));
+}
+
+let viteRoot: string | undefined;
+
+export function setAnalogRoot(root: string | undefined) {
+  viteRoot = root;
+}
+
+export function servedAnalogRoot(cwd: string): string {
+  return analogRoot(viteRoot ?? cwd);
+}
+
+export function analogRoot(cwd: string): string {
+  if (existsSync(join(cwd, 'src/app/pages')) || hasAnalogConfig(cwd)) return cwd;
+  let names: string[];
+  try {
+    names = readdirSync(join(cwd, 'apps')).sort();
+  } catch {
+    return cwd;
+  }
+  return names.map((name) => join(cwd, 'apps', name)).find(hasAnalogConfig) ?? cwd;
+}
+
+export function prerenderedPages(root: string, workspace = root): string[] {
+  const dir = [
+    join(root, 'dist/analog/public'),
+    join(workspace, 'dist', relative(workspace, root), 'analog/public'),
+  ].find((candidate) => existsSync(candidate));
+  if (!dir) return [];
   return walk(dir, (n) => n === 'index.html').map((full) => {
     const path = relative(dir, full)
       .split('\\')
@@ -471,8 +527,9 @@ export function prerenderedPages(root: string): string[] {
   });
 }
 
-export function scanAnalog(root: string): AnalogProject {
+export function scanAnalog(cwd: string): AnalogProject {
   walkErrors = new Map();
+  const root = analogRoot(cwd);
   try {
     const project = scanProject(root);
     if (walkErrors.size) {
@@ -485,7 +542,8 @@ export function scanAnalog(root: string): AnalogProject {
 }
 
 function scanProject(root: string): AnalogProject {
-  const version = analogVersion(root);
+  const pkg = analogPackage(root);
+  const version = pkg?.version;
   const files = routeFiles(root);
   return {
     analog: !!version,
@@ -504,7 +562,7 @@ function scanProject(root: string): AnalogProject {
       : [],
     content: version ? contentFiles(root) : [],
     config: analogConfig(root),
-    prerendered: version ? prerenderedPages(root) : [],
+    prerendered: pkg ? prerenderedPages(root, nxWorkspace(root) ?? pkg.dir) : [],
   };
 }
 

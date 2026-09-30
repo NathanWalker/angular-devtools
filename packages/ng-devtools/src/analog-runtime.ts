@@ -1,6 +1,7 @@
 import { hasStateScript, scanHydration } from './http-hydration.ts';
 import { isCustomSecretKey } from './forms-privacy.ts';
 import { createHydrationScanner } from './http-overlay.ts';
+import { httpRegistry } from './http-rules.ts';
 
 type AnyRecord = Record<string, any>;
 
@@ -64,7 +65,8 @@ export function fileOfEndpoint(endpointKey: string | undefined): {
 }
 
 function redact(value: unknown, depth = 0): unknown {
-  if (depth > 5 || value === null || typeof value !== 'object') return value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth > 5) return '[Truncated]';
   if (Array.isArray(value)) return value.slice(0, 20).map((item) => redact(item, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as AnyRecord).slice(0, 30)) {
@@ -186,6 +188,15 @@ export function hasAnalogMeta(routes: unknown, depth = 0): boolean {
   );
 }
 
+export function mergeHydrationErrors(early: unknown, own: string[]): string[] {
+  const merged: string[] = [];
+  for (const text of [...(Array.isArray(early) ? early : []), ...own]) {
+    const error = typeof text === 'string' ? hydrationErrorOf([text]) : null;
+    if (error && !merged.includes(error)) merged.push(error);
+  }
+  return merged.slice(-MAX_ERRORS);
+}
+
 type HydrationScanner = (counters: Record<string, unknown> | undefined) => { hydrated: number };
 
 function hydratedNodes(scanner?: HydrationScanner): number {
@@ -218,7 +229,10 @@ export function collectAnalog(
     chain,
     hydrated: analog ? hydratedNodes(scanner) : 0,
     transferState: hasStateScript(document),
-    hydrationErrors: hydrationErrors.slice(-MAX_ERRORS),
+    hydrationErrors: mergeHydrationErrors(
+      read(() => httpRegistry().warnings, undefined),
+      hydrationErrors,
+    ),
     configPaths: paths,
   };
   const context = rootEl?.getAttribute('ng-server-context');
@@ -246,16 +260,22 @@ export function attachAnalog(
   let last = '';
   let lastAt = 0;
   let subscription: { unsubscribe(): void } | null = null;
-  const original = console.error;
-  const patched = function (this: unknown, ...args: unknown[]) {
+  const record = (args: unknown[]) => {
     const error = read(() => hydrationErrorOf(args), null);
     if (error && !hydrationErrors.includes(error)) {
       hydrationErrors.push(error);
       if (hydrationErrors.length > MAX_ERRORS) hydrationErrors.shift();
     }
-    return original.apply(this, args as []);
   };
-  console.error = patched;
+  const patches = (['error', 'warn'] as const).map((level) => {
+    const original = console[level];
+    const patched = function (this: unknown, ...args: unknown[]) {
+      record(args);
+      return original.apply(this, args as []);
+    };
+    console[level] = patched;
+    return { level, original, patched };
+  });
 
   const push = () => {
     const report = read(() => collectAnalog(getNg(), pageId, hydrationErrors, scanner), null);
@@ -295,6 +315,8 @@ export function attachAnalog(
   return () => {
     clearInterval(interval);
     subscription?.unsubscribe();
-    if (console.error === patched) console.error = original;
+    for (const { level, original, patched } of patches) {
+      if (console[level] === patched) console[level] = original;
+    }
   };
 }

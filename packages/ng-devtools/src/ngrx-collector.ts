@@ -371,6 +371,43 @@ export function createNgrxCollector(
     return fromSource !== undefined ? fromSource : syncValue(store);
   };
 
+  const logClassic = (c: Classic, type: string, action: unknown, withAction: boolean) => {
+    const next = serialize(classicState(c.store));
+    const changes = diff(c.last, next).map((entry) => ({
+      ...entry,
+      ...('before' in entry ? { before: serialize(entry.before, SMALL) } : {}),
+      ...('after' in entry ? { after: serialize(entry.after, SMALL) } : {}),
+    }));
+    c.last = next;
+    append(
+      {
+        source: 'store',
+        storeId: 'store',
+        type,
+        ...(withAction
+          ? {
+              action: serialize(action, { depth: 5, maxKeys: 50, maxString: 1000, budget: 2000 }),
+            }
+          : {}),
+        timestamp: Date.now(),
+        diff: changes,
+        restorable: !!c.devtools,
+      },
+      { kind: 'classic', action },
+    );
+  };
+
+  const liftedOf = (devtools: AnyRecord) =>
+    syncValue(devtools['liftedState']) as AnyRecord | undefined;
+
+  const isPaused = (devtools: AnyRecord | null) => {
+    if (!devtools) return false;
+    const lifted = liftedOf(devtools);
+    const index = lifted?.['currentStateIndex'];
+    const states = lifted?.['computedStates'];
+    return typeof index === 'number' && Array.isArray(states) && index < states.length - 1;
+  };
+
   const attachClassic = ({
     parts: found,
     scope,
@@ -388,26 +425,8 @@ export function createNgrxCollector(
       stop: () => {},
     };
     const record = (action: unknown) => {
-      const next = serialize(classicState(store));
-      const changes = diff(c.last, next).map((entry) => ({
-        ...entry,
-        ...('before' in entry ? { before: serialize(entry.before, SMALL) } : {}),
-        ...('after' in entry ? { after: serialize(entry.after, SMALL) } : {}),
-      }));
-      c.last = next;
       const type = read(() => String((action as AnyRecord)['type'] ?? 'action'), 'action');
-      append(
-        {
-          source: 'store',
-          storeId: 'store',
-          type,
-          action: serialize(action, { depth: 5, maxKeys: 50, maxString: 1000, budget: 2000 }),
-          timestamp: Date.now(),
-          diff: changes,
-          restorable: !!devtools,
-        },
-        { kind: 'classic', action },
-      );
+      logClassic(c, type, action, true);
     };
     const scanned = found['ScannedActionsSubject'];
     const actions = found['ActionsSubject'];
@@ -547,6 +566,7 @@ export function createNgrxCollector(
             state: serialize(classicState(classic.store)),
             devtools: !!classic.devtools,
             scope: classic.scope,
+            ...(isPaused(classic.devtools) ? { paused: true } : {}),
           }
         : null,
     };
@@ -562,7 +582,30 @@ export function createNgrxCollector(
     return report();
   };
 
+  const PAUSED_NOTE =
+    'The store is paused on this state: new actions are logged but do not change the state until you go back to the latest state.';
+
+  const backToLatest = (): NgrxRequestResult => {
+    const c = classic;
+    const devtools = c?.devtools;
+    if (!c || !devtools) {
+      return { error: 'Time travel for @ngrx/store needs provideStoreDevtools() in the app.' };
+    }
+    const lifted = liftedOf(devtools);
+    const staged = (lifted?.['stagedActionIds'] ?? []) as number[];
+    if (!staged.length) return { error: 'Store DevTools holds no actions.' };
+    if (!isPaused(devtools))
+      return { ok: true, message: 'The store is already on the latest state.' };
+    const lastId = staged[staged.length - 1];
+    if (typeof devtools['jumpToState'] === 'function') devtools['jumpToState'](staged.length - 1);
+    else devtools['jumpToAction'](lastId);
+    const actionsById = (lifted?.['actionsById'] ?? {}) as Record<string, AnyRecord>;
+    logClassic(c, 'Back to latest', actionsById[lastId]?.['action'], false);
+    return { ok: true, message: 'Back on the latest state. New actions change the state again.' };
+  };
+
   const run = (request: NgrxRequest): NgrxRequestResult => {
+    if (request?.type === 'latest') return backToLatest();
     if (!request || request.type !== 'restore' || typeof request.seq !== 'number') {
       return { error: 'Unknown request.' };
     }
@@ -598,11 +641,12 @@ export function createNgrxCollector(
         message: `Restored the state after change #${request.seq}. watchState listeners were not notified; call registerNgrxSignals({ patchState }) from @santoshyadavdev/ng-devtools/overlay in your app to have restore notify them.`,
       };
     }
-    const devtools = classic?.devtools;
-    if (!devtools) {
+    const c = classic;
+    const devtools = c?.devtools;
+    if (!c || !devtools) {
       return { error: 'Time travel for @ngrx/store needs provideStoreDevtools() in the app.' };
     }
-    const lifted = syncValue(devtools['liftedState']) as AnyRecord | undefined;
+    const lifted = liftedOf(devtools);
     const actionsById = (lifted?.['actionsById'] ?? {}) as Record<string, AnyRecord>;
     const id = Object.keys(actionsById).find(
       (key) => actionsById[key]?.['action'] === entry.action,
@@ -614,7 +658,10 @@ export function createNgrxCollector(
       if (index < 0) return { error: 'Store DevTools no longer holds this action.' };
       devtools['jumpToState'](index);
     }
-    return { ok: true, message: `Jumped to the state after action #${request.seq}.` };
+    logClassic(c, `Restore #${request.seq}`, entry.action, false);
+    const message = `Jumped to the state after action #${request.seq}.`;
+    const paused = isPaused(devtools);
+    return { ok: true, paused, message: paused ? `${message} ${PAUSED_NOTE}` : message };
   };
 
   return {

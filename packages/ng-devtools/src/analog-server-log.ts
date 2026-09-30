@@ -91,13 +91,71 @@ export function devOrigin(): string | undefined {
   return origin;
 }
 
+function isSecretJsonKey(key: string): boolean {
+  return isSecretKey(key) || isCustomSecretKey(key);
+}
+
 function redactJson(value: unknown, depth = 0): unknown {
-  if (depth > 6 || value === null || typeof value !== 'object') return value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth > 6) return '[Truncated]';
   if (Array.isArray(value)) return value.slice(0, 50).map((item) => redactJson(item, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 50)) {
-    out[key] =
-      isSecretKey(key) || isCustomSecretKey(key) ? '[redacted]' : redactJson(item, depth + 1);
+    out[key] = isSecretJsonKey(key) ? '[redacted]' : redactJson(item, depth + 1);
+  }
+  return out;
+}
+
+function stringEnd(text: string, start: number): number {
+  for (let i = start + 1; i < text.length; i++) {
+    if (text[i] === '\\') i++;
+    else if (text[i] === '"') return i + 1;
+  }
+  return text.length;
+}
+
+function valueEnd(text: string, start: number): number {
+  const first = text[start];
+  if (first === '"') return stringEnd(text, start);
+  if (first !== '{' && first !== '[') {
+    const stop = text.slice(start).search(/[,}\]]/);
+    return stop < 0 ? text.length : start + stop;
+  }
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') i = stringEnd(text, i) - 1;
+    else if (ch === '{' || ch === '[') depth++;
+    else if ((ch === '}' || ch === ']') && --depth === 0) return i + 1;
+  }
+  return text.length;
+}
+
+function redactJsonText(text: string): string {
+  const colon = /\s*:\s*/y;
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== '"') {
+      out += text[i++];
+      continue;
+    }
+    const end = stringEnd(text, i);
+    const token = text.slice(i, end);
+    out += token;
+    i = end;
+    colon.lastIndex = i;
+    const sep = colon.exec(text);
+    if (!sep) continue;
+    let key: string;
+    try {
+      key = String(JSON.parse(token));
+    } catch {
+      key = token.slice(1, -1);
+    }
+    if (!isSecretJsonKey(key)) continue;
+    out += `${sep[0]}"[redacted]"`;
+    i = valueEnd(text, i + sep[0].length);
   }
   return out;
 }
@@ -109,7 +167,7 @@ export function previewOf(body: string, type: string | undefined): string | unde
   try {
     text = JSON.stringify(redactJson(JSON.parse(body)));
   } catch {
-    text = body;
+    text = redactJsonText(body);
   }
   text = redactMessage(text);
   return text.length > MAX_PREVIEW ? `${text.slice(0, MAX_PREVIEW)}…` : text;

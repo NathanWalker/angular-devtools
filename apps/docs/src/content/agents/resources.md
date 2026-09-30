@@ -58,7 +58,7 @@ The injector hierarchy the page last reported, with the providers at each level.
 
 ### ngrx-store
 
-Each `@ngrx/signals` store on the page: state, computed values, methods, and the component fields that reference it. It also holds the `@ngrx/store` state and the change log, with a state diff per entry. The log records method calls, `patchState` writes and dispatched actions.
+Each `@ngrx/signals` store on the page: state, computed values, methods, and the component fields that reference it. It also holds the `@ngrx/store` state and the change log, with a state diff per entry. The log records method calls, `patchState` writes, dispatched actions and restores. `classic.paused` is `true` while a restore holds `@ngrx/store` on a past state.
 
 ### forms
 

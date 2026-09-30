@@ -77,7 +77,7 @@ Checks grouped by rule, each with a fix:
 - API method suffixes, duplicate API routes, and routes outside the API prefix.
 - Prerender entries that match nothing.
 - Frontmatter errors, duplicate slugs, and content that shadows a page.
-- From the live page: `load()` fetched twice, hydration errors, API routes not found, and added pages that need a restart.
+- From the live page: `load()` fetched twice, hydration errors, API routes not found, and added pages that need a restart. To catch hydration errors from the first load, add `provideNgDevtoolsHttp()` (see [Set up Analog](../guides/analog.md#catch-hydration-errors-from-the-first-load)).
 
 ## Where the data comes from
 
@@ -92,6 +92,11 @@ Checks grouped by rule, each with a fix:
     The overlay reports the open page, the <code>load()</code> data it received, and its hydration state.
   </ngmd-card>
 </ngmd-card-grid>
+
+### Supported layouts
+
+- **Single app**: `package.json`, `vite.config.ts` and `src/app/pages` in one folder. The build output is read from `dist/analog/public`.
+- **Nx workspace**: the app lives in `apps/<name>` and `package.json` sits at the workspace root. The scan uses the Vite root, or the first folder under `apps/` whose `vite.config` calls `analog()` when the tools run from the workspace root. The **Routes** tab, `get-routes` and the **SSR** and **Analog** fields on the **Dashboard** read the same app, so they match this tab. `package.json` is looked up from the app folder upward, and the build output is read from `dist/apps/<name>/analog/public`.
 
 ### Render mode rules
 
@@ -168,7 +173,7 @@ It sends a real request to your dev server. Methods other than GET, HEAD and OPT
 
 ### Redaction
 
-Response previews and `load()` data redact secret-looking keys, tokens, `Bearer` values and secret query parameters. See [what the devtools redact](../security.md).
+Response previews and `load()` data redact secret-looking keys, tokens, `Bearer` values and secret query parameters. Bodies over 16 KB are cut before the preview, and secret keys in the cut JSON are still redacted. Objects nested too deep to read are shown as `[Truncated]`. See [what the devtools redact](../security.md).
 
 ### Call history size
 

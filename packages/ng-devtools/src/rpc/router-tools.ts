@@ -19,6 +19,7 @@ export interface RouterReport {
   navigations: NavigationRecord[];
   generation?: number;
   config?: RouteNode[];
+  configTruncated?: number;
   activeIds?: string[];
   setup?: RouterSetup;
   outlets?: OutletInfo[];
@@ -306,6 +307,7 @@ export function isRouterReport(
       report.config,
       (v) => Array.isArray(v) && v.length <= MAX_CHILDREN && v.every((node) => isNode(node, nodes)),
     ) &&
+    optional(report.configTruncated, isNumber) &&
     optional(report.activeIds, (v) => isNames(v, MAX_ROUTES)) &&
     optional(report.setup, (v) => isRecord(v) && isPlain(v, { n: 500 })) &&
     optional(report.outlets, (v) => Array.isArray(v) && isPlain(v, { n: 3_000 })) &&
@@ -577,7 +579,7 @@ export function plainReason(nav: NavigationRecord, setup?: RouterSetup): string 
     case 'Aborted':
       return 'The navigation was aborted (abort() on the current navigation or the Navigation API).';
     case 'Redirect':
-      return `A ${nav.redirectKind ?? 'guard or resolver'} redirected${nav.redirectTo ? ` to ${code(nav.redirectTo)}` : ''}.`;
+      return `${nav.redirectKind === 'error handler' ? 'The navigation error handler' : `A ${nav.redirectKind ?? 'guard or resolver'}`} redirected${nav.redirectTo ? ` to ${code(nav.redirectTo)}` : ''}.`;
     default:
       return undefined;
   }
