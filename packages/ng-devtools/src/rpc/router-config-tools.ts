@@ -7,12 +7,15 @@ import {
   describeNavigation,
   freshness,
   list,
+  loopsOf,
+  loopsText,
   noPage,
   otherPages,
   pickPage,
   type RouterPage,
   type RouterState,
 } from './router-tools.ts';
+import { hopText, loopChain, loopTitle, redirectCycles } from './router-loops.ts';
 
 export interface SourceRoute {
   path: string;
@@ -292,34 +295,6 @@ export function listRoutesText(
   );
 }
 
-function redirectCycles(config: RouteNode[]): string[][] {
-  const edges = new Map<string, string>();
-  walk(config, (node, parents) => {
-    if (typeof node.redirectTo !== 'string' || node.redirectTo.startsWith('function ')) return;
-    if (/:/.test(node.path) || node.path === '**') return;
-    const base = parents.length ? parents[parents.length - 1].fullPath : '';
-    const target = node.redirectTo.startsWith('/')
-      ? node.redirectTo
-      : `${base.replace(/\/$/, '')}/${node.redirectTo}`;
-    edges.set(node.fullPath.replace(/\/$/, '') || '/', target.replace(/\/$/, '') || '/');
-  });
-  const cycles: string[][] = [];
-  for (const start of edges.keys()) {
-    const seen = [start];
-    let cursor = edges.get(start);
-    while (cursor && seen.length < 20) {
-      if (cursor === start) {
-        if (seen.every((node) => node >= start)) cycles.push([...seen, start]);
-        break;
-      }
-      if (seen.includes(cursor)) break;
-      seen.push(cursor);
-      cursor = edges.get(cursor);
-    }
-  }
-  return cycles;
-}
-
 /**
  * Checks the live route config (and what the page reported about links,
  * setup and navigations) for mistakes Angular throws on, warns about, or
@@ -491,6 +466,22 @@ export function lintRoutes(page: RouterPage): LintFinding[] {
       message: `Redirect cycle: ${cycle.map(code).join(' → ')}.`,
       fix: 'Break the cycle; one of these redirects must point elsewhere.',
       angular: 'throws',
+    });
+  }
+  for (const loop of loopsOf(page)) {
+    if (loop.kind === 'config' && findings.some((f) => f.rule === 'redirect-cycle')) continue;
+    const hops = loop.hops.map(hopText).join('; ');
+    const guards = loop.guards.length ? ` Guards involved: ${list(loop.guards)}.` : '';
+    findings.push({
+      rule: 'redirect-loop',
+      severity: loop.end.startsWith('settled') && loop.bounces < 2 ? 'warning' : 'error',
+      route: loop.cycle[0],
+      message: `Navigations ${loop.ids.map((id) => `#${id}`).join(', ')} formed a ${loopTitle(loop)}: ${loopChain(loop)} (${loop.end}). ${hops}.${guards}`,
+      fix:
+        loop.kind === 'config'
+          ? 'Point one of these redirectTo entries elsewhere.'
+          : 'Make the guards agree on who may see each URL, e.g. a guard on the login page must not send users back to a route whose guard sends them to login; redirect to a page no guard in the chain protects.',
+      angular: loop.kind === 'config' ? 'throws' : 'silent',
     });
   }
   for (const link of page.links ?? []) {
@@ -667,6 +658,8 @@ export function exportNavigationText(
   );
   lines.push('', '### Navigation chain');
   for (const item of chain) lines.push(describeNavigation(item, page));
+  const loops = loopsOf(page).filter((loop) => loop.ids.some((id) => chainIds.has(id)));
+  if (loops.length) lines.push('', '### Redirect loop', loopsText(loops).trim());
   if (page.config) {
     const relevant: RouteNode[] = [];
     const target = segmentsOf(nav.finalUrl ?? nav.url)[0] ?? '';

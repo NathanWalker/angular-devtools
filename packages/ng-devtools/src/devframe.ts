@@ -1109,7 +1109,7 @@ const ngDevtools = defineDevframe({
     ctx.agent.registerTool({
       id: 'ng-devtools:explain-navigation',
       description:
-        'Recent navigations on the running page, newest first, each as a full story: from and to, who started it (link, code, back/forward), extras, redirect chain and loops, per-phase timing, guards and resolvers (with each verdict when instrumentation is on), lazy loads, reused components, HTTP requests, scroll, title, and the cancel or error reason with a plain-language meaning and the NG0 error explained. Use it for "why did this navigation not work", "why was I redirected" or, with perf, "why is navigation slow".',
+        'Recent navigations on the running page, newest first, each as a full story: from and to, who started it (link, code, back/forward), extras, redirect chain, redirect loops (the cycle of URLs and the guard, redirectTo or navigate call behind each hop), per-phase timing, guards and resolvers (with each verdict when instrumentation is on), lazy loads, reused components, HTTP requests, scroll, title, and the cancel or error reason with a plain-language meaning and the NG0 error explained. Use it for "why did this navigation not work", "why was I redirected" or, with perf, "why is navigation slow".',
       safety: 'read',
       inputSchema: {
         type: 'object',
@@ -1186,7 +1186,7 @@ const ngDevtools = defineDevframe({
     ctx.agent.registerTool({
       id: 'ng-devtools:lint-routes',
       description:
-        "Checks the live route config for mistakes: routes after '**', a :param route shadowing a literal one, duplicate paths, empty-path redirects without pathMatch 'full', redirect cycles, deprecated class guards and canLoad, lazy chunks downloaded before canActivate rejects, missing or duplicate titles, param/input name typos, RouterLinkActive without aria-current, emails in URLs and return URLs taken from query params. Each finding says whether Angular throws, warns or stays silent, and how to fix it.",
+        "Checks the live route config for mistakes: routes after '**', a :param route shadowing a literal one, duplicate paths, empty-path redirects without pathMatch 'full', redirect cycles, redirect loops seen at runtime (a chain of guard or redirectTo redirects, or code-started navigations, that comes back to a URL, with the guards involved), deprecated class guards and canLoad, lazy chunks downloaded before canActivate rejects, missing or duplicate titles, param/input name typos, RouterLinkActive without aria-current, emails in URLs and return URLs taken from query params. Each finding says whether Angular throws, warns or stays silent, and how to fix it.",
       safety: 'read',
       inputSchema: { type: 'object', properties: { page: pageProperty } },
       handler: async (args: { page?: string }) => {
@@ -1212,7 +1212,7 @@ const ngDevtools = defineDevframe({
     ctx.agent.registerTool({
       id: 'ng-devtools:export-navigation',
       description:
-        'A markdown repro for one navigation (default: the latest that did not succeed): Angular version, router options and features, how it started, the full redirect chain with every detail from explain-navigation, and the relevant slice of the route config. Secret-looking values stay redacted.',
+        'A markdown repro for one navigation (default: the latest that did not succeed): Angular version, router options and features, how it started, the full redirect chain with every detail from explain-navigation, any redirect loop it is part of, and the relevant slice of the route config. Secret-looking values stay redacted.',
       safety: 'read',
       inputSchema: {
         type: 'object',

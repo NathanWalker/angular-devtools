@@ -60,6 +60,24 @@ export interface NavigationRecord {
   probe?: boolean;
 }
 
+export interface LoopHop {
+  id: number;
+  from: string;
+  to: string;
+  via: string;
+  by?: string;
+}
+
+export interface NavigationLoop {
+  kind: 'redirect' | 'burst' | 'config';
+  ids: number[];
+  cycle: string[];
+  hops: LoopHop[];
+  guards: string[];
+  bounces: number;
+  end: string;
+}
+
 export interface RouteNode {
   id: string;
   path: string;
@@ -163,6 +181,7 @@ export interface RouterPage {
   links?: LinkInfo[];
   preloads?: { path: string; startedAt: number; ms?: number; failed?: boolean }[];
   instrumented?: boolean;
+  loops?: NavigationLoop[];
 }
 
 export interface LintFinding {

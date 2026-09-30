@@ -33,7 +33,21 @@ Every navigation as one story:
 - Guards and resolvers, lazy loads, reused components, HTTP requests, scroll, and the title afterwards.
 - Router warnings, and the cancel or error reason. The tab explains NG04xxx errors.
 
-Filter by URL, or check **Only problems**. Each row has **Replay** and **Copy repro** (a markdown repro). **Export JSON** saves the list.
+Filter by URL, or check **Only problems** to keep the navigations that did not succeed and the ones in a loop. Each row has **Replay** and **Copy repro** (a markdown repro). **Export JSON** saves the list.
+
+### Loop detection
+
+The **Navigations** view looks for loops in the recorded navigations. A loop is a chain that comes back to a URL it already visited:
+
+| Loop                          | What the view detects                                                                                                                                                                                    |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **redirect loop**             | A chain of redirects returns to an earlier URL. The chain follows `canMatch`, guard, resolver and error handler redirects from one navigation to the next, plus the `redirectTo` inside each navigation. |
+| **navigation loop**           | Your code calls `navigate` or `navigateByUrl` within 500 ms of the previous navigation ending, and the chain returns to an earlier URL.                                                                  |
+| **redirect loop** (`NG04016`) | Angular stops a navigation with `NG04016` because `redirectTo` entries of the config form a cycle.                                                                                                       |
+
+When the view finds a loop, a **Loop detected** section appears above the list. It shows the cycle of URLs, such as `/account → /login → /account`. Under it, each hop names its cause: the guard, the `redirectTo` entry or the `navigate` call. A last line lists the navigation ids, how many times the chain came back, how it ended and the guards involved.
+
+Each navigation in a loop gets a **loop** badge and a red edge. Its details gain a **Loop** row with the cycle and the hop this navigation caused.
 
 ### Routes
 
@@ -55,6 +69,7 @@ Route config mistakes, each with a fix:
 - Unreachable routes after `**`, and duplicate paths.
 - A `:param` that shadows a literal path.
 - Empty-path redirects without `pathMatch: 'full'`, and redirect cycles.
+- Redirect loops seen at runtime (rule `redirect-loop`), with the hops and the guards involved.
 - Deprecated class guards and `canLoad`.
 - Lazy chunks downloaded before a rejecting `canActivate`.
 - Missing or duplicate titles, and param or input typos.
@@ -102,7 +117,7 @@ Without that recording, the guards listed for a navigation are candidates: the `
 
 <ngmd-workflow>
   <ngmd-step title="Open Navigations">
-    Check <strong>Only problems</strong> to hide the navigations that succeeded.
+    Check <strong>Only problems</strong> to hide the navigations that succeeded outside a loop.
   </ngmd-step>
   <ngmd-step title="Read the story">
     The phase bar shows where it stopped. The guard rows show which guard returned <code>false</code> or a <code>UrlTree</code>.
@@ -145,18 +160,18 @@ Without that recording, the guards listed for a navigation are candidates: the `
 
 ## Agent tools
 
-| Tool or resource                  | What it does                                                                                                                                 |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ng-devtools:explain-navigation`  | Why a navigation failed or redirected. Pass `url` or `id` to narrow it, `limit` for more than the last 5, or `perf` for the slowest ones.    |
-| `ng-devtools:inspect-route`       | The route the page is on. Pass `selector` (a component class, tag or link text) for the route a component was rendered for, or a link state. |
-| `ng-devtools:list-routes`         | The live config with source files and example URLs. `match` predicts a URL, `audit` lists the guards of each page.                           |
-| `ng-devtools:lint-routes`         | The lint findings.                                                                                                                           |
-| `ng-devtools:router-config`       | The setup, including whether guard recording is on.                                                                                          |
-| `ng-devtools:export-navigation`   | A markdown repro. Defaults to the latest navigation that did not succeed.                                                                    |
-| `ng-devtools:explain-render-mode` | Which render mode a URL gets, from `*.routes.server.ts`.                                                                                     |
-| `ng-devtools:get-routes`          | Routes from your source files.                                                                                                               |
-| `ng-devtools:navigate`            | Acts on the router: `navigate`, `abort`, `replay`, `probe`, `instrument` and `resolve-lazy`.                                                 |
-| `ng-devtools:router` (resource)   | The active route tree and recent navigations of each page.                                                                                   |
+| Tool or resource                  | What it does                                                                                                                                                                       |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ng-devtools:explain-navigation`  | Why a navigation failed or redirected, with any loop and the cause of each hop. Pass `url` or `id` to narrow it, `limit` for more than the last 5, or `perf` for the slowest ones. |
+| `ng-devtools:inspect-route`       | The route the page is on. Pass `selector` (a component class, tag or link text) for the route a component was rendered for, or a link state.                                       |
+| `ng-devtools:list-routes`         | The live config with source files and example URLs. `match` predicts a URL, `audit` lists the guards of each page.                                                                 |
+| `ng-devtools:lint-routes`         | The lint findings, including redirect loops seen at runtime.                                                                                                                       |
+| `ng-devtools:router-config`       | The setup, including whether guard recording is on.                                                                                                                                |
+| `ng-devtools:export-navigation`   | A markdown repro, with any loop the navigation is part of. Defaults to the latest navigation that did not succeed.                                                                 |
+| `ng-devtools:explain-render-mode` | Which render mode a URL gets, from `*.routes.server.ts`.                                                                                                                           |
+| `ng-devtools:get-routes`          | Routes from your source files.                                                                                                                                                     |
+| `ng-devtools:navigate`            | Acts on the router: `navigate`, `abort`, `replay`, `probe`, `instrument` and `resolve-lazy`.                                                                                       |
+| `ng-devtools:router` (resource)   | The active route tree and recent navigations of each page.                                                                                                                         |
 
 `navigate` only accepts same-origin relative URLs that start with `/`. `resolve-lazy` needs a `routeId`. See [Tools](/agents/tools).
 

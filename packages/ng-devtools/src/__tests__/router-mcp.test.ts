@@ -265,6 +265,50 @@ describe('router MCP tools', () => {
     expect(text).toContain('`link-aria-current`');
   });
 
+  it('explains a redirect loop in explain-navigation, export-navigation and lint-routes', async () => {
+    const { push, call } = await boot();
+    const hop = (id: number, url: string, to: string, guard: string, from?: number) => ({
+      id,
+      url,
+      trigger: 'imperative',
+      startedAt: 2000 + id,
+      endedAt: 2000 + id,
+      outcome: 'redirected',
+      code: 'Redirect',
+      redirectTo: to,
+      redirectKind: 'guard',
+      ...(from === undefined ? {} : { redirectedFrom: from }),
+      guards: { names: [guard], passed: false },
+      runs: [{ guard, kind: 'canActivate', route: url, result: `UrlTree ${to}`, ms: 1 }],
+    });
+    await push(
+      'push-router',
+      report({
+        navigations: [
+          hop(10, '/account', '/login', 'authGuard'),
+          hop(11, '/login', '/account', 'guestGuard', 10),
+          hop(12, '/account', '/login', 'authGuard', 11),
+          { ...hop(13, '/login', '/account', 'guestGuard', 12), outcome: 'pending' },
+        ],
+      }),
+    );
+    const explain = await call('explain-navigation');
+    expect(explain).toContain('**Loops**');
+    expect(explain).toContain('**redirect loop** `/account` → `/login` → `/account`');
+    expect(explain).toContain(
+      '`/account` → `/login`: guard redirect `authGuard (canActivate on /account)` in #10',
+    );
+    expect(explain).toContain('guards involved: `authGuard`, `guestGuard`');
+    const exported = await call('export-navigation', { id: 12 });
+    expect(exported).toContain('### Redirect loop');
+    expect(exported).toContain(
+      '`/login` → `/account`: guard redirect `guestGuard (canActivate on /login)` in #11',
+    );
+    const lint = await call('lint-routes');
+    expect(lint).toContain('**error** `redirect-loop` `/account`');
+    expect(lint).toContain('Guards involved: `authGuard`, `guestGuard`');
+  });
+
   it('router-config describes the setup', async () => {
     const { push, call } = await boot();
     await push('push-router', report());

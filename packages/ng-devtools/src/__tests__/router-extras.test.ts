@@ -6,9 +6,7 @@ import {
   describeNavigation,
   explainNavigationText,
   isRouterReport,
-  loopIn,
   plainReason,
-  redirectChain,
   type RouterPage,
 } from '../rpc/router-tools.ts';
 import { parseServerRoutes } from '../rpc/server-routes.ts';
@@ -192,9 +190,7 @@ describe('explanations', () => {
       nav(3, { url: '/a', outcome: 'redirected', redirectedFrom: 2 }),
     ];
     const p = page({ navigations });
-    expect(redirectChain(p, navigations[2]).map((n) => n.id)).toEqual([1, 2, 3]);
-    expect(loopIn(redirectChain(p, navigations[2]))).toBe('/a');
-    expect(describeNavigation(navigations[2], p)).toContain('**redirect loop**');
+    expect(describeNavigation(navigations[2], p)).toContain('**redirect loop** `/a` → `/b` → `/a`');
   });
 
   it('summarizes slow navigations', () => {

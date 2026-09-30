@@ -4,6 +4,14 @@ import type { RouterSetup } from '../router-setup.ts';
 import type { LinkInfo, OutletInfo } from '../router-links.ts';
 import type { PreloadRecord } from '../router-actions.ts';
 import { code, UNTRUSTED } from './forms-tools.ts';
+import {
+  describeLoop,
+  detectLoops,
+  hopText,
+  loopChain,
+  loopTitle,
+  type NavigationLoop,
+} from './router-loops.ts';
 
 export interface RouterReport {
   pageId: string;
@@ -22,6 +30,7 @@ export interface RouterReport {
 export interface RouterPage extends RouterReport {
   reportedAt: number;
   changedAt: number;
+  loops?: NavigationLoop[];
 }
 
 export interface RouterState {
@@ -351,6 +360,7 @@ export function mergeRouterReport(pages: Pages, report: RouterReport, now = Date
   if (!report.config && previous?.config && previous.generation === report.generation) {
     next.config = previous.config;
   }
+  next.loops = detectLoops(next.navigations, next.config);
   pages.set(report.pageId, next);
   expireRouterPages(pages, now);
   if (pages.size > MAX_PAGES) {
@@ -570,26 +580,14 @@ export function plainReason(nav: NavigationRecord, setup?: RouterSetup): string 
   }
 }
 
-export function redirectChain(page: RouterPage, nav: NavigationRecord): NavigationRecord[] {
-  const chain: NavigationRecord[] = [nav];
-  let cursor: NavigationRecord | undefined = nav;
-  while (cursor?.redirectedFrom !== undefined && chain.length < 20) {
-    const from = page.navigations.find((n) => n.id === cursor!.redirectedFrom);
-    if (!from) break;
-    chain.unshift(from);
-    cursor = from;
-  }
-  return chain;
+export function loopsOf(page: RouterPage): NavigationLoop[] {
+  return page.loops ?? detectLoops(page.navigations, page.config);
 }
 
-export function loopIn(chain: NavigationRecord[]): string | undefined {
-  const seen = new Map<string, number>();
-  for (const nav of chain) {
-    const count = (seen.get(nav.url) ?? 0) + 1;
-    seen.set(nav.url, count);
-    if (count >= 2) return nav.url;
-  }
-  return undefined;
+export function loopsText(loops: NavigationLoop[]): string {
+  return loops.length
+    ? `**Loops** (a URL visited twice in one chain of redirects or code-started navigations)\n${loops.map(describeLoop).join('\n')}\n\n`
+    : '';
 }
 
 export function describeNavigation(nav: NavigationRecord, page?: RouterPage): string {
@@ -618,10 +616,12 @@ export function describeNavigation(nav: NavigationRecord, page?: RouterPage): st
   if (nav.redirectTo) {
     lines.push(`  - ${nav.redirectKind ?? 'router'} redirect to ${code(nav.redirectTo)}`);
   }
-  if (page && nav.redirectedFrom !== undefined) {
-    const loop = loopIn(redirectChain(page, nav));
-    if (loop)
-      lines.push(`  - **redirect loop**: ${code(loop)} appears more than once in the chain`);
+  const loop = page && loopsOf(page).find((l) => l.ids.includes(nav.id));
+  if (loop) {
+    const hops = loop.hops.filter((hop) => hop.id === nav.id).map(hopText);
+    lines.push(
+      `  - **${loopTitle(loop)}** ${loopChain(loop)}${hops.length ? `; here: ${hops.join('; ')}` : ''}`,
+    );
   }
   if (nav.guards && (nav.guards.names.length || nav.guards.passed === false)) {
     const names = nav.guards.names.length ? list(nav.guards.names) : 'none on the route';
@@ -742,9 +742,10 @@ export function explainNavigationText(
       : `No navigations recorded since DevTools connected on page ${code(page.pageId)}; earlier ones are not visible.${otherPages(state, page)}${freshness(page, now)}`;
   }
   const recent = matching.slice(-limit).reverse();
+  const loops = loopsOf(page).filter((loop) => recent.some((nav) => loop.ids.includes(nav.id)));
   const header = `Most recent ${recent.length} of ${matching.length} navigation(s), newest first. Guards lists the candidates: canDeactivate guards of the page being left (marked "leaving") and canActivate/canActivateChild guards of the target; without per-guard instrumentation the router reports one result for all of them. Turn instrumentation on (navigate tool, action "instrument") to see each guard's verdict.${page.instrumented ? ' Instrumentation is on.' : ''}`;
   return capped(
-    `${UNTRUSTED}\n\n${header}\n\n${recent.map((nav) => describeNavigation(nav, page)).join('\n')}${otherPages(state, page)}${freshness(page, now)}`,
+    `${UNTRUSTED}\n\n${header}\n\n${loopsText(loops)}${recent.map((nav) => describeNavigation(nav, page)).join('\n')}${otherPages(state, page)}${freshness(page, now)}`,
   );
 }
 
