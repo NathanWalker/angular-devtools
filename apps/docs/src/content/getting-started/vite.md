@@ -86,7 +86,7 @@ It records Analog page renders, `load()` fetches, server functions and API calls
 
 The plugin only answers requests from a loopback address (any `127.x.x.x` address or `::1`). Other requests to the devtools get `403` with the message "ng-devtools only answers requests from this machine." WebSocket upgrades follow the same rules.
 
-The Vite plugin turns the one-time code off. The loopback and origin checks take its place. [Access and redaction](/security) covers both checks.
+By default the plugin leaves the one-time code off, and the loopback and origin checks take its place. If `server.allowedHosts` or `allowedOrigins` allows a host that is not a loopback host, the plugin also asks for the code. See [`auth`](#auth). [Access and redaction](/security) covers every check.
 
 ## Options
 
@@ -99,11 +99,12 @@ ngDevtools({
 });
 ```
 
-| Option           | Default                          | What it does                                                             |
-| ---------------- | -------------------------------- | ------------------------------------------------------------------------ |
-| `base`           | `'/__devframes/'`                | Where the hub is mounted.                                                |
-| `apiPrefix`      | Analog's `apiPrefix`, or `'api'` | The prefix of your server routes, used to classify API calls.            |
-| `allowedOrigins` | none                             | Extra exact origins allowed to reach the devtools, for example a tunnel. |
+| Option           | Default                                                       | What it does                                                             |
+| ---------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `base`           | `'/__devframes/'`                                             | Where the hub is mounted.                                                |
+| `apiPrefix`      | Analog's `apiPrefix`, or `'api'`                              | The prefix of your server routes, used to classify API calls.            |
+| `allowedOrigins` | none                                                          | Extra exact origins allowed to reach the devtools, for example a tunnel. |
+| `auth`           | on if a non-loopback host or origin is allowed, otherwise off | Whether the devtools ask for the one-time code.                          |
 
 ### `base`
 
@@ -116,6 +117,23 @@ The plugin reads `apiPrefix` from your Analog config. Set it here only when the 
 ### `allowedOrigins`
 
 Each entry is an exact origin, such as `https://tunnel.example`. The request itself must still come from a loopback address.
+
+### `auth`
+
+A tunnel forwards other people's requests to your machine, and those requests arrive from a loopback address. So the plugin turns the one-time code on when Vite's `server.allowedHosts` or `allowedOrigins` allows anything other than `localhost` or a loopback address (`allowedHosts: true` counts too). The server prints the code in the terminal, and a browser reads data only after it exchanges that code.
+
+| Value   | Effect                                                              |
+| ------- | ------------------------------------------------------------------- |
+| not set | The code is on only if a non-loopback host or origin is allowed.    |
+| `true`  | The code is always on.                                              |
+| `false` | The code is always off. The loopback and origin checks still apply. |
+
+If your tunnel rewrites the `Host` header to `localhost`, you don't list it in `server.allowedHosts`, so the plugin leaves the code off. Pass `auth: true`:
+
+```ts
+// vite.config.ts
+ngDevtools({auth: true});
+```
 
 ## Hostnames other than localhost
 
@@ -143,6 +161,8 @@ Add other origins with `allowedOrigins`:
 // vite.config.ts
 ngDevtools({allowedOrigins: ['https://tunnel.example']});
 ```
+
+A non-loopback entry in `server.allowedHosts` or `allowedOrigins` turns the one-time code on. See [`auth`](#auth).
 
 ## Angular CLI apps
 

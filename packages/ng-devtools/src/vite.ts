@@ -13,6 +13,7 @@ export interface NgDevtoolsViteOptions {
   base?: string;
   apiPrefix?: string;
   allowedOrigins?: string[];
+  auth?: boolean;
 }
 
 export interface HubOriginPolicy {
@@ -49,6 +50,30 @@ export function isAllowedHubOrigin(
   } catch {
     return false;
   }
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') && isLoopbackHostname(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function allowsRemoteOrigins(policy: HubOriginPolicy = {}): boolean {
+  if (policy.allowedHosts === true) return true;
+  const hosts = policy.allowedHosts ?? [];
+  if (hosts.some((entry) => !isLoopbackHostname(entry.replace(/^\./, '').toLowerCase()))) {
+    return true;
+  }
+  return (policy.allowedOrigins ?? []).some((origin) => !isLoopbackOrigin(origin));
+}
+
+export function hubAuthFor(policy: HubOriginPolicy, auth?: boolean): boolean {
+  return auth ?? allowsRemoteOrigins(policy);
 }
 
 export function hubOriginRegistryFor(policy: HubOriginPolicy = {}): WsOriginRegistry {
@@ -135,7 +160,7 @@ export default function ngDevtoolsVite(options: NgDevtoolsViteOptions = {}): Plu
         ...(server.httpServer instanceof HttpServer
           ? { server: server.httpServer }
           : { ws: { sidecar: true } }),
-        auth: false,
+        auth: hubAuthFor(policy, options.auth),
         allowedOrigins: hubOriginRegistryFor(policy),
       });
       if (shared) guardNewUpgrades(shared, upgradesBefore, base, policy);
