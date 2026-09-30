@@ -4,3 +4,4 @@ dist
 pnpm-lock.yaml
 extension/ui
 docs/privacy-policy.html
+.all-contributorsrc

@@ -57,3 +57,21 @@ You are an expert in TypeScript, Angular, and scalable web application developme
 - Use the `providedIn: 'root'` option for singleton services
 - Prefer the `@Service` decorator over `@Injectable({providedIn: 'root'})` for new singleton services (Angular v22+)
 - Use the `inject()` function instead of constructor injection
+
+## Project guidelines, skills and roles
+
+Follow the repository guides in `docs/contributing/`:
+
+- `commit-message-guidelines.md`: `type(scope): summary` commits and pull request titles (types and this repo's scopes).
+- `coding-standards.md`: TypeScript and Angular rules, and how collectors read the inspected page (debug APIs, stable `WeakMap` ids, no DOM writes, `pageId` with expiry, cheap pushes).
+- `ui-guidelines.md`: theme tokens, brand palette, page anatomy and accessibility for the panel.
+
+Use the matching skill for the task:
+
+- `.claude/skills/devtools-ui` for panel UI work.
+- `.claude/skills/devtools-inspector` for data collection, the server side and agent tools.
+- `.claude/skills/devtools-docs` for the docs site (`apps/docs`) and `README.md`.
+- `.claude/skills/devtools-verify` before calling a change done.
+- `.claude/skills/devtools-commit` for commits and pull requests.
+
+Roles for delegating work live in `.claude/agents/`: `ui-engineer`, `inspector-engineer`, `a11y-reviewer` and `devtools-reviewer`.

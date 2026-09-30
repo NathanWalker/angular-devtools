@@ -7,6 +7,9 @@
   },
   "scripts": {
     "ng": "ng",
+    "prepare": "(git config core.hooksPath >/dev/null || git config core.hooksPath .githooks) && (git config commit.template >/dev/null || git config commit.template .gitmessage) || true",
+    "commit:check": "node scripts/commit-message.mjs --branch",
+    "skills:check": "node scripts/validate-skills.mjs",
     "start": "pnpm devtools:build-pkg && nx serve",
     "build": "nx build",
     "watch": "nx build --watch --configuration development",

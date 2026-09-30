@@ -32,6 +32,15 @@ pnpm install
 
 `pnpm-workspace.yaml` lists `packages/*`, `examples/*` and `apps/*`, so one install covers every project.
 
+### Git hooks
+
+`pnpm install` sets `core.hooksPath` to `.githooks` and `commit.template` to `.gitmessage`. If you already set either one yourself, it keeps your value.
+
+| Hook         | What it does                                                                                                                                                                                                               |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pre-commit` | Formats the staged files with Prettier and stages the result. It skips a file that also has unstaged changes, so hunks you left out with `git add -p` stay out of the commit.                                              |
+| `commit-msg` | Checks the message against the [commit message guidelines](https://github.com/santoshyadavdev/angular-devtools/blob/main/docs/contributing/commit-message-guidelines.md). It prints a warning and never blocks the commit. |
+
 ## Project structure
 
 ```text
@@ -126,7 +135,11 @@ pnpm typecheck                      # Host app + specs, devtools UI, devtools pa
 pnpm exec nx affected -t test build # Test and build affected projects
 pnpm test:devtools                  # Devtools package tests (Vitest)
 pnpm extension:build                # Chrome extension
+pnpm skills:check                   # Agent skills and roles in .claude/
+pnpm commit:check                   # Commit messages on your branch
 ```
+
+`pnpm skills:check` validates the frontmatter of every skill and role and checks that the files and links they mention exist. `pnpm commit:check` checks every commit on your branch that is not on `main` (it compares with `upstream/main`, then `origin/main`, then `main`).
 
 ### What CI runs
 
@@ -136,8 +149,8 @@ pnpm extension:build                # Chrome extension
   <ngmd-step title="Install">
     <code>pnpm install --frozen-lockfile</code> on the Node version from <code>.nvmrc</code>.
   </ngmd-step>
-  <ngmd-step title="Check formatting and types">
-    <code>pnpm format:check</code>, then <code>pnpm typecheck</code>.
+  <ngmd-step title="Check formatting, skills and types">
+    <code>pnpm format:check</code>, <code>pnpm skills:check</code>, then <code>pnpm typecheck</code>.
   </ngmd-step>
   <ngmd-step title="Test and build affected projects">
     <code>nx affected -t test build</code>, compared against the last green commit on <code>main</code>.
@@ -152,6 +165,17 @@ pnpm extension:build                # Chrome extension
     <code>node bin.mjs --help</code>.
   </ngmd-step>
 </ngmd-workflow>
+
+### Pull request checks
+
+Two more workflows run on pull requests. Both only warn. They never fail the pull request.
+
+| Workflow         | File                                   | What it checks                                                                                                                                                     |
+| ---------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Commit message` | `.github/workflows/commit-message.yml` | The pull request title and every commit message. The title becomes the commit on `main` when the pull request is squash merged.                                    |
+| `Docs check`     | `.github/workflows/docs-check.yml`     | That a change to `packages/ng-devtools/src/`, `app/src/` or the top-level files in `extension/` also changes a page in `apps/docs/src/content`. Tests don't count. |
+
+If a code change needs no docs change, add the `no-docs` label to the pull request and say why in the description. The `Docs check` workflow then skips the warning.
 
 ## Make changes
 

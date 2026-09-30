@@ -42,6 +42,31 @@ Thanks to the current sponsors:
 <a href="https://github.com/Sonichigo"><img src="https://github.com/Sonichigo.png?size=60" width="60" height="60" alt="Sonichigo" /></a>
 <!-- /sponsors -->
 
+## Contributors
+
+Thanks to everyone who has contributed:
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://santoshyadav.dev"><img src="https://avatars.githubusercontent.com/u/11923975?v=4?s=100" width="100px;" alt="Santosh Yadav"/><br /><sub><b>Santosh Yadav</b></sub></a><br /><a href="https://github.com/santoshyadavdev/angular-devtools/commits?author=santoshyadavdev" title="Code">💻</a> <a href="#maintenance-santoshyadavdev" title="Maintenance">🚧</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://erkamyaman.dev"><img src="https://avatars.githubusercontent.com/u/88717125?v=4?s=100" width="100px;" alt="erKam"/><br /><sub><b>erKam</b></sub></a><br /><a href="https://github.com/santoshyadavdev/angular-devtools/commits?author=erkamyaman" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://www.abikb.xyz/"><img src="https://avatars.githubusercontent.com/u/131433061?v=4?s=100" width="100px;" alt="Abiram"/><br /><sub><b>Abiram</b></sub></a><br /><a href="https://github.com/santoshyadavdev/angular-devtools/commits?author=abiramcodes" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://kaap10.github.io/portfolio"><img src="https://avatars.githubusercontent.com/u/112063624?v=4?s=100" width="100px;" alt="Vardhman Gupta"/><br /><sub><b>Vardhman Gupta</b></sub></a><br /><a href="https://github.com/santoshyadavdev/angular-devtools/commits?author=Kaap10" title="Code">💻</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
+
+This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind are welcome.
+
 ## License
 
 MIT
