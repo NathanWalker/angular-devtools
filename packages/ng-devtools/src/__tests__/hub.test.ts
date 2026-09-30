@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { initNgDevtoolsHub, type NgDevtoolsHubOptions } from '../hub.ts';
+import { hubDefaultOrigins, initNgDevtoolsHub, type NgDevtoolsHubOptions } from '../hub.ts';
 import { makeProject } from './analog-fixture.ts';
 
 const hubs: { close: () => Promise<void> }[] = [];
@@ -76,6 +76,64 @@ describe('ng-devtools hub', () => {
     expect(meta.configs.ui.branding.primaryColor).toBe('#f5a524');
     const forms = (await ctx.agent.invoke('ng-devtools:inspect-forms', {})) as { markdown: string };
     expect(forms.markdown).toContain('No forms');
+  });
+});
+
+const EXTENSION = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
+
+async function sseStatus(
+  options: Parameters<typeof initNgDevtoolsHub>[0],
+  origin: string | undefined,
+) {
+  const hub = initNgDevtoolsHub({
+    cwd: makeProject({ 'package.json': '{}' }),
+    ws: false,
+    auth: false,
+    ...options,
+  });
+  hubs.push(hub);
+  await hub.ready;
+  const headers: Record<string, string> = { accept: 'text/event-stream' };
+  if (origin !== undefined) headers['origin'] = origin;
+  const res = await hub.handler(new Request('http://localhost/__devframes/__sse', { headers }));
+  await res.body?.cancel();
+  return res.status;
+}
+
+describe('ng-devtools hub origins', () => {
+  it('accepts loopback pages and the Chrome extension by default, and nothing else', () => {
+    for (const origin of [
+      undefined,
+      'http://localhost:4000',
+      'http://127.0.0.1:4200',
+      'http://[::1]:3000',
+      EXTENSION,
+    ]) {
+      expect(hubDefaultOrigins.isAllowed(origin)).toBe(true);
+    }
+    for (const origin of [
+      'https://evil.example',
+      'http://127.attacker.example',
+      'chrome-extension://',
+      'moz-extension://abcdefghijklmnop',
+      'null',
+    ]) {
+      expect(hubDefaultOrigins.isAllowed(origin)).toBe(false);
+    }
+  });
+
+  it('lets the Chrome extension panel open the SSE stream by default', async () => {
+    expect(await sseStatus({}, EXTENSION)).toBe(200);
+    expect(await sseStatus({}, 'http://localhost:4000')).toBe(200);
+    expect(await sseStatus({}, 'https://evil.example')).toBe(403);
+  });
+
+  it('keeps an explicit allowedOrigins setting as given', async () => {
+    const tunnel = { allowedOrigins: ['https://tunnel.example'] };
+    expect(await sseStatus(tunnel, 'https://tunnel.example')).toBe(200);
+    expect(await sseStatus(tunnel, EXTENSION)).toBe(403);
+    expect(await sseStatus({ allowedOrigins: [EXTENSION] }, EXTENSION)).toBe(200);
+    expect(await sseStatus({ allowedOrigins: false }, 'https://evil.example')).toBe(200);
   });
 });
 

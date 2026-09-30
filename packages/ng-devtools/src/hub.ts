@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path';
 import { createUi } from '@devframes/hub-ui';
 import { DEVFRAMES_HUB_BASE, initHub } from '@devframes/hub/initiate';
 import type { InitHubOptions } from '@devframes/hub/initiate';
+import type { WsOriginRegistry } from 'devframe/rpc/transports/ws-server';
+import { isAllowedOrigin } from 'devframe/utils/origin';
 import ngDevtools from './devframe.ts';
 import pkg from '../package.json' with { type: 'json' };
 
@@ -44,6 +46,22 @@ function hubUi() {
   };
 }
 
+function isExtensionOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'chrome-extension:' && url.hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
+export const hubDefaultOrigins: WsOriginRegistry = {
+  token: '',
+  registerFromUrl: () => undefined,
+  isAllowed: (origin: string | undefined) =>
+    (origin !== undefined && isExtensionOrigin(origin)) || isAllowedOrigin(origin, []),
+};
+
 function mcpToken(): string {
   const fromEnv = process.env[NG_DEVTOOLS_MCP_TOKEN_ENV];
   if (fromEnv) return fromEnv;
@@ -67,6 +85,7 @@ export function initNgDevtoolsHub(options: NgDevtoolsHubOptions = {}) {
     version: pkg.version,
     base: NG_DEVTOOLS_HUB_BASE,
     ...options,
+    allowedOrigins: options.allowedOrigins ?? hubDefaultOrigins,
     mcp: hubMcpFor(options),
     devframes: [ngDevtools],
     ui: hubUi(),

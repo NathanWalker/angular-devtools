@@ -119,6 +119,8 @@ Other hosts are optional host permissions. **Allow access** asks Chrome for the 
 
 Granting the extension a host doesn't change what the devtools server accepts. The server still applies its own checks. The Vite plugin, for example, only answers requests from a loopback address. See [Access and redaction](/security).
 
+The Vite plugin and the Express hub accept the extension's `chrome-extension://` origin by default. If your Express hub passes its own `allowedOrigins` list, add `chrome-extension://<id>` to it. The ID is on the extension card in `chrome://extensions`.
+
 ### Content scripts
 
 The content scripts are wider. Two of them run on every page. They check for an `ng-version` attribute or `window.ng`, and pass the Angular version to the extension. They don't read or change anything else.

@@ -22,7 +22,7 @@ The devtools read your running app and send what they find to a server on your m
     Loopback requests only. A request that sends an <code>Origin</code> must come from a loopback host, a Chrome extension, <code>allowedOrigins</code> or Vite's <code>server.allowedHosts</code>. Asks for a one-time code when a non-loopback host or origin is allowed.
   </ngmd-card>
   <ngmd-card icon="layers" title="Express hub">
-    A one-time code and a loopback origin check. Both on by default.
+    A one-time code and an origin check that accepts loopback origins and the Chrome extension. Both on by default.
   </ngmd-card>
   <ngmd-card icon="terminal" title="Standalone CLI">
     Binds to <code>localhost</code> and asks for a one-time code by default.
@@ -79,10 +79,10 @@ With only loopback hosts allowed, the loopback and origin checks take the place 
 
 `initNgDevtoolsHub()` has two checks, both on by default:
 
-| Check         | Option           | What it does                                                                                                        |
-| ------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------- |
-| One-time code | `auth`           | The server prints a code. A browser can read data only after it exchanges that code.                                |
-| Origin check  | `allowedOrigins` | Only loopback origins, or clients that send no `Origin`, can open the WebSocket. Pass a list to allow more origins. |
+| Check         | Option           | What it does                                                                                                                              |
+| ------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| One-time code | `auth`           | The server prints a code. A browser can read data only after it exchanges that code.                                                      |
+| Origin check  | `allowedOrigins` | Only loopback origins, the Chrome extension, or clients that send no `Origin`, can open the WebSocket. Pass a list to allow more origins. |
 
 ```ts {8}
 // src/server.ts
@@ -97,8 +97,10 @@ const devtools = initNgDevtoolsHub({
 app.use(devtools.nodeMiddleware);
 ```
 
+A list keeps loopback origins but replaces the Chrome extension default. If you use the extension with your own list, add its origin, `chrome-extension://<id>`, with the ID from `chrome://extensions`.
+
 <ngmd-callout type="warning" title="Turning the checks off">
-  Pass <code>auth: false</code> only on a machine only you use. Keep it on when you allow a tunnel origin: the origin check does not tell who is on the other end of the tunnel. <code>allowedOrigins: false</code> turns the origin check off. The demo app in this repository sets it. Keep the check on for your own apps.
+  Pass <code>auth: false</code> only on a machine only you use. Keep it on when you allow a tunnel origin: the origin check does not tell who is on the other end of the tunnel. <code>allowedOrigins: false</code> turns the origin check off. Keep the check on for your own apps.
 </ngmd-callout>
 
 ### Standalone CLI
@@ -117,7 +119,7 @@ The extension has host permissions for loopback hosts only: `localhost` and its 
 
 On any other host, the panel doesn't send a request until you click **Allow access**. Chrome then asks you to grant the extension that one host, on the scheme of the page and any port. The extension never asks for all hosts at once.
 
-Granting the extension a host doesn't change what the devtools server accepts. The server still applies the checks on this page. See [Chrome extension](/getting-started/chrome-extension#host-access).
+Granting the extension a host doesn't change what the devtools server accepts. The server still applies the checks on this page. Both the Vite plugin and the Express hub accept the extension's `chrome-extension://` origin by default. An Express hub with its own `allowedOrigins` list needs the extension origin in that list. See [Chrome extension](/getting-started/chrome-extension#host-access).
 
 ## What is redacted
 
