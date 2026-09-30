@@ -29,7 +29,7 @@ Orient every page around what the reader is trying to do. Ask: _what does the de
 
 - Use second person and the imperative: "Open the Router tab", not "We can open the Router tab".
 - Use present tense: "The tab shows", not "The tab will show".
-- Use active voice: "The overlay reads the page every 3 seconds", not "The page is read every 3 seconds".
+- Use active voice: "On Angular 20 and later, the overlay reads the page after change detection", not "The page is read after change detection".
 - One idea per sentence. Keep sentences short and plain.
 - Put the condition first: "If the tab is empty, check that the app runs in development mode."
 - Use sentence case for headings. Capitalize only the first word and proper nouns.
@@ -113,6 +113,14 @@ A short intro: what the tab is and when you open it.
 
 Add an entry to `nav` in `apps/docs/src/ngmd.config.ts`. Pages that aren't listed still build, but readers can't find them. Use `status: 'new'` or `status: 'updated'` for a sidebar badge instead of saying "new" in the text.
 
+### Link to other pages
+
+Link to another page by the relative path of its `.md` file, in markdown links and in `<a>` tags: `[Configuration](./configuration.md)`, `<a href="../inspectors/router.md#agent-tools">`. The site turns these into routes, and the same links work when the page is read on GitHub.
+
+- The build fails if the file doesn't exist or the anchor doesn't match a heading.
+- `<ngmd-pill href>` and `<ngmd-card link>` take the site route, such as `/agents/tools`. They only render on the site.
+- Pages without a `.md` file, such as `/sponsors`, use the site route.
+
 ## Components
 
 The site uses NgMd's authoring components. Write them as raw HTML inside the markdown. The full reference is the components page of the [NgMd documentation](https://ngmd.netlify.app/concepts/components).
@@ -192,13 +200,13 @@ npm install @santoshyadavdev/ng-devtools devframe
 
 The docs describe what the code does today. Before you write a claim, find it in the source.
 
-| Page                      | Source of truth                                                                                          |
-| ------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Inspector pages           | The tab in `app/src/pages/` and its collector in `packages/ng-devtools/src/`                             |
-| Agent tools and resources | `packages/ng-devtools/src/devframe.ts`, `rpc/*.ts` and `rpc/analog-register.ts`                          |
-| Setup pages               | `packages/ng-devtools/package.json` exports, `hub.ts`, `vite.ts`, `overlay.ts`, `popup.ts` and the demos |
-| Security                  | `hub.ts`, `vite.ts` and the redaction code, such as `forms-privacy.ts`                                   |
-| Contributing              | Root `package.json` scripts, `nx.json`, `project.json` files and `.github/workflows`                     |
+| Page                      | Source of truth                                                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Inspector pages           | The tab in `app/src/pages/` and its collector in `packages/ng-devtools/src/`                                          |
+| Agent tools and resources | `packages/ng-devtools/src/devframe.ts`, `rpc/*.ts` and `rpc/analog-register.ts`                                       |
+| Setup pages               | `packages/ng-devtools/package.json` exports, `hub.ts`, `vite.ts`, `config.ts`, `overlay.ts`, `popup.ts` and the demos |
+| Security                  | `hub.ts`, `vite.ts` and the redaction code, such as `forms-privacy.ts`                                                |
+| Contributing              | Root `package.json` scripts, `nx.json`, `project.json` files and `.github/workflows`                                  |
 
 Check names exactly: labels, buttons, tool names, arguments, option names and defaults. When the code changes, update the page in the same pull request.
 

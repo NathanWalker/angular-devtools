@@ -71,7 +71,7 @@ The live graph reads `ng.ɵgetSignalGraph` with the component's injector, from `
 
 ### Exact and sampled values
 
-Exact **set** entries come from a hook on signal writes. The overlay matches a write to a node by its label, so only signals with a `debugName` get exact entries. It samples everything else on each poll, as **sampled** entries.
+Exact **set** entries come from a hook on signal writes. The overlay matches a write to a node by its label, so only signals with a `debugName` get exact entries. It samples everything else each time it reads the page, as **sampled** entries.
 
 <ngmd-callout type="tip" title="Name your signals">
   Pass a <code>debugName</code> to <code>signal()</code> to get exact history entries and a readable label on the card.
@@ -120,7 +120,7 @@ The `ng-devtools:highlight` tool also switches the graph to the component it hig
 | `ng-devtools:highlight`       | tool     | Highlights a component and makes it the target of the graph.                                      |
 | `ng-devtools:signal-graph`    | resource | The live graph per page.                                                                          |
 
-`inspect-signals` returns the graph of the chosen component. Call `highlight` first to switch it. See [Tools](/agents/tools).
+`inspect-signals` returns the graph of the chosen component. Call `highlight` first to switch it. See [Tools](../agents/tools.md).
 
 ## Limits and gotchas
 
@@ -143,7 +143,7 @@ When the picked component is gone or has no graph, a notice appears and the tab 
     The default follows the deepest component in the primary router outlet. It skips named outlets. Pick the component yourself to pin it.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Why are all my history entries sampled?">
-    Exact entries need a <code>debugName</code> on the signal. Without one, the overlay samples values on each poll.
+    Exact entries need a <code>debugName</code> on the signal. Without one, the overlay samples values each time it reads the page.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Why is a value marked as not computed yet?">
     A computed that nothing has read yet has no value. It fills in after its first read.

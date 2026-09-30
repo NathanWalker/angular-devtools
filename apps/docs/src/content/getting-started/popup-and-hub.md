@@ -15,7 +15,7 @@ When the overlay loads, a floating button appears in the bottom-right corner of 
 
 ### Where it comes from
 
-Importing the [overlay](/getting-started/overlay) adds the button. The overlay first checks whether the page's server mounts the hub at `/__devframes/`. If it does, the button opens the whole hub. If not, it opens the devtools panel on its own.
+Importing the [overlay](./overlay.md) adds the button. The overlay first checks whether the page's server mounts the hub at `/__devframes/`. If it does, the button opens the whole hub. If not, it opens the devtools panel on its own.
 
 ### Create it yourself
 
@@ -141,7 +141,7 @@ If the panel cannot reach the server, check that the dev server is running, then
 
 <ngmd-accordion>
   <ngmd-accordion-item title="The button is in the way" open>
-    Drag it somewhere else, or focus it and use the arrow keys. Double-click it to reset its position.
+    Drag it somewhere else, or focus it and use the arrow keys. Double-click it to reset its position. To remove it, stop the overlay with <a href="/getting-started/overlay#stop-the-overlay"><code>disposeOverlay</code></a>.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Reset the panel layout">
     Remove the <code>ng-devtools-popup</code> key from <code>localStorage</code> and reload.

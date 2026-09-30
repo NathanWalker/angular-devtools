@@ -19,6 +19,7 @@ The package publishes `dist/` and `bin.mjs`. On publish, `publishConfig.exports`
 | --------------------------------------- | ------------------- |
 | `@santoshyadavdev/ng-devtools`          | `dist/devframe.mjs` |
 | `@santoshyadavdev/ng-devtools/devframe` | `dist/devframe.mjs` |
+| `@santoshyadavdev/ng-devtools/config`   | `dist/config.mjs`   |
 | `@santoshyadavdev/ng-devtools/overlay`  | `dist/overlay.mjs`  |
 | `@santoshyadavdev/ng-devtools/popup`    | `dist/popup.mjs`    |
 | `@santoshyadavdev/ng-devtools/http`     | `dist/http.mjs`     |
@@ -46,11 +47,11 @@ The package's `build` script runs two steps:
 
 ### 1. Bump the version
 
-Update `version` in `packages/ng-devtools/package.json`. Release commits change only that line, with a message like `chore(release): ng-devtools 0.0.5`.
+Update `version` in `packages/ng-devtools/package.json`. In the same commit, add a section for the version to `packages/ng-devtools/CHANGELOG.md`. The changelog follows [Keep a Changelog](https://keepachangelog.com), with entries grouped as Upgrade notes, Security fixes, Features and Documentation. Use a message like `chore(release): ng-devtools 0.0.5`.
 
 ### 2. Check the build
 
-Run the checks from [Development setup](/contributing/development), then build the package without publishing:
+Run the checks from [Development setup](./development.md), then build the package without publishing:
 
 ```bash
 pnpm devtools:build-pkg
@@ -81,7 +82,7 @@ The extension has its own version, in `extension/manifest.json`. It does not fol
 3. Commit `extension/ui` and the manifest.
 4. Upload `dist/ng-devtools-extension.zip`.
 
-See [Build the extension](/contributing/chrome-extension) for the upload steps.
+See [Build the extension](./chrome-extension.md) for the upload steps.
 
 ## Where to next
 
