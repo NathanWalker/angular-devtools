@@ -99,6 +99,30 @@ describe('overlay collectors', () => {
     expect(calls).toContain('forget-router-page');
   });
 
+  it('forget the signal page on pagehide and push the graph again when the page comes back', async () => {
+    document.body.innerHTML = '<app-root></app-root>';
+    vi.stubGlobal('ng', {
+      ɵgetSignalGraph: () => ({ nodes: [], edges: [] }),
+      getInjector: () => ({}),
+      getComponent: (el: Element) => (el.tagName === 'APP-ROOT' ? {} : null),
+    });
+    try {
+      await start({ limits: { refreshMs: 500 } });
+      expect(calls).toContain('push-signal-graph');
+      calls.length = 0;
+      dispatchEvent(new Event('pagehide'));
+      expect(calls).toContain('forget-signal-page');
+      calls.length = 0;
+      dispatchEvent(new Event('pageshow'));
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(calls).toContain('push-signal-graph');
+      expect(calls).not.toContain('ping-signal-graph');
+    } finally {
+      vi.unstubAllGlobals();
+      document.body.innerHTML = '';
+    }
+  });
+
   it('poll on the default fallback interval without a config', async () => {
     const interval = vi.spyOn(globalThis, 'setInterval');
     await start();

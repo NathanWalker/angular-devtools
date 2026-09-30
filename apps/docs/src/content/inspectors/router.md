@@ -21,7 +21,7 @@ The route the page is on:
 - The navigation in flight, with an **Abort** button.
 - The document title, query params and fragment.
 - **Active routes**: each active route with its component, params, data, and guards and resolvers. Tags mark lazy routes, inherited params, and whether a data value is static, resolved or inherited. The title row says when the title is inherited.
-- **Outlets**: the outlet tree, with the inputs the router binds to each component.
+- **Outlets**: the outlet tree, with the inputs the router binds to each component and the `routerOutletData` each outlet passes (what the routed component reads with `inject(ROUTER_OUTLET_DATA)`). The data shows as a redacted preview of at most 300 characters.
 
 ### Navigations
 
@@ -34,7 +34,7 @@ Every navigation as one story:
 - Router warnings, and the cancel or error reason. The tab explains NG04xxx errors.
 - When the navigation error handler redirects, the navigation names the error handler as the cause and keeps the error that triggered it, with its error code.
 
-Filter by URL, or check **Only problems** to keep the navigations that did not succeed and the ones in a loop. Each row has **Replay** and **Copy repro** (a markdown repro). **Export JSON** saves the list.
+Filter by URL, or check **Only problems** to keep the navigations that did not succeed and the ones in a loop. Each row has **Replay** and **Copy repro** (a markdown repro). **Replay** is off for a navigation whose URL is redacted or not relative, and a note under the row says why. **Export JSON** saves the list.
 
 ### Loop detection
 
@@ -58,8 +58,10 @@ The live route config. The tab merges lazy children in once they load, and marks
 
 - **Test a URL** and click **Predict** to see which route matches it, or the nearest ones.
 - **Probe in app** runs the real matcher without navigating.
-- Fill in the params of a route and click **Go** to navigate to it.
+- Fill in the params of a route and click **Go** to navigate to it. With a param left empty, **Go** marks the empty field and names the params to fill in.
 - **Read lazy** reads the routes of a lazy route that has not loaded.
+
+The result of **Go** and **Read lazy** shows under the row you clicked.
 
 ### Setup
 
@@ -198,7 +200,7 @@ Without that recording, the guards listed for a navigation are candidates: the `
 
 ### Guard recording is on by default
 
-**Record each guard and resolver** in the **Navigations** view starts checked. Uncheck it to stop. Turning it off puts every original guard and resolver back. The page keeps the choice per browser tab, in `sessionStorage`, so it survives a reload. Agents use `navigate` with `action: "instrument"` and `on`.
+**Record each guard and resolver** in the **Navigations** view starts checked. Uncheck it to stop. Turning it off puts every original guard and resolver back. The page keeps the choice per browser tab, in `sessionStorage`, so it survives a reload. If the page does not answer, the checkbox returns to its previous state and the view shows the error. Agents use `navigate` with `action: "instrument"` and `on`.
 
 ### Setup kind on Angular 20.0 to 20.3.4
 

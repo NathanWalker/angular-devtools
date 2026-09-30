@@ -55,6 +55,25 @@ const ORIGIN_TEXT: Record<NgrxActionOrigin, string> = {
   reactive: 'store.dispatch(() => action)',
 };
 
+function parsePayload(text: string): { payload?: Record<string, unknown>; error?: string } {
+  if (!text.trim()) return {};
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { error: 'The payload is not valid JSON.' };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { error: 'The payload must be a JSON object, like {"id": 7}.' };
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'type')) {
+    return {
+      error: 'The payload cannot have a "type" key. Put the action type in the Type field.',
+    };
+  }
+  return { payload: value as Record<string, unknown> };
+}
+
 const CLASSIC_KINDS = new Set([
   'action',
   'reducer',
@@ -179,7 +198,7 @@ const CLASSIC_KINDS = new Set([
                   }
                   @if (current.classic) {
                     <span class="chip">{{
-                      current.classic.devtools ? 'Store DevTools on' : 'read-only'
+                      current.classic.devtools ? 'Store DevTools on' : 'Store DevTools off'
                     }}</span>
                   }
                 </div>
@@ -362,69 +381,150 @@ const CLASSIC_KINDS = new Set([
                         <p class="muted">The state did not change.</p>
                       }
 
-                      @if (selected.restorable) {
-                        @if (confirmSeq() === selected.seq) {
-                          <div
-                            class="confirm"
-                            role="group"
-                            aria-labelledby="ngrx-confirm-text"
-                            (keydown.escape)="cancelRestore($event)"
-                          >
-                            <p id="ngrx-confirm-text">
-                              @if (selected.source === 'store') {
-                                Store DevTools jumps the app state to the state right after action
-                                #{{ selected.seq }}. Until you go back to the latest state, new
-                                actions are logged but do not change the state.
-                              } @else {
-                                This sets every state key of {{ current.label }} back to its value
-                                right after change #{{ selected.seq }}. Components that read the
-                                store update at once, and a new "Restore" entry is added to the log.
-                              }
-                            </p>
-                            <div class="actions">
-                              <button
-                                type="button"
-                                class="btn primary"
-                                [disabled]="busy()"
-                                (click)="restore(selected.seq, selected.source === 'store')"
-                              >
-                                Restore
-                              </button>
-                              <button
-                                type="button"
-                                class="btn"
-                                (click)="cancelRestore()"
-                                #cancelButton
-                              >
-                                Cancel
-                              </button>
-                            </div>
+                      @if (selected.restorable && confirmSeq() === selected.seq) {
+                        <div
+                          class="confirm"
+                          role="group"
+                          aria-labelledby="ngrx-confirm-text"
+                          (keydown.escape)="cancelRestore($event)"
+                        >
+                          <p id="ngrx-confirm-text">
+                            @if (selected.source === 'store') {
+                              Store DevTools jumps the app state to the state right after action #{{
+                                selected.seq
+                              }}. Until you go back to the latest state, new actions are logged but
+                              do not change the state.
+                            } @else {
+                              This sets every state key of {{ current.label }} back to its value
+                              right after change #{{ selected.seq }}. Components that read the store
+                              update at once, and a new "Restore" entry is added to the log.
+                            }
+                          </p>
+                          <div class="actions">
+                            <button
+                              type="button"
+                              class="btn primary"
+                              [disabled]="busy()"
+                              (click)="restore(selected.seq, selected.source === 'store')"
+                            >
+                              Restore
+                            </button>
+                            <button
+                              type="button"
+                              class="btn"
+                              (click)="cancelRestore()"
+                              #cancelButton
+                            >
+                              Cancel
+                            </button>
                           </div>
-                        } @else {
-                          <button
-                            type="button"
-                            class="btn restore"
-                            [disabled]="!canRestore()"
-                            [attr.aria-describedby]="canRestore() ? null : 'store-writes-off'"
-                            (click)="askRestore(selected.seq)"
-                            #restoreButton
-                          >
-                            Restore this state
-                          </button>
-                          @if (!canRestore()) {
-                            <p id="store-writes-off" class="hint small">{{ restoreOff }}</p>
+                        </div>
+                      }
+                      @if (
+                        confirmSeq() !== selected.seq && (selected.restorable || canAgain(selected))
+                      ) {
+                        <div class="entry-actions">
+                          @if (selected.restorable) {
+                            <button
+                              type="button"
+                              class="btn restore"
+                              [disabled]="!canRestore()"
+                              [attr.aria-describedby]="canRestore() ? null : 'store-writes-off'"
+                              (click)="askRestore(selected.seq)"
+                              #restoreButton
+                            >
+                              Restore this state
+                            </button>
                           }
+                          @if (canAgain(selected)) {
+                            <button
+                              type="button"
+                              class="btn"
+                              [disabled]="busy() || !canRestore()"
+                              [attr.aria-describedby]="canRestore() ? null : 'store-writes-off'"
+                              (click)="dispatchAgain(selected.seq)"
+                            >
+                              Dispatch again
+                            </button>
+                          }
+                        </div>
+                        @if (!canRestore()) {
+                          <p id="store-writes-off" class="hint small">{{ restoreOff }}</p>
                         }
-                      } @else if (selected.source === 'store') {
+                      }
+                      @if (!selected.restorable && selected.source === 'store') {
                         <p class="hint small">
-                          Time travel for &#64;ngrx/store needs <code>provideStoreDevtools()</code>.
-                          Without it this log is read-only.
+                          @if (selected.unrestorable === 'dropped') {
+                            Store DevTools no longer holds this action, so this state cannot be
+                            restored. It was dropped past <code>maxAge</code>, or the Store DevTools
+                            history was committed, reset or imported.
+                          } @else if (selected.unrestorable === 'not-recorded') {
+                            Store DevTools never recorded this action, so this state cannot be
+                            restored. An <code>actionsBlocklist</code>,
+                            <code>actionsSafelist</code> or <code>predicate</code> option filtered
+                            it out, or recording was paused.
+                          } @else {
+                            Time travel for &#64;ngrx/store needs
+                            <code>provideStoreDevtools()</code>. Without it, entries cannot be
+                            restored.
+                          }
                         </p>
                       }
                     </section>
                   }
                 </div>
               </section>
+
+              @if (current.classic) {
+                <section class="dispatch" aria-labelledby="ngrx-dispatch-heading">
+                  <h4 id="ngrx-dispatch-heading">Dispatch an action</h4>
+                  <form class="dispatch-form" (submit)="dispatchAction($event)">
+                    <label>
+                      <span>Type</span>
+                      <input
+                        required
+                        spellcheck="false"
+                        autocomplete="off"
+                        list="ngrx-action-types"
+                        placeholder="e.g. [Cart] Add Item"
+                        [value]="dispatchType()"
+                        (input)="dispatchType.set($any($event.target).value)"
+                      />
+                    </label>
+                    <datalist id="ngrx-action-types">
+                      @for (type of actionTypes(); track type) {
+                        <option [value]="type"></option>
+                      }
+                    </datalist>
+                    <label>
+                      <span>Payload <span class="optional">(JSON object, optional)</span></span>
+                      <textarea
+                        rows="3"
+                        spellcheck="false"
+                        placeholder='e.g. {"id": 7}'
+                        [value]="dispatchPayload()"
+                        (input)="dispatchPayload.set($any($event.target).value)"
+                        [attr.aria-invalid]="payloadError() ? 'true' : null"
+                        aria-describedby="ngrx-payload-error"
+                      ></textarea>
+                    </label>
+                    <p id="ngrx-payload-error" class="field-error">{{ payloadError() }}</p>
+                    <div class="actions">
+                      <button
+                        type="submit"
+                        class="btn primary"
+                        [disabled]="busy() || !canRestore() || !dispatchRequest()"
+                        [attr.aria-describedby]="canRestore() ? null : 'store-dispatch-off'"
+                      >
+                        Dispatch
+                      </button>
+                    </div>
+                    @if (!canRestore()) {
+                      <p id="store-dispatch-off" class="hint small">{{ restoreOff }}</p>
+                    }
+                  </form>
+                </section>
+              }
             </div>
           }
         </div>
@@ -1019,9 +1119,76 @@ const CLASSIC_KINDS = new Set([
       margin: 0 0 10px;
       line-height: 1.5;
     }
-    .actions {
+    .actions,
+    .entry-actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
+    }
+    .entry-actions {
+      margin-top: 14px;
+    }
+    .entry-actions .btn.restore {
+      margin-top: 0;
+    }
+    .dispatch {
+      min-width: 0;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    .dispatch-form {
+      display: grid;
+      gap: 10px;
+      max-width: 560px;
+    }
+    .dispatch-form label {
+      display: grid;
+      gap: 6px;
+      color: var(--text-2);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .optional {
+      color: var(--text-3);
+      font-weight: 400;
+    }
+    .dispatch-form input {
+      width: 100%;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+    }
+    textarea {
+      width: 100%;
+      min-width: 0;
+      padding: 8px 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      resize: vertical;
+      transition:
+        border-color 0.15s var(--ease),
+        box-shadow 0.15s var(--ease);
+    }
+    textarea::placeholder {
+      color: var(--text-3);
+    }
+    textarea:focus-visible {
+      @include m.field-focus;
+    }
+    textarea[aria-invalid='true'] {
+      border-color: color-mix(in srgb, var(--danger) 60%, transparent);
+    }
+    .field-error {
+      margin: -4px 0 0;
+      color: var(--danger);
+      font-size: 12px;
+    }
+    .field-error:empty {
+      display: none;
     }
     .paused {
       display: flex;
@@ -1299,6 +1466,27 @@ export class StoreInspector {
     () => this.storeLog().find((e) => e.seq === this.selectedSeq()) ?? null,
   );
 
+  readonly dispatchType = signal('');
+  readonly dispatchPayload = signal('');
+
+  readonly actionTypes = computed(() => {
+    const types = new Set<string>();
+    for (const entry of this.sourceEntries()) for (const type of entry.types ?? []) types.add(type);
+    for (const entry of this.page()?.log ?? []) {
+      if (entry.source === 'store' && entry.action !== undefined) types.add(entry.type);
+    }
+    return [...types].sort().slice(0, 200);
+  });
+
+  readonly payloadError = computed(() => parsePayload(this.dispatchPayload()).error ?? '');
+
+  readonly dispatchRequest = computed(() => {
+    const type = this.dispatchType().trim();
+    const { payload, error } = parsePayload(this.dispatchPayload());
+    if (!type || error) return null;
+    return { type: 'dispatch' as const, action: type, ...(payload ? { payload } : {}) };
+  });
+
   readonly usesSignals = computed(() =>
     this.sourceEntries().some((e) => e.kind === 'signal-store' || e.kind === 'signal-state'),
   );
@@ -1446,6 +1634,44 @@ export class StoreInspector {
       this.message.set(result?.error ?? result?.message ?? 'Back on the latest state.');
     } catch {
       this.message.set('Could not reach the page to go back to the latest state.');
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  canAgain(entry: NgrxLogEntry): boolean {
+    return entry.source === 'store' && entry.action !== undefined;
+  }
+
+  async dispatchAction(event: Event) {
+    event.preventDefault();
+    const request = this.dispatchRequest();
+    if (request) await this.send(request, 'Could not reach the page to dispatch the action.');
+  }
+
+  dispatchAgain(seq: number) {
+    return this.send(
+      { type: 'dispatch-again', seq },
+      'Could not reach the page to dispatch the action again.',
+    );
+  }
+
+  private async send(request: Record<string, unknown>, offline: string) {
+    const page = this.page();
+    if (!page || this.busy()) return;
+    this.busy.set(true);
+    try {
+      const result = (await call(this.rpc(), 'request-ngrx-action', {
+        pageId: page.pageId,
+        request,
+      })) as { ok?: boolean; message?: string; error?: string; entry?: NgrxLogEntry } | null;
+      this.message.set(result?.error ?? result?.message ?? 'Dispatched.');
+      if (result?.entry) {
+        this.selectedStoreId.set('store');
+        this.selectedSeq.set(result.entry.seq);
+      }
+    } catch {
+      this.message.set(offline);
     } finally {
       this.busy.set(false);
     }

@@ -90,18 +90,37 @@ export function componentHosts(
   return out;
 }
 
+function hostsUnder(ng: ComponentDebugNg, scope: Element, tagName: string): Element[] {
+  const out: Element[] = [];
+  const visit = (el: Element, depth: number) => {
+    if (depth > MAX_DEPTH) return;
+    for (const child of childElements(el)) {
+      if (componentAt(ng, child)) {
+        if (child.tagName === tagName) out.push(child);
+      } else {
+        visit(child, depth + 1);
+      }
+    }
+  };
+  visit(scope, 0);
+  return out;
+}
+
 export function hostPath(ng: ComponentDebugNg, el: Element): string {
-  const parts: string[] = [];
+  const chain: Element[] = [];
+  let top: Element = el;
   for (let node: Element | null = el; node; node = parentOf(node)) {
-    if (!componentAt(ng, node)) continue;
-    const tag = node.tagName.toLowerCase();
-    const parent = node.parentNode;
-    const twins = parent
-      ? Array.from(parent.children).filter((c) => c.tagName === node!.tagName)
-      : [];
-    parts.unshift(twins.length > 1 ? `${tag}[${twins.indexOf(node) + 1}]` : tag);
+    top = node;
+    if (componentAt(ng, node)) chain.unshift(node);
   }
-  return parts.join(' > ');
+  return chain
+    .map((node, i) => {
+      const tag = node.tagName.toLowerCase();
+      const scope = i > 0 ? chain[i - 1] : top === node ? null : top;
+      const twins = scope ? hostsUnder(ng, scope, node.tagName) : [node];
+      return twins.length > 1 ? `${tag}[${twins.indexOf(node) + 1}]` : tag;
+    })
+    .join(' > ');
 }
 
 export function componentHostOf(ng: ComponentDebugNg | undefined, el: Element): Element | null {
@@ -276,6 +295,7 @@ export function collectComponentTree(
   const visit = (el: Element, out: LiveComponentNode[], depth: number) => {
     if (depth > MAX_DEPTH) {
       report.truncated = true;
+      report.truncatedBy = { ...report.truncatedBy, depth: MAX_DEPTH };
       return;
     }
     const instance = componentAt(ng, el);
@@ -283,6 +303,7 @@ export function collectComponentTree(
     if (instance) {
       if (report.count >= MAX_COMPONENTS) {
         report.truncated = true;
+        report.truncatedBy = { ...report.truncatedBy, components: MAX_COMPONENTS };
         return;
       }
       report.count++;

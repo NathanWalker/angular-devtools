@@ -46,26 +46,26 @@ Lists the tabs that report to the server, newest first: page id, URL, seconds si
 ### Action tools
 
 <ngmd-alert severity="important">
-  <code>highlight</code>, <code>navigate</code>, <code>form-action</code>, <code>fill-form</code> and <code>analog-call-api</code> act on the app. Every other tool is marked read-only for your client.
+  <code>highlight</code>, <code>navigate</code>, <code>dispatch-ngrx-action</code>, <code>form-action</code>, <code>fill-form</code> and <code>analog-call-api</code> act on the app. Every other tool is marked read-only for your client.
 </ngmd-alert>
 
 ### Turn tools off
 
-The server decides which tools exist. Set `agent.readOnly` to drop the five action tools. Set `agent.tools.<inspector>` to `false` to hide one inspector's tools and resources, and keep its tab. Turning an inspector off with `inspectors`, or blocking an action with `actions`, drops the matching tools too. See [Inspectors and agent tools](../getting-started/configuration.md#inspectors-and-agent-tools).
+The server decides which tools exist. Set `agent.readOnly` to drop the six action tools. Set `agent.tools.<inspector>` to `false` to hide one inspector's tools and resources, and keep its tab. Turning an inspector off with `inspectors`, or blocking an action with `actions`, drops the matching tools too. See [Inspectors and agent tools](../getting-started/configuration.md#inspectors-and-agent-tools).
 
 ## Source scan
 
 These seven tools take no arguments. They all read your source.
 
-| Tool             | What it answers                                                                                                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `get-routes`     | Angular routes from your route files, with full URL path (parents and `loadChildren` prefixes included), kind (page, group, redirect or wildcard), guards, resolvers, and file and line.  |
-| `get-components` | Components and directives from `@Component` and `@Directive` classes, with class name, selector, kind, inputs, outputs, change detection (components only), and file and line.            |
-| `get-signals`    | `signal()`, `computed()`, `linkedSignal()`, `effect()`, `toSignal()` and resource declarations (`resource`, `httpResource`, `rxResource`), plus signal inputs, models and queries.        |
-| `get-providers`  | DI providers: `@Injectable` services, `inject()` calls, constructor parameters and `providers` arrays, with token, file and where each one is provided.                                   |
-| `get-ngrx-store` | NgRx declarations: `@ngrx/store` actions, reducers, effects, selectors, features and store setup, and `@ngrx/signals` `signalStore` (with its members), `signalState` and `signalMethod`. |
-| `get-pipes`      | Custom `@Pipe` classes, and built-in pipes from `@angular/common` in use in templates, with purity, standalone status, and where each is declared or used.                                |
-| `build-meta`     | The project name, the Angular and TypeScript versions, SSR status, the Analog version in Analog apps, and a `builtAt` timestamp.                                                          |
+| Tool             | What it answers                                                                                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `get-routes`     | Angular routes from your route files, with full URL path (parents and `loadChildren` prefixes included), kind (page, group, redirect or wildcard), guards, resolvers, and file and line.                                       |
+| `get-components` | Components and directives from `@Component` and `@Directive` classes, with class name, selector, kind, inputs, outputs, change detection (components only), and file and line.                                                 |
+| `get-signals`    | `signal()`, `computed()`, `linkedSignal()`, `effect()`, `toSignal()` and resource declarations (`resource`, `httpResource`, `rxResource`), plus signal inputs, models and queries.                                             |
+| `get-providers`  | DI providers: `@Injectable` services, `inject()` calls, constructor parameters and `providers` arrays, with token, file and where each one is provided.                                                                        |
+| `get-ngrx-store` | NgRx declarations: `@ngrx/store` actions (with their type strings in `types`), reducers, effects, selectors, features and store setup, and `@ngrx/signals` `signalStore` (with its members), `signalState` and `signalMethod`. |
+| `get-pipes`      | Custom `@Pipe` classes, and built-in pipes from `@angular/common` in use in templates, with purity, standalone status, and where each is declared or used.                                                                     |
+| `build-meta`     | The project name, the Angular and TypeScript versions, SSR status, the Analog version in Analog apps, and a `builtAt` timestamp.                                                                                               |
 
 ## Components, signals and DI
 
@@ -89,7 +89,7 @@ The live detail of one component instance: inputs, outputs and whether a parent 
 | `selector` | yes      | An instance id from the `component-tree` resource, a class name or host tag. |
 | `pageId`   | no       | Same as `page`.                                                              |
 
-A class name or tag that matches several instances answers for the first and lists the ids of all of them. Secret-looking values are redacted.
+A class name or tag that matches several instances answers for the first and lists the ids of all of them. When nothing matches and the page's tree stopped at a [limit](../inspectors/components.md#selection), `inspect-component` and `highlight` say which one, since the instance can be past it. Secret-looking values are redacted.
 
 ### defer-blocks
 
@@ -110,7 +110,7 @@ Change detection cycles recorded with Angular's profiler: the slowest components
 | `record` | no       | `start` starts a fresh recording, `stop` stops it and keeps the cycles, `clear` empties it. Leave out to read. |
 | `limit`  | no       | Rows per list. Default 10, at most 50.                                                                         |
 
-Without `page`, it reads the page that is recording, and `record` goes to every connected page. Recording is off until the panel or this tool starts it. Call it with `record: "start"`, use the app, then call it again without `record`. When older cycles were dropped at [`limits.cdCycles`](../getting-started/configuration.md#limits), the answer says how many.
+Without `page`, it reads the page that is recording, and `record` goes to every connected page. The answer starts with the change detection mode of the page that last reported its injectors: zoneless, zone.js, or zoneless with zone.js still loaded. Recording is off until the panel or this tool starts it. Call it with `record: "start"`, use the app, then call it again without `record`. When older cycles were dropped at [`limits.cdCycles`](../getting-started/configuration.md#limits), the answer says how many.
 
 ### inspect-signals
 
@@ -137,15 +137,15 @@ With `root` or a route path, the tool switches the page's graph to the effects o
 
 ### inspect-providers
 
-The injectors a page reported. Element injectors list what each component injected and which injector supplied it. Environment injectors run from the platform down to the root and route injectors. Reads: page.
+The injectors a page reported. Element injectors list what each component injected and which injector supplied it. Environment injectors run from the platform down to the root and route injectors, and list what the services they already created inject. Reads: page.
 
 | Argument   | Required | Value                                                                                                                                                |
 | ---------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `selector` | no       | A tag name, a component or directive class name, or an injector id. Returns only the matching element injectors, each with its lookup path resolved. |
-| `token`    | no       | A token name, like `HttpClient`. Returns the injectors that provide it and the components that inject it.                                            |
+| `token`    | no       | A token name, like `HttpClient`. Returns the injectors that provide it and the components or services that inject it.                                |
 | `pageId`   | no       | Same as `page`.                                                                                                                                      |
 
-Without `selector` or `token`, the answer is the whole tree, cut off at 20,000 characters. When the page has more than 2000 element injectors, the answer says that it holds only the first 2000.
+Without `selector` or `token`, the answer is the whole tree, cut off at 20,000 characters, and says which change detection mode the page runs. When the page has more than 2000 element injectors, the answer says that it holds only the first 2000.
 
 ## Router
 
@@ -153,11 +153,11 @@ All router tools read the page, except `explain-render-mode`, which also reads y
 
 ### Read the current route
 
-| Tool                 | What it answers                                                                                                                                                                                                                                                | Arguments                                             |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `inspect-route`      | The current route: URL, query params, fragment, title, the navigation in flight, the active route tree (component, params, data, guards, resolvers) and the outlet tree. With `selector`, the route a component was rendered for, or whether a link is active. | `selector`: component class, element tag or link text |
-| `explain-navigation` | Recent navigations, newest first: who started each one, redirects and loops with the cause of each hop, per-phase timing, guard and resolver verdicts, lazy loads, and the cancel or error reason in plain language.                                           | `url`, `id`, `limit` (1 to 50, default 5), `perf`     |
-| `export-navigation`  | A markdown repro of one navigation, with router options, any loop it is part of and the relevant slice of the route config. Defaults to the latest one that did not succeed.                                                                                   | `id`                                                  |
+| Tool                 | What it answers                                                                                                                                                                                                                                                                                      | Arguments                                             |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `inspect-route`      | The current route: URL, query params, fragment, title, the navigation in flight, the active route tree (component, params, data, guards, resolvers) and the outlet tree with each outlet's `routerOutletData`. With `selector`, the route a component was rendered for, or whether a link is active. | `selector`: component class, element tag or link text |
+| `explain-navigation` | Recent navigations, newest first: who started each one, redirects and loops with the cause of each hop, per-phase timing, guard and resolver verdicts, lazy loads, and the cancel or error reason in plain language.                                                                                 | `url`, `id`, `limit` (1 to 50, default 5), `perf`     |
+| `export-navigation`  | A markdown repro of one navigation, with router options, any loop it is part of and the relevant slice of the route config. Defaults to the latest one that did not succeed.                                                                                                                         | `id`                                                  |
 
 Use `explain-navigation` for "why was I redirected". Pass `perf: true` for "why is navigation slow": it lists the slowest navigations and preloads.
 
@@ -201,6 +201,20 @@ Use `explain-navigation` for "why was I redirected". Pass `perf: true` for "why 
 | `stable`     | When the navigation ends and the app has no pending tasks, such as HTTP requests or `httpResource` loads (the signal behind `ApplicationRef.whenStable()`). The result has `stable: true`, or `stable: false` with a note when 10 seconds pass first. |
 
 If a `canMatch` guard or the navigation error handler redirects a `probe`, the probe stops the redirected navigation before it matches or renders anything, and the result names the target in `redirectedTo`.
+
+## NgRx
+
+### Dispatch an action <ngmd-badge variant="alpha">Action</ngmd-badge>
+
+`dispatch-ngrx-action` dispatches an action to the `@ngrx/store` Store of the running app, in development only, and returns the new log entry: the action, its origin and the state diff. Reads: page.
+
+| Argument  | Value                                                                                         |
+| --------- | --------------------------------------------------------------------------------------------- |
+| `type`    | The action type, like `[Cart] Add Item`. `get-ngrx-store` lists the types it finds in source. |
+| `payload` | The action props as a JSON object, like `{"id": 7}`. It cannot have a `type` key.             |
+| `seq`     | The number of an action in the log, to dispatch that action again. Use it instead of `type`.  |
+
+Without `page`, the tool picks the most recent page that has an `@ngrx/store` Store. While a restore holds Store DevTools on a past state, the action is logged but does not change the state, and the answer says so. Set [`actions.ngrx`](../getting-started/configuration.md#actions) to `false` to drop the tool. Read the live state and log with the [`ngrx-store` resource](./resources.md#ngrx-store).
 
 ## Forms
 

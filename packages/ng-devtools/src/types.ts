@@ -107,6 +107,8 @@ export interface SignalGraph {
   nodeCount?: number;
   /** True when the Angular version reports nodes without ids (before 20.1). */
   unsupported?: boolean;
+  /** False when the signal write hook did not load, so history holds samples only. */
+  writeHook?: false;
   source?: 'selected' | 'routed' | 'root';
   pageId?: string;
   /** Recent value changes, keyed by node or resource id, oldest first. */
@@ -171,6 +173,8 @@ export interface ComponentTreeReport {
   roots: LiveComponentNode[];
   count: number;
   truncated?: boolean;
+  /** The caps that stopped collection: `components` instances, or `depth` DOM levels. */
+  truncatedBy?: { components?: number; depth?: number };
   detail: ComponentDetail | null;
   /** Missing when the page's Angular exposes no defer block util. */
   deferBlocks?: DeferBlockInfo[];
@@ -214,10 +218,14 @@ export interface InjectorTreeNode {
   dependencies?: DependencyInfo[];
 }
 
+/** `zone-unused`: zoneless, with zone.js still loaded on the page. */
+export type ZoneMode = 'zoneless' | 'zone' | 'zone-unused';
+
 export interface InjectorTreeReport {
   roots: InjectorTreeNode[];
   environment: InjectorTreeNode[];
   truncated?: boolean;
+  zone?: ZoneMode;
 }
 
 export interface InjectorPage extends InjectorTreeReport {

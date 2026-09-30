@@ -498,6 +498,7 @@ export function attachForms(
       const finish = (result: FormActionResult) => {
         document.removeEventListener('click', onClick, true);
         document.removeEventListener('mouseover', onHover, true);
+        document.removeEventListener('mouseout', onLeave, true);
         document.removeEventListener('keydown', onKey, true);
         clearTimeout(timer);
         highlight.clear();
@@ -506,6 +507,9 @@ export function attachForms(
       };
       const onHover = (event: Event) => {
         if (event.target instanceof HTMLElement) highlight.show(event.target);
+      };
+      const onLeave = (event: MouseEvent) => {
+        if (!event.relatedTarget) highlight.clear();
       };
       const onClick = (event: Event) => {
         event.preventDefault();
@@ -525,6 +529,7 @@ export function attachForms(
       cancelPick = () => finish(failed('Picking cancelled.'));
       document.addEventListener('click', onClick, true);
       document.addEventListener('mouseover', onHover, true);
+      document.addEventListener('mouseout', onLeave, true);
       document.addEventListener('keydown', onKey, true);
     });
   }
@@ -662,6 +667,11 @@ export function attachForms(
       if (request.action === 'pick') {
         void pick(ctx).then(respond);
         return;
+      }
+      if (request.action === 'cancel-pick') {
+        const active = cancelPick;
+        active?.();
+        return respond({ ok: true, message: active ? 'Picking cancelled.' : 'No pick to cancel.' });
       }
       devtoolsSincePush = true;
       runFormAction(ctx, request).then(

@@ -5,6 +5,7 @@ import {
   filterTree,
   nearestRow,
   reconcileSelection,
+  truncationNotice,
   type TreeNode,
 } from '../../../../app/src/pages/component-tree-state.ts';
 import { injectorTreeFor, pickPage, signalGraphFor } from '../../../../app/src/live-pages.ts';
@@ -36,6 +37,22 @@ describe('Components filter count', () => {
     expect(countText(1, 0, false)).toBe('1 instance');
     expect(countText(5, 2, true)).toBe('2 of 5');
     expect(countText(5, 0, true)).toBe('0 of 5');
+  });
+
+  it('marks the count as a lower bound and names the cap when the tree is truncated', () => {
+    expect(countText(2000, 0, false, true)).toBe('2000+ instances');
+    expect(countText(2000, 3, true, true)).toBe('3 of 2000+');
+    expect(filterAnnouncement(2000, 3, 'card', true)).toBe('3 of 2000+ instances match.');
+    expect(truncationNotice({ components: 2000 })).toBe(
+      'Showing the first 2000 component instances. Others are not listed or searchable.',
+    );
+    expect(truncationNotice({ depth: 256 })).toBe(
+      'Components nested more than 256 elements deep are not listed or searchable.',
+    );
+    expect(truncationNotice({ components: 2000, depth: 256 })).toMatch(
+      /first 2000 component instances, and none nested more than 256 elements deep\. Others/,
+    );
+    expect(truncationNotice()).toBe('The page has more components than the tree shows.');
   });
 
   it('announces the filter result, and nothing once the filter is cleared', () => {

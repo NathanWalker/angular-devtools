@@ -6,6 +6,7 @@ import type {
   ProviderInfo,
 } from './types.ts';
 import { isComment, parentOf, walkElements } from './dom-walk.ts';
+import { zoneModeOf } from './zone-mode.ts';
 
 interface ProviderRecord {
   token: unknown;
@@ -259,6 +260,67 @@ interface ElementEntry {
 }
 
 export const MAX_INJECTOR_NODES = 2000;
+export const MAX_SERVICE_DEPENDENCIES = 500;
+
+interface InjectorRecord {
+  factory?: unknown;
+  value?: unknown;
+  multi?: unknown;
+}
+
+function ownRecords(injector: unknown): [unknown, InjectorRecord][] {
+  const records = (injector as { records?: unknown } | null)?.records;
+  if (!(records instanceof Map)) return [];
+  return [...records.entries()].filter(
+    (entry): entry is [unknown, InjectorRecord] => !!entry[1] && typeof entry[1] === 'object',
+  );
+}
+
+/**
+ * Whether the injector already holds an instance for a record. A record still
+ * waiting to be created holds an empty placeholder object (or one mid-creation),
+ * and asking Angular for its dependencies would create it.
+ */
+function isCreated(record: InjectorRecord): boolean {
+  const { value } = record;
+  if (value === undefined || value === null) return false;
+  if (typeof value !== 'object') return true;
+  return !(Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === 0);
+}
+
+const serviceDependencies = new WeakMap<object, Map<unknown, DependencyInfo[]>>();
+
+/** What the services an environment injector already created inject. */
+function environmentDependencies(
+  ng: DebugNg,
+  injector: object,
+  records: RecordReader,
+): DependencyInfo[] {
+  let known = serviceDependencies.get(injector);
+  if (!known) {
+    known = new Map();
+    serviceDependencies.set(injector, known);
+  }
+  const out: DependencyInfo[] = [];
+  const seen = new Set<string>();
+  for (const [token, record] of ownRecords(injector)) {
+    if (out.length >= MAX_SERVICE_DEPENDENCIES) break;
+    if (typeof token !== 'function' || typeof record.factory !== 'function') continue;
+    if (record.multi || !isCreated(record)) continue;
+    let deps = known.get(token);
+    if (!deps) {
+      deps = dependenciesOf(ng, injector, [token], false, records);
+      known.set(token, deps);
+    }
+    for (const dep of deps) {
+      const key = `${dep.from}|${dep.token}|${dep.flags.join(',')}|${dep.providedBy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(dep);
+    }
+  }
+  return out.slice(0, MAX_SERVICE_DEPENDENCIES);
+}
 
 const elementEntries = new WeakMap<Element | Comment, ElementEntry>();
 
@@ -362,6 +424,7 @@ export function collectInjectorTree(
           },
           providers,
           children: [],
+          dependencies: environmentDependencies(ng, injector, records),
         },
       });
     });
@@ -403,5 +466,13 @@ export function collectInjectorTree(
     else environment.push(env.node);
   }
 
-  return truncated ? { roots, environment, truncated } : { roots, environment };
+  const report: InjectorTreeReport = truncated
+    ? { roots, environment, truncated }
+    : { roots, environment };
+  const root = [...envs.keys()].find((injector) =>
+    (injector as { scopes?: Set<string> }).scopes?.has?.('root'),
+  );
+  const zone = root ? zoneModeOf(root) : null;
+  if (zone) report.zone = zone;
+  return report;
 }

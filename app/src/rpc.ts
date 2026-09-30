@@ -29,3 +29,18 @@ export function rpcTry<T>(
 export function isStaticReport(client: DevframeRpcClient | null): boolean {
   return client?.connectionMeta.backend === 'static';
 }
+
+/** Clears the boxes the panel drew in the app when the panel page goes away; returns the cleanup. */
+export function clearHighlightsOnHide(client: () => DevframeRpcClient | null): () => void {
+  const clear = () => {
+    const rpc = client()?.scope('ng-devtools').rpc;
+    if (!rpc) return;
+    void rpc.callEvent('request-page-highlight', null);
+    void rpc.callEvent('request-form-highlight', null);
+  };
+  addEventListener('pagehide', clear);
+  return () => {
+    removeEventListener('pagehide', clear);
+    clear();
+  };
+}

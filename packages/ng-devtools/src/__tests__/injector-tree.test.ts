@@ -6,6 +6,7 @@ import {
   providerKind,
   tokenName,
 } from '../injector-tree.ts';
+import { zoneModeOf } from '../zone-mode.ts';
 
 class ElementRef {
   static __NG_ELEMENT_ID__ = 1;
@@ -277,6 +278,95 @@ describe('collectInjectorTree', () => {
       { from: 'Card', token: 'API_URL', flags: [], providedBy: rootId },
       { from: 'Card', token: 'Logger', flags: ['skipSelf'], providedBy: null },
     ]);
+  });
+
+  it('lists what the services an environment injector created inject, and never creates one', () => {
+    const { ng } = fakeNg();
+    class Http {}
+    class Api {}
+    class Pending {}
+    const NOT_YET = {};
+    const rootEnv = ng.ɵgetInjectorResolutionPath({ kind: 'node' })[1];
+    rootEnv.records = new Map<unknown, unknown>([
+      [Api, { factory: () => new Api(), value: new Api() }],
+      [Pending, { factory: () => new Pending(), value: NOT_YET }],
+      [Http, { factory: () => new Http(), value: new Http() }],
+      [API_URL, { factory: undefined, value: '/api' }],
+    ]);
+    const asked: unknown[] = [];
+    const lookup = ng.ɵgetDependenciesFromInjectable;
+    ng.ɵgetDependenciesFromInjectable = (inj: any, token: unknown) => {
+      if (inj.kind === 'node') return lookup(inj, token);
+      asked.push(token);
+      return token === Api
+        ? {
+            dependencies: [
+              { token: Http, flags: {}, providedIn: rootEnv },
+              { token: API_URL, flags: { optional: true } },
+            ],
+          }
+        : { dependencies: [] };
+    };
+    const { environment } = collectInjectorTree(ng);
+    const root = environment[0].children[0];
+    expect(root.dependencies).toEqual([
+      { from: 'Api', token: 'Http', flags: [], providedBy: root.injector.id },
+      { from: 'Api', token: 'API_URL', flags: ['optional'], providedBy: root.injector.id },
+    ]);
+    expect(environment[0].dependencies).toEqual([]);
+    expect(asked).toEqual([Api, Http]);
+    collectInjectorTree(ng);
+    expect(asked).toEqual([Api, Http]);
+  });
+
+  it('lists a service dependency once when the service injects it several times', () => {
+    const { ng } = fakeNg();
+    class Zone {}
+    class Destroy {}
+    const rootEnv = ng.ɵgetInjectorResolutionPath({ kind: 'node' })[1];
+    rootEnv.records = new Map<unknown, unknown>([
+      [Zone, { factory: () => new Zone(), value: new Zone() }],
+    ]);
+    const lookup = ng.ɵgetDependenciesFromInjectable;
+    ng.ɵgetDependenciesFromInjectable = (inj: any, token: unknown) => {
+      if (inj.kind === 'node') return lookup(inj, token);
+      const dep = { token: Destroy, flags: { optional: true }, providedIn: rootEnv };
+      return token === Zone
+        ? { dependencies: [dep, dep, dep, { ...dep, flags: {} }, dep] }
+        : { dependencies: [] };
+    };
+    const root = collectInjectorTree(ng).environment[0].children[0];
+    expect(root.dependencies).toEqual([
+      { from: 'Zone', token: 'Destroy', flags: ['optional'], providedBy: root.injector.id },
+      { from: 'Zone', token: 'Destroy', flags: [], providedBy: root.injector.id },
+    ]);
+  });
+
+  it('reports the change detection mode from the NgZone the root injector created', () => {
+    class NgZone {
+      _inner = {};
+      run() {}
+    }
+    class NoopNgZone {
+      run() {}
+    }
+    const root = (zone: object | undefined) => ({
+      records: new Map<unknown, unknown>([[NgZone, { factory: () => zone, value: zone }]]),
+    });
+    expect(zoneModeOf(root(new NgZone()), { Zone: {} })).toBe('zone');
+    expect(zoneModeOf(root(new NoopNgZone()), {})).toBe('zoneless');
+    expect(zoneModeOf(root(new NoopNgZone()), { Zone: {} })).toBe('zone-unused');
+    expect(zoneModeOf(root({}), {})).toBeNull();
+    expect(zoneModeOf({ records: new Map() }, {})).toBeNull();
+    expect(zoneModeOf(null)).toBeNull();
+
+    const { ng } = fakeNg();
+    const rootEnv = ng.ɵgetInjectorResolutionPath({ kind: 'node' })[1];
+    expect(collectInjectorTree(ng)).not.toHaveProperty('zone');
+    Object.assign(rootEnv, root(new NoopNgZone()));
+    expect(collectInjectorTree(ng).zone).toBe(
+      typeof (globalThis as { Zone?: unknown }).Zone === 'undefined' ? 'zoneless' : 'zone-unused',
+    );
   });
 
   it('returns nothing without the Angular debug APIs', () => {

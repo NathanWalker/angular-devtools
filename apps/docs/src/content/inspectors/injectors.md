@@ -37,6 +37,10 @@ Select an injector to see the **Lookup path**: the injectors Angular asks, in or
 
 For element injectors, **Injected here** lists each token requested at this level and the injector that answered. The block marks a token that nobody provides as **not provided anywhere**, and an optional token that nobody provides as **optional, not provided**. A provider with a `null` value, such as `useValue: null`, still counts as provided. When the element has more than one class, each row says which class asked.
 
+### Injected by its services
+
+For environment injectors, **Injected by its services** lists what the services this injector created inject, and which injector answered. Each row says which service asked. Services that Angular has not created yet are left out, because reading their dependencies would create them. A `providedIn: 'root'` service shows on the root injector once something injects it.
+
 ### Provides
 
 **Provides** lists each provider with its kind: `useClass`, `useValue`, `useFactory` or `useExisting`. A bare class shows as `useClass`. Chips mark **viewProviders** and **multi** providers. Providers that come from imported modules show the import path, as `via A › B`.
@@ -107,11 +111,11 @@ Arrow keys, Home and End move the selection through the tree. The right arrow ex
 
 ## Agent tools
 
-| Tool or resource                | Kind     | What it does                                                                                                                               |
-| ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ng-devtools:get-providers`     | tool     | DI providers from source: `@Injectable` services, `inject()` calls, constructor parameters and `providers` arrays.                         |
-| `ng-devtools:inspect-providers` | tool     | The injector tree a page reported. `selector` narrows it to matching element injectors, `token` to where a token is provided and injected. |
-| `ng-devtools:injector-tree`     | resource | The live tree last reported by a page.                                                                                                     |
+| Tool or resource                | Kind     | What it does                                                                                                                                                                                 |
+| ------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ng-devtools:get-providers`     | tool     | DI providers from source: `@Injectable` services, `inject()` calls, constructor parameters and `providers` arrays.                                                                           |
+| `ng-devtools:inspect-providers` | tool     | The injector tree a page reported, with what components and created services inject. `selector` narrows it to matching element injectors, `token` to where a token is provided and injected. |
+| `ng-devtools:injector-tree`     | resource | The live tree last reported by a page.                                                                                                                                                       |
 
 See [Tools](../agents/tools.md) and [Resources](../agents/resources.md).
 

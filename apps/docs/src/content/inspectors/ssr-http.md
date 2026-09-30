@@ -63,6 +63,8 @@ Add a rule with these fields:
 
 A status of 400 or more fails the request with an `HttpErrorResponse`. A lower status returns the body as a mocked response. A body without a status returns it with status 200. A rule with only a delay passes the request through, later. A rule needs a status, a delay or a body, so **Add rule** stays off until it has one. The form clears after each added rule. The first enabled rule that matches wins.
 
+The body follows the request's `responseType`. A `json` request gets the parsed JSON (or the raw string when it does not parse) with `content-type: application/json`. A `text` request gets the string with `text/plain`. A `blob` request gets a `Blob`, and an `arraybuffer` request an `ArrayBuffer`, both with `application/octet-stream`. The same value is the `error` of an injected failure.
+
 ### Hydration
 
 - Whether hydration is on.

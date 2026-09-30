@@ -57,17 +57,12 @@ function harness(maxEvents?: number) {
       },
     },
   };
-  const collector = attachForms(
-    my,
-    'pg',
-    () => (globalThis as any).ng,
-    { show: () => {}, clear: () => {} },
-    maxEvents,
-  );
+  const highlight = { show: vi.fn(), clear: vi.fn() };
+  const collector = attachForms(my, 'pg', () => (globalThis as any).ng, highlight, maxEvents);
   stops.push(collector.stop);
   const reports = () => calls.filter((c) => c.name === 'push-forms').map((c) => c.args[0]);
   const lastEvents = (): FormEvent[] => reports().at(-1)?.events ?? [];
-  return { calls, handlers, collector, reports, lastEvents };
+  return { calls, handlers, collector, reports, lastEvents, highlight };
 }
 
 const tick = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -289,6 +284,15 @@ describe('forms collector', () => {
     h.handlers.get('form-action')!({ requestId: 'p1', request: { action: 'pick', formId } });
     await tick(20);
     const clicked = document.getElementById('email')!;
+    clicked.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    expect(h.highlight.show).toHaveBeenLastCalledWith(clicked);
+    h.highlight.clear.mockClear();
+    clicked.dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }),
+    );
+    expect(h.highlight.clear).not.toHaveBeenCalled();
+    clicked.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: null }));
+    expect(h.highlight.clear).toHaveBeenCalledTimes(1);
     let reachedApp = false;
     clicked.addEventListener('click', () => (reachedApp = true));
     clicked.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -296,6 +300,29 @@ describe('forms collector', () => {
     const answer = h.calls.find((c) => c.name === 'form-action-result')!.args[0];
     expect(answer.result).toMatchObject({ ok: true, formId, path: 'email' });
     expect(reachedApp).toBe(false);
+  });
+
+  it('cancels a pick from the panel', async () => {
+    await mount(Login);
+    const h = harness();
+    h.collector.push();
+    await tick();
+    const formId = h.reports().at(-1).forms[0].id;
+    h.handlers.get('form-action')!({ requestId: 'p1', request: { action: 'pick', formId } });
+    await tick(20);
+    h.handlers.get('form-action')!({ requestId: 'c1', request: { action: 'cancel-pick', formId } });
+    await tick(20);
+    const answers = h.calls.filter((c) => c.name === 'form-action-result').map((c) => c.args[0]);
+    expect(answers.find((a) => a.requestId === 'p1').result).toMatchObject({
+      ok: false,
+      error: 'Picking cancelled.',
+    });
+    expect(answers.find((a) => a.requestId === 'c1').result).toMatchObject({ ok: true });
+    let reachedApp = false;
+    const clicked = document.getElementById('email')!;
+    clicked.addEventListener('click', () => (reachedApp = true));
+    clicked.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(reachedApp).toBe(true);
   });
 
   it('captures NG01xxx setup errors from console.error without leaking tokens', async () => {

@@ -208,15 +208,16 @@ The server registers tools with a colon, as `ng-devtools:get-routes`. MCP client
 
 ### Read and action tools
 
-The server marks read-only tools as read-only for your client. Five tools act on the app, so the server does not mark them:
+The server marks read-only tools as read-only for your client. Six tools act on the app, so the server does not mark them:
 
-| Tool              | Reference                                                          |
-| ----------------- | ------------------------------------------------------------------ |
-| `highlight`       | [Components, signals and DI](./tools.md#components-signals-and-di) |
-| `navigate`        | [Act on the router](./tools.md#act-on-the-router)                  |
-| `form-action`     | [Act on a form](./tools.md#act-on-a-form)                          |
-| `fill-form`       | [Act on a form](./tools.md#act-on-a-form)                          |
-| `analog-call-api` | [Call a server route](./tools.md#call-a-server-route)              |
+| Tool                   | Reference                                                          |
+| ---------------------- | ------------------------------------------------------------------ |
+| `highlight`            | [Components, signals and DI](./tools.md#components-signals-and-di) |
+| `navigate`             | [Act on the router](./tools.md#act-on-the-router)                  |
+| `dispatch-ngrx-action` | [Dispatch an action](./tools.md#dispatch-an-action)                |
+| `form-action`          | [Act on a form](./tools.md#act-on-a-form)                          |
+| `fill-form`            | [Act on a form](./tools.md#act-on-a-form)                          |
+| `analog-call-api`      | [Call a server route](./tools.md#call-a-server-route)              |
 
 Your client can ask you before it runs them. To drop them from the server, set `agent.readOnly`. See [Inspectors and agent tools](../getting-started/configuration.md#inspectors-and-agent-tools).
 

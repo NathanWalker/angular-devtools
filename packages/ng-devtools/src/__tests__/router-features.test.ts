@@ -7,6 +7,7 @@ import {
   PreloadAllModules,
   RedirectCommand,
   Router,
+  RouterOutlet,
   RouterPreloader,
   provideRouter,
   withNavigationErrorHandler,
@@ -315,6 +316,63 @@ describe('router features on a real Router', () => {
       { input: 'id', source: 'param' },
       { input: 'user', source: 'data' },
     ]);
+  });
+});
+
+describe('routerOutletData', () => {
+  class Shell {}
+  Component({
+    selector: 'app-shell',
+    imports: [RouterOutlet],
+    template: `<router-outlet />
+      <router-outlet name="side" [routerOutletData]="{ panel: 'filters', apiToken: 'abc123' }" />`,
+  })(Shell);
+
+  it('previews the data the primary and a named outlet pass, redacted', async () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([
+          {
+            path: 'shell',
+            component: Shell,
+            children: [
+              { path: '', component: Page },
+              { path: 'side', component: Page, outlet: 'side' },
+            ],
+          },
+        ]),
+      ],
+    });
+    const harness = await RouterTestingHarness.create();
+    harness.fixture.componentInstance.routerOutletData.set({ user: 'Ada', ids: [1, 2] });
+    await harness.navigateByUrl('/shell/(side:side)');
+    harness.detectChanges();
+    const outlets = outletsOf(TestBed.inject(Router) as never);
+    expect(outlets[0]).toMatchObject({
+      outlet: 'primary',
+      component: 'Shell',
+      data: '{"user":"Ada","ids":[1,2]}',
+    });
+    const side = outlets[0].children?.find((outlet) => outlet.outlet === 'side');
+    expect(side).toMatchObject({ activated: true, component: 'Page' });
+    expect(side?.data).toContain('"panel":"filters"');
+    expect(side?.data).not.toContain('abc123');
+    const primary = outlets[0].children?.find((outlet) => outlet.outlet === 'primary');
+    expect(primary?.data).toBeUndefined();
+  });
+
+  it('caps a large preview', async () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [provideRouter([{ path: '', component: Page }])] });
+    const harness = await RouterTestingHarness.create();
+    harness.fixture.componentInstance.routerOutletData.set(
+      Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`key${i}`, 'x'.repeat(100)])),
+    );
+    await harness.navigateByUrl('/');
+    const data = outletsOf(TestBed.inject(Router) as never)[0].data ?? '';
+    expect(data.length).toBeLessThanOrEqual(301);
+    expect(data.endsWith('…')).toBe(true);
   });
 });
 

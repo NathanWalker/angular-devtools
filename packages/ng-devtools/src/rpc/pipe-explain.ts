@@ -63,7 +63,7 @@ function runtimeText(runtime: PipeUsageInfo | undefined, instrumented: boolean):
   if (!runtime) {
     return instrumented
       ? '**Live:** not seen on the currently connected page.'
-      : '**Live:** unknown — instrumentation is off. Turn on "Instrument" in the Pipes panel for call counts, last input/output and stale-argument detection.';
+      : '**Live:** unknown, recording is off. Click **Record calls** in the Pipes panel for call counts, last input/output and stale-argument detection.';
   }
   const components = runtime.components.map((c) => `${c.name} (${c.count})`).join(', ');
   const parts = [

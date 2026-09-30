@@ -33,6 +33,7 @@ import { panelConfig, tabEnabled } from './devtools-config';
 import { hostPageId } from './page-id';
 import { initialTab, storeTab, storedTab } from './tab-memory';
 import { detectBaseURL } from './base-url';
+import { clearHighlightsOnHide } from './rpc';
 
 const HUB_VIEWS = ['angular', 'ngrx', 'analog', 'nativescript', 'capacitor'] as const;
 
@@ -223,7 +224,7 @@ function readView(): View | null {
         [class.fade-end]="navFade().end"
         (scroll)="measureNav()"
       >
-        @if (tabs().length > 1) {
+        @if (availableTabs().length > 1) {
           @for (t of tabs(); track t.id) {
             <button
               type="button"
@@ -652,7 +653,7 @@ export class App implements OnInit, OnDestroy {
   });
   readonly config = computed(() => panelConfig(this.rpc()));
   protected readonly tabEnabled = tabEnabled;
-  readonly tabs = computed(() => {
+  protected readonly availableTabs = computed(() => {
     if (this.comingSoon()) return [];
     const view = this.view();
     const only = view ? VIEW_TAB[view] : undefined;
@@ -661,6 +662,12 @@ export class App implements OnInit, OnDestroy {
     return enabled.filter(
       (t) => (t.id !== 'analog' || this.analog()) && !(view === 'angular' && TAB_VIEW[t.id]),
     );
+  });
+  readonly tabs = computed(() => {
+    const tabs = this.availableTabs();
+    if (this.rpc()) return tabs;
+    const tab = this.tab();
+    return tabs.filter((t) => t.id === 'dashboard' || t.id === tab);
   });
 
   tab = linkedSignal<Tab>(() => {
@@ -685,6 +692,7 @@ export class App implements OnInit, OnDestroy {
   private stopVisibility = () => {};
 
   private stopFollowing = () => {};
+  private stopHighlights = () => {};
   private readonly nav = viewChild<ElementRef<HTMLElement>>('nav');
   private readonly main = viewChild<ElementRef<HTMLElement>>('main');
   private readonly injector = inject(Injector);
@@ -741,10 +749,11 @@ export class App implements OnInit, OnDestroy {
     const restored = initialTab(
       location.hash,
       storedTab(this.tabScope()),
-      this.tabs().map((t) => t.id),
+      this.availableTabs().map((t) => t.id),
     );
     if (restored) this.tab.set(restored);
 
+    this.stopHighlights = clearHighlightsOnHide(() => this.rpc());
     const baseURL = detectBaseURL();
     connectDevframe(baseURL ? { baseURL } : {}).then(
       (client) => {
@@ -780,6 +789,7 @@ export class App implements OnInit, OnDestroy {
   ngOnDestroy() {
     this.stopFollowing();
     this.stopVisibility();
+    this.stopHighlights();
     this.navObserver?.disconnect();
   }
 

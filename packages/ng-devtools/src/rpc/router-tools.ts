@@ -484,6 +484,9 @@ function outletLines(outlets: OutletInfo[], depth: number, out: string[]) {
         `${pad}  - router-bound inputs: ${bound.map((i) => `${code(i.input)} from ${i.source}`).join(', ')}`,
       );
     }
+    if (outlet.data !== undefined) {
+      out.push(`${pad}  - routerOutletData (ROUTER_OUTLET_DATA): ${code(outlet.data)}`);
+    }
     if (outlet.children) outletLines(outlet.children, depth + 1, out);
   }
 }

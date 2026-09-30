@@ -19,6 +19,8 @@ import {
   formAction,
   formsCall,
   plain,
+  redactLabel,
+  UNMASK_DOCS_URL,
   type CollectedForm,
   type FormFieldNode,
 } from './forms-types';
@@ -75,6 +77,11 @@ import { actionAllowed, actionBlockedMessage } from '../devtools-config';
           Set
         </button>
       </div>
+    } @else if (node().type === 'control') {
+      <p class="muted">
+        No Set editor: this field is redacted ({{ redactLabel(node().redacted!) }}).
+        <a [href]="unmaskDocsUrl" target="_blank" rel="noopener noreferrer">How to unmask it</a>
+      </p>
     }
     <div class="row" role="group" aria-label="Field actions">
       <button type="button" class="small" (click)="act('focus')">Focus</button>
@@ -141,6 +148,11 @@ import { actionAllowed, actionBlockedMessage } from '../devtools-config';
     h3:focus {
       outline: none;
     }
+    a {
+      color: var(--accent);
+      border-radius: 2px;
+    }
+    a:focus-visible,
     h3:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: 2px;
@@ -190,6 +202,8 @@ export class FormsFieldDetail {
 
   readonly canWrite = computed(() => actionAllowed(this.rpc(), 'forms'));
   protected readonly writesOff = actionBlockedMessage('forms');
+  protected readonly redactLabel = redactLabel;
+  protected readonly unmaskDocsUrl = UNMASK_DOCS_URL;
   private readonly target = computed(() => `${this.form().id}|${this.node().path}`);
   readonly text = linkedSignal<string, string | null>({
     source: this.target,

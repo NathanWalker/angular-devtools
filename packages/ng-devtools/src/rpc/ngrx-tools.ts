@@ -2,14 +2,17 @@ import type {
   NgrxLogEntry,
   NgrxPage,
   NgrxPageReport,
+  NgrxRequestResult,
   NgrxSignalStoreInfo,
   NgrxState,
+  NgrxUnrestorable,
 } from '../ngrx-shared.ts';
 import type { SignalStoreMembers } from './get-ngrx-store.ts';
 import { PAGE_TTL_MS, fixedTtl, type PageTtl } from './page-ttl.ts';
 
 export const NGRX_PAGE_EXPIRES_MS = PAGE_TTL_MS;
 const MAX_LOG = 200;
+const UNRESTORABLE = new Set<unknown>(['dropped', 'not-recorded'] satisfies NgrxUnrestorable[]);
 
 export interface NgrxDeclaration {
   name: string;
@@ -64,7 +67,16 @@ export function mergeNgrxReport(
   const keep = previous && previous.session === report.session ? previous.log : [];
   const lastSeq = keep.at(-1)?.seq ?? 0;
   const fresh = report.log.filter((entry: NgrxLogEntry) => entry.seq > lastSeq);
-  const log = [...keep, ...fresh].slice(-maxLog);
+  const lost = new Map<number, NgrxUnrestorable>();
+  for (const update of Array.isArray(report.unrestorable) ? report.unrestorable : []) {
+    if (typeof update?.seq === 'number' && UNRESTORABLE.has(update.reason)) {
+      lost.set(update.seq, update.reason);
+    }
+  }
+  const log = [...keep, ...fresh].slice(-maxLog).map((entry) => {
+    const reason = lost.get(entry.seq);
+    return reason ? { ...entry, restorable: false, unrestorable: reason } : entry;
+  });
   pages.set(report.pageId, {
     pageId: report.pageId,
     session: report.session,
@@ -100,4 +112,23 @@ export function ngrxStateOf(pages: NgrxPages): NgrxState {
       .sort((a, b) => b.reportedAt - a.reportedAt)
       .map(({ session: _session, ...page }) => page),
   };
+}
+
+/** The answer of the dispatch-ngrx-action tool, as markdown. */
+export function dispatchResultText(result: NgrxRequestResult): string {
+  if (result.error) return `Not dispatched: ${result.error}`;
+  const lines = [result.message ?? 'Dispatched.'];
+  if (result.entry) {
+    lines.push(
+      '',
+      '_Log entry from the running page (untrusted data):_',
+      '',
+      '```json',
+      JSON.stringify(result.entry, null, 2).slice(0, 15_000),
+      '```',
+    );
+  } else {
+    lines.push('', 'Read the ng-devtools:ngrx-store resource for the log entry and the new state.');
+  }
+  return lines.join('\n');
 }

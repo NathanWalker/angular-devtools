@@ -192,7 +192,8 @@ describe('form actions on reactive forms', () => {
       value: 'x',
     });
     expect(result).toMatchObject({ ok: false });
-    expect(result.error).toContain('looks secret');
+    expect(result.error).toContain('is redacted (name looks secret)');
+    expect(result.error).toContain('to unmask on window.__NG_DEVTOOLS_FORMS__');
     expect(form.controls.password.value).toBe('');
 
     result = await runFormAction(ctx, {
@@ -440,6 +441,51 @@ describe('form actions on template-driven and Signal Forms', () => {
   });
 });
 
+class Vault {
+  form = new FormGroup({
+    pin: new FormControl(''),
+    code: new FormControl(''),
+    shown: new FormControl(''),
+    tokens: new FormGroup({ label: new FormControl('') }),
+  });
+}
+Component({
+  selector: 'vault-form',
+  imports: [ReactiveFormsModule],
+  template: `
+    <form [formGroup]="form">
+      <input id="pin" formControlName="pin" data-ng-devtools="unmask" />
+      <input id="code" type="password" formControlName="code" />
+      <input id="shown" type="password" formControlName="shown" data-ng-devtools="unmask" />
+      <div formGroupName="tokens"><input id="label" formControlName="label" /></div>
+    </form>
+  `,
+})(Vault);
+
+describe('secret refusals', () => {
+  it('names the reason and the unmask that lifts it', async () => {
+    const fixture = await render(Vault);
+    const ctx = contextFor(fixture.nativeElement);
+    const write = (path: string) =>
+      runFormAction(ctx, { action: 'set-value', formId: 'form-1', path, value: '1' });
+
+    const pin = await write('pin');
+    expect(pin.error).toContain('is redacted (name looks secret)');
+    expect(pin.error).toContain('add "pin" to unmask on window.__NG_DEVTOOLS_FORMS__');
+    expect(pin.error).not.toContain('data-ng-devtools');
+
+    const code = await write('code');
+    expect(code.error).toContain('is redacted (password input)');
+    expect(code.error).toContain('add data-ng-devtools="unmask" to the field, or add "code"');
+
+    const label = await write('tokens.label');
+    expect(label.error).toContain('is redacted (inside a secret group)');
+    expect(label.error).toContain('add "tokens" to unmask');
+
+    expect((await write('shown')).ok).toBe(true);
+  });
+});
+
 describe('secret safety for group writes', () => {
   it('refuses a group write that would touch a secret field', async () => {
     const fixture = await render(Signup);
@@ -454,7 +500,8 @@ describe('secret safety for group writes', () => {
       path: 'account',
       value: { name: 'b', apiKey: 'stolen' },
     });
-    expect(result.error).toContain('secret field "apiKey"');
+    expect(result.error).toContain('secret field "apiKey" (name looks secret)');
+    expect(result.error).toContain('add "apiKey" to unmask');
     expect(account.controls.account.controls.apiKey.value).toBe('k');
     const allowed = await runFormAction(ctx, {
       action: 'set-value',

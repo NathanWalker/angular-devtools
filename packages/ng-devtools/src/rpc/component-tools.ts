@@ -25,10 +25,36 @@ export function toComponentPage(report: Omit<ComponentPage, 'reportedAt'>, now =
     reportedAt: now,
   };
   if (report.truncated) page.truncated = true;
+  const cap = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+  const components = cap(report.truncatedBy?.components);
+  const depth = cap(report.truncatedBy?.depth);
+  if (report.truncated && (components || depth)) {
+    page.truncatedBy = {
+      ...(components ? { components } : {}),
+      ...(depth ? { depth } : {}),
+    };
+  }
   if (typeof report.url === 'string') page.url = redactUrl(report.url.slice(0, 2000));
   if (typeof report.title === 'string') page.title = redactMessage(report.title.slice(0, 200));
   if (Array.isArray(report.deferBlocks)) page.deferBlocks = report.deferBlocks.slice(0, 500);
   return page;
+}
+
+export function truncationText(pages: Iterable<ComponentPage>): string {
+  const notes: string[] = [];
+  for (const page of pages) {
+    if (!page.truncated) continue;
+    const by = page.truncatedBy ?? {};
+    const caps = [
+      ...(by.components ? [`the first ${by.components} component instances`] : []),
+      ...(by.depth ? [`${by.depth} levels of DOM nesting`] : []),
+    ];
+    notes.push(
+      `The tree of page \`${page.pageId}\` stops at ${caps.length ? caps.join(' and ') : 'its size limit'}, so instances past it are not listed or searchable.`,
+    );
+  }
+  return notes.join(' ');
 }
 
 export function latestComponentPage(pages: Iterable<ComponentPage>): ComponentPage | undefined {

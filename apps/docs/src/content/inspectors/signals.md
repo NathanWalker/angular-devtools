@@ -42,6 +42,8 @@ Expand a card to see:
 - **Consumers**: the nodes and effects that read it.
 - **Value history**: recent values, newest first, each with a time and a source tag.
 
+Click an entry under **Dependencies (producers)** or **Consumers** to open that node's card and move focus to it. If the name or kind filter hides the node, the tab clears both filters and says so. An internal signal of a resource opens the resource card. Unnamed nodes show their id, so this is the way to reach them.
+
 ### Resources
 
 Angular builds each `resource()`, `httpResource()` and `rxResource()` from several internal signals, labeled `Resource#name.value`, `Resource#name.state` and so on. The tab folds them into one card under **Resources**, and leaves them out of the **Signals** list. Each card shows:
@@ -94,10 +96,22 @@ Angular doesn't send a value for `linkedSignal` nodes. The overlay takes it from
 
 ### Exact and sampled values
 
-Exact **set** entries come from a hook on signal writes. The overlay matches a write to a node by its label, so only signals with a `debugName` get exact entries. It samples everything else each time it reads the page, as **sampled** entries.
+Exact **set** entries come from a hook on signal writes. The overlay matches a write to a node by its name, kind, version and value. It samples everything else each time it reads the page, as **sampled** entries.
 
-<ngmd-callout type="tip" title="Name your signals">
-  Pass a <code>debugName</code> to <code>signal()</code> to get exact history entries and a readable label on the card.
+In a development build, the Angular compiler names most signals for you. It adds a `debugName` to `signal()`, `computed()`, `linkedSignal()`, `input()`, `model()`, queries, `effect()`, `resource()` and `httpResource()` when the call initializes a class field, a `this.name =` assignment or a variable. The name is the field or variable name.
+
+Entries are sampled instead of exact in these cases:
+
+| Case                                                                                                   | Why                                                                                     |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| A `computed()`                                                                                         | Nothing writes it, so there is no write to hook. Computeds always show sampled entries. |
+| A signal created without a field or variable, such as `return signal(0)` or `{ count: signal(0) }`     | The compiler has no name to add.                                                        |
+| A signal a library creates, when the library was built without the name                                | The signal has no `debugName`.                                                          |
+| Several live signals with the same name, kind, version and value, such as one component rendered twice | The overlay cannot tell which node the write belongs to.                                |
+| The write hook did not load                                                                            | The tab shows a notice: **The signal write hook did not load.**                         |
+
+<ngmd-callout type="tip" title="Name signals the compiler misses">
+  If a signal comes from a factory or helper that returns it directly, pass a <code>debugName</code> in its options, for example <code>signal(0, { debugName: 'count' })</code>.
 </ngmd-callout>
 
 ## How to use it
@@ -112,7 +126,7 @@ Exact **set** entries come from a hook on signal writes. The overlay matches a w
     Expand its card and read <strong>Dependencies (producers)</strong>.
   </ngmd-step>
   <ngmd-step title="Compare the histories">
-    Open each producer. The one with a change at the same time is the cause.
+    Click each producer to open it. The one with a change at the same time is the cause.
   </ngmd-step>
 </ngmd-workflow>
 
@@ -181,7 +195,7 @@ When the picked component is gone or has no graph, a notice appears and the tab 
     The default follows the deepest component in the primary router outlet. It skips named outlets. Pick the component yourself to pin it.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Why are all my history entries sampled?">
-    Exact entries need a <code>debugName</code> on the signal. Without one, the overlay samples values each time it reads the page.
+    Computeds are never written, so their entries are always sampled. For a signal, check the notice at the top of the tab: if the write hook did not load, every entry is sampled. Otherwise the signal likely has no name, because a factory or helper created it without a field or variable. Pass a <code>debugName</code> in its options. See <a href="#exact-and-sampled-values">Exact and sampled values</a>.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Why is a value marked as not computed yet?">
     A computed that nothing has read yet has no value. It fills in after its first read.

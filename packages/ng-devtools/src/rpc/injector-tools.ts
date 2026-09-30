@@ -1,5 +1,6 @@
 import { MAX_INJECTOR_NODES, NULL_INJECTOR_ID } from '../injector-tree.ts';
 import type { InjectorPage, InjectorTreeNode } from '../types.ts';
+import { zoneModeText } from '../zone-mode.ts';
 
 export const MAX_TOOL_CHARS = 20_000;
 
@@ -64,8 +65,9 @@ export function inspectProvidersText(
   const token = args.token?.trim();
 
   if (!selector && !token) {
+    const zone = zoneModeText(page.zone, pageId);
     return capped(
-      `This is the injector tree for the whole page \`${pageId}\`. Element injectors list what each component and directive injected and which injector supplied it (\`providedBy\` is an injector id). Environment injectors run from the platform down to the root and any route injectors. To look at one component or one token, ${NARROW}.${notes}\n\nElement injectors:\n\n${JSON.stringify(roots)}\n\nEnvironment injectors:\n\n${JSON.stringify(environment)}`,
+      `This is the injector tree for the whole page \`${pageId}\`. Element injectors list what each component and directive injected and which injector supplied it (\`providedBy\` is an injector id). Environment injectors run from the platform down to the root and any route injectors; their \`dependencies\` list what the services they already created inject (\`from\` is the service). To look at one component or one token, ${NARROW}.${zone ? ` ${zone}` : ''}${notes}\n\nElement injectors:\n\n${JSON.stringify(roots)}\n\nEnvironment injectors:\n\n${JSON.stringify(environment)}`,
     );
   }
 
@@ -109,7 +111,7 @@ export function inspectProvidersText(
           provider,
         })),
     );
-    const injectedBy = matched.flatMap((node) =>
+    const injectedBy = (selector ? matched : all).flatMap((node) =>
       (node.dependencies ?? [])
         .filter((dep) => dep.token.toLowerCase() === want)
         .map((dep) => ({

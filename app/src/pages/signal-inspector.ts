@@ -1,4 +1,15 @@
-import { Component, DestroyRef, computed, effect, inject, input, signal } from '@angular/core';
+import {
+  Component,
+  DestroyRef,
+  ElementRef,
+  Injector,
+  afterNextRender,
+  computed,
+  effect,
+  inject,
+  input,
+  signal,
+} from '@angular/core';
 import { DatePipe, JsonPipe, NgTemplateOutlet } from '@angular/common';
 import type { DevframeRpcClient } from 'devframe/client';
 import { hostPageId } from '../page-id';
@@ -56,6 +67,7 @@ interface SignalGraph {
   resources?: SignalResource[];
   nodeCount?: number;
   unsupported?: boolean;
+  writeHook?: false;
   source?: 'selected' | 'routed' | 'root';
   pageId?: string;
   history?: Record<string, SignalChange[]>;
@@ -184,6 +196,12 @@ const KIND_COLORS: Record<string, string> = {
         The live signal graph needs Angular 20.1 or later. This list comes from a source scan.
       </p>
     }
+    @if (graph()?.writeHook === false) {
+      <p class="fallback" role="status">
+        The signal write hook did not load. Value history shows sampled values only, with no exact
+        set entries.
+      </p>
+    }
     @if (graph()?.nodeCount; as total) {
       <p class="fallback" role="status">
         Showing {{ graph()!.nodes.length }} of {{ total }} signals. The rest and their edges are
@@ -294,6 +312,8 @@ const KIND_COLORS: Record<string, string> = {
       }
     </ng-template>
 
+    <p class="jump-note" role="status">{{ jumpNote() }}</p>
+
     @if (graph() && filteredResources().length) {
       <h2 class="list-heading">Resources</h2>
       <ul class="nodes resources" role="list">
@@ -305,6 +325,7 @@ const KIND_COLORS: Record<string, string> = {
               [class.selected]="selectedId() === res.id"
               [attr.aria-expanded]="selectedId() === res.id"
               [attr.aria-controls]="'signal-detail-' + res.id"
+              [attr.data-card]="res.id"
               (click)="select(res.id)"
             >
               <span class="node-header">
@@ -427,6 +448,7 @@ const KIND_COLORS: Record<string, string> = {
               [class.selected]="selectedId() === node.id"
               [attr.aria-expanded]="selectedId() === node.id"
               [attr.aria-controls]="'signal-detail-' + node.id"
+              [attr.data-card]="node.id"
               (click)="select(node.id)"
             >
               <span class="node-header">
@@ -481,10 +503,17 @@ const KIND_COLORS: Record<string, string> = {
                   <ul>
                     @for (dep of getDependencies(selectedNode()!); track dep.id) {
                       <li>
-                        <span class="kind-badge sm" [style.background]="kindColor(dep.kind)">{{
-                          dep.kind
-                        }}</span>
-                        <span class="rel-label">{{ dep.label ?? dep.id }}</span>
+                        <button
+                          type="button"
+                          class="rel-link"
+                          [attr.aria-label]="'Go to ' + dep.kind + ' ' + (dep.label ?? dep.id)"
+                          (click)="jumpTo(dep)"
+                        >
+                          <span class="kind-badge sm" [style.background]="kindColor(dep.kind)">{{
+                            dep.kind
+                          }}</span>
+                          <span class="rel-label">{{ dep.label ?? dep.id }}</span>
+                        </button>
                       </li>
                     }
                   </ul>
@@ -494,10 +523,17 @@ const KIND_COLORS: Record<string, string> = {
                   <ul>
                     @for (con of getConsumers(selectedNode()!); track con.id) {
                       <li>
-                        <span class="kind-badge sm" [style.background]="kindColor(con.kind)">{{
-                          con.kind
-                        }}</span>
-                        <span class="rel-label">{{ con.label ?? con.id }}</span>
+                        <button
+                          type="button"
+                          class="rel-link"
+                          [attr.aria-label]="'Go to ' + con.kind + ' ' + (con.label ?? con.id)"
+                          (click)="jumpTo(con)"
+                        >
+                          <span class="kind-badge sm" [style.background]="kindColor(con.kind)">{{
+                            con.kind
+                          }}</span>
+                          <span class="rel-label">{{ con.label ?? con.id }}</span>
+                        </button>
                       </li>
                     }
                   </ul>
@@ -1034,7 +1070,8 @@ const KIND_COLORS: Record<string, string> = {
       margin: 0;
       font-size: 13px;
     }
-    .detail-panel ul li {
+    .detail-panel ul li,
+    .rel-link {
       display: flex;
       align-items: center;
       gap: 8px;
@@ -1043,11 +1080,35 @@ const KIND_COLORS: Record<string, string> = {
       padding: 4px 8px;
       color: var(--text-2);
       border-radius: 6px;
-      transition: background-color 0.15s var(--ease);
     }
-    .detail-panel ul li:hover {
+    .detail-panel ul li:has(> .rel-link) {
+      padding: 0;
+    }
+    .rel-link {
+      width: 100%;
+      font: inherit;
+      text-align: left;
+      background: none;
+      border: 0;
+      cursor: pointer;
+      transition:
+        background-color 0.15s var(--ease),
+        color 0.15s var(--ease);
+    }
+    .rel-link:hover {
       background: var(--surface-2);
       color: var(--text);
+    }
+    .rel-link:focus-visible {
+      @include m.focus-ring;
+    }
+    .jump-note {
+      margin: 0;
+      font-size: 12px;
+      color: var(--text-2);
+    }
+    .jump-note:not(:empty) {
+      margin-bottom: 8px;
     }
     .rel-label {
       min-width: 0;
@@ -1139,6 +1200,8 @@ export class SignalInspector {
   rpc = input<DevframeRpcClient | null>(null);
 
   private readonly destroyRef = inject(DestroyRef);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
   private readonly pageId = hostPageId();
   private readonly cleanups: (() => void)[] = [];
   private readonly treePages = signal<Record<string, { roots?: LiveNode[]; reportedAt?: number }>>(
@@ -1174,6 +1237,12 @@ export class SignalInspector {
   selectedNode = computed(
     () => this.graph()?.nodes.find((n) => n.id === this.selectedId()) ?? null,
   );
+  private readonly jumpedPast = signal<{ id: string; label: string } | null>(null);
+  readonly jumpNote = computed(() => {
+    const jumped = this.jumpedPast();
+    if (!jumped || this.filter() || this.kind() || this.selectedId() !== jumped.id) return '';
+    return `Cleared the filters to show ${jumped.label}.`;
+  });
   selectedHistory = computed(() => {
     const id = this.selectedId();
     return id ? [...(this.graph()?.history?.[id] ?? [])].reverse() : [];
@@ -1358,6 +1427,28 @@ export class SignalInspector {
   select(id: string) {
     this.selectedId.set(this.selectedId() === id ? null : id);
     this.showInternals.set(false);
+  }
+
+  jumpTo(node: SignalNode) {
+    const resource = this.resources().find((r) => r.nodeIds.includes(node.id));
+    const id = resource?.id ?? node.id;
+    const hidden = resource
+      ? !this.filteredResources().some((r) => r.id === id)
+      : !this.filteredNodes().some((n) => n.id === id);
+    if (hidden) this.clearFilters();
+    this.jumpedPast.set(hidden ? { id, label: resource?.name ?? node.label ?? node.id } : null);
+    this.selectedId.set(id);
+    this.showInternals.set(!!resource);
+    afterNextRender(
+      () => {
+        const card = [
+          ...this.host.nativeElement.querySelectorAll<HTMLElement>('.node-card[data-card]'),
+        ].find((el) => el.dataset['card'] === id);
+        card?.scrollIntoView?.({ block: 'nearest' });
+        card?.focus({ preventScroll: true });
+      },
+      { injector: this.injector },
+    );
   }
 
   // The page counts past the kept history; older pages only send the list.

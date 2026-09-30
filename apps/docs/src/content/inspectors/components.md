@@ -35,7 +35,7 @@ The page keeps the selection, so the panel, the page and the agent tools share i
 
 If the selected component is destroyed, for example by a route change or an item leaving a list, the detail pane says **The selected component was destroyed** and the selection clears. If the row had keyboard focus, focus moves to the next row, or to the row before it when the removed row was last.
 
-The tree shows up to 2000 components, and walks up to 256 levels of DOM nesting. Past either limit, a notice says the page has more components than the tree shows.
+The tree shows up to 2000 component instances, and walks up to 256 levels of DOM nesting. Past either limit, a notice names the limit, for example **Showing the first 2000 component instances. Others are not listed or searchable.**, and the count reads **2000+ instances**. The filter only searches the listed instances, so a component past the limit shows **No components match**. The [`inspect-component` and `highlight` tools](#agent-tools) say the same when they find no match on a cut-off tree.
 
 ### Detail header
 
@@ -47,7 +47,7 @@ When a form exists in the same source file, a **Show … in Forms** button opens
 
 - **Change detection**: `OnPush` or `Eager`.
 - **Encapsulation**: `Emulated`, `None`, `ShadowDom` or `IsolatedShadowDom`.
-- **Host path**: where the host element sits in the page.
+- **Host path**: where the host element sits in the page, as the chain of component hosts from the root. When a component renders several hosts with the same tag, for example cards in a `@for` list wrapped in `<li>`, each one gets its position among them, like `app-list > app-card[2]`.
 - **Routed**: for routed components, the route and the outlet that rendered it.
 
 A fact shows **Unknown** when Angular does not report it.

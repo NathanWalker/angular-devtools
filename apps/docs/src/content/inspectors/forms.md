@@ -68,7 +68,7 @@ If the devtools server does not answer, the Submit view, the Lint view and the f
 The actions bar works on the selected form:
 
 - **Touch all**, **Revalidate** and **Focus first invalid**.
-- **Pick field on page**: click a field in the app to select it. Esc cancels.
+- **Pick field on page**: click a field in the app to select it. While picking, the button reads **Cancel picking**. Press it, or Escape in the panel or the app, to stop. The pick also stops after 12 seconds.
 - **Snapshot** saves the form's values as `s1`, `s2` and so on. **Restore** puts back the latest one. The button shows its name, like **Restore s2**.
 - **Reset** and **Submit**.
 

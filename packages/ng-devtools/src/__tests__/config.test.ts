@@ -223,7 +223,14 @@ describe('agent tool and RPC registration', () => {
   it('registers everything by default', async () => {
     const { tools, actionTools } = await boot();
     expect(actionTools.sort()).toEqual(
-      ['analog-call-api', 'fill-form', 'form-action', 'highlight', 'navigate'].sort(),
+      [
+        'analog-call-api',
+        'dispatch-ngrx-action',
+        'fill-form',
+        'form-action',
+        'highlight',
+        'navigate',
+      ].sort(),
     );
     expect(tools).toContain('inspect-forms');
   });
@@ -236,7 +243,9 @@ describe('agent tool and RPC registration', () => {
 
   it('drops the agent tools of a blocked action and keeps the rest', async () => {
     const forms = await boot({ actions: { forms: false } });
-    expect(forms.actionTools.sort()).toEqual(['analog-call-api', 'highlight', 'navigate'].sort());
+    expect(forms.actionTools.sort()).toEqual(
+      ['analog-call-api', 'dispatch-ngrx-action', 'highlight', 'navigate'].sort(),
+    );
     expect(forms.tools).toEqual(expect.arrayContaining(['inspect-forms', 'form-history']));
     const router = await boot({ actions: { router: false } });
     expect(router.actionTools).not.toContain('navigate');
@@ -245,6 +254,9 @@ describe('agent tool and RPC registration', () => {
     const analog = await boot({ actions: { analog: false } });
     expect(analog.actionTools).not.toContain('analog-call-api');
     expect(analog.tools).toContain('analog-lint');
+    const ngrx = await boot({ actions: { ngrx: false } });
+    expect(ngrx.actionTools).not.toContain('dispatch-ngrx-action');
+    expect(ngrx.tools).toContain('get-ngrx-store');
   });
 
   it('leaves out the RPC functions, tools and resources of a disabled inspector', async () => {

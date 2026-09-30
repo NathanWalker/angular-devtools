@@ -3,6 +3,7 @@ import { walkElements } from './dom-walk.ts';
 import { className, tokenName } from './injector-tree.ts';
 import {
   diff,
+  dispatchProblem,
   referenceDiff,
   serialize,
   serializeSlice,
@@ -13,6 +14,8 @@ import {
   type NgrxRequest,
   type NgrxRequestResult,
   type NgrxSignalStoreInfo,
+  type NgrxUnrestorable,
+  type NgrxUnrestorableUpdate,
 } from './ngrx-shared.ts';
 import { registeredPatchState } from './ngrx-register.ts';
 
@@ -169,6 +172,8 @@ export interface NgrxCollector {
   };
   logSince(seq: number): NgrxLogEntry[];
   lastSeq(): number;
+  /** Entries that became unrestorable after update number `after`, and the last update number. */
+  unrestorableSince(after: number): { updates: NgrxUnrestorableUpdate[]; last: number };
   run(request: NgrxRequest): NgrxRequestResult;
   stop(): void;
 }
@@ -194,12 +199,15 @@ export function createNgrxCollector(
   let seq = 0;
   let classic: Classic | null = null;
   let classicMisses = 0;
+  let lost: (NgrxUnrestorableUpdate & { at: number })[] = [];
+  let lostSeq = 0;
 
   const append = (entry: Omit<NgrxLogEntry, 'seq'>, keep: Saved) => {
     const full = { ...entry, seq: ++seq };
     log.push(full);
     saved.set(full.seq, keep);
     while (log.length > maxLog) saved.delete(log.shift()!.seq);
+    if (lost.some((u) => u.seq < log[0].seq)) lost = lost.filter((u) => u.seq >= log[0].seq);
     onChange();
     return full;
   };
@@ -372,7 +380,12 @@ export function createNgrxCollector(
     return fromSource !== undefined ? fromSource : syncValue(store);
   };
 
-  const logClassic = (c: Classic, type: string, action: unknown, withAction: boolean) => {
+  const logClassic = (
+    c: Classic,
+    type: string,
+    action: unknown,
+    withAction: boolean,
+  ): NgrxLogEntry => {
     const raw = classicState(c.store);
     const next = serialize(raw);
     let changes = diff(c.last, next, MAX_DIFF).map((entry) => ({
@@ -389,7 +402,8 @@ export function createNgrxCollector(
       withAction && action && typeof action === 'object' ? c.origins.get(action) : undefined;
     c.last = next;
     c.lastRaw = raw;
-    append(
+    const held = c.devtools ? holds(c.devtools, action) : false;
+    return append(
       {
         source: 'store',
         storeId: 'store',
@@ -402,7 +416,8 @@ export function createNgrxCollector(
         ...(origin ? { origin } : {}),
         timestamp: Date.now(),
         diff: changes,
-        restorable: !!c.devtools,
+        restorable: held,
+        ...(c.devtools && !held ? { unrestorable: 'not-recorded' as const } : {}),
       },
       { kind: 'classic', action },
     );
@@ -410,6 +425,37 @@ export function createNgrxCollector(
 
   const liftedOf = (devtools: AnyRecord) =>
     syncValue(devtools['liftedState']) as AnyRecord | undefined;
+
+  const heldActions = (devtools: AnyRecord): Set<unknown> => {
+    const byId = (liftedOf(devtools)?.['actionsById'] ?? {}) as Record<string, AnyRecord>;
+    return new Set(read(() => Object.values(byId).map((lifted) => lifted?.['action']), []));
+  };
+
+  const holds = (devtools: AnyRecord, action: unknown): boolean => {
+    const lifted = liftedOf(devtools);
+    const staged = (lifted?.['stagedActionIds'] ?? []) as number[];
+    const newest = read(
+      () => lifted?.['actionsById']?.[staged[staged.length - 1]]?.['action'],
+      null,
+    );
+    if (action === undefined) return false;
+    return newest === action || heldActions(devtools).has(action);
+  };
+
+  const markDropped = () => {
+    const devtools = classic?.devtools;
+    if (!devtools) return;
+    const open = log.filter((entry) => entry.source === 'store' && entry.restorable);
+    if (!open.length) return;
+    const held = heldActions(devtools);
+    for (const entry of open) {
+      const keep = saved.get(entry.seq);
+      if (keep?.kind !== 'classic' || held.has(keep.action)) continue;
+      entry.restorable = false;
+      entry.unrestorable = 'dropped';
+      lost.push({ seq: entry.seq, reason: 'dropped', at: ++lostSeq });
+    }
+  };
 
   const isPaused = (devtools: AnyRecord | null) => {
     if (!devtools) return false;
@@ -654,6 +700,7 @@ export function createNgrxCollector(
       discover(ng);
       discovered = true;
     }
+    markDropped();
     return report();
   };
 
@@ -679,8 +726,53 @@ export function createNgrxCollector(
     return { ok: true, message: 'Back on the latest state. New actions change the state again.' };
   };
 
+  const NOT_HELD: Record<NgrxUnrestorable, string> = {
+    dropped:
+      'Store DevTools no longer holds this action, so it cannot be restored. It was dropped past maxAge, or the Store DevTools history was committed, reset or imported.',
+    'not-recorded':
+      'Store DevTools never recorded this action, so it cannot be restored. An actionsBlocklist, actionsSafelist or predicate option filtered it out, or recording was paused.',
+  };
+
+  const dispatch = (action: Record<string, unknown>, label: string): NgrxRequestResult => {
+    const c = classic;
+    if (!c) return { error: 'No @ngrx/store Store was found on this page.' };
+    const after = seq;
+    c.store['dispatch'](action);
+    const entry = log.find(
+      (e) => e.seq > after && (saved.get(e.seq) as AnyRecord)?.['action'] === action,
+    );
+    const paused = isPaused(c.devtools) ? ` ${PAUSED_NOTE}` : '';
+    if (!entry) {
+      return {
+        ok: true,
+        message: `Dispatched ${label}. Its log entry appears once the store handles it.${paused}`,
+      };
+    }
+    return { ok: true, message: `Dispatched ${label} as #${entry.seq}.${paused}`, entry };
+  };
+
+  const dispatchAgain = (at: unknown): NgrxRequestResult => {
+    if (typeof at !== 'number') return { error: 'Unknown request.' };
+    const entry = log.find((e) => e.seq === at);
+    const keep = saved.get(at);
+    if (!entry || !keep) return { error: 'This action is no longer in the page history.' };
+    if (keep.kind !== 'classic' || entry.action === undefined) {
+      return { error: 'Only an @ngrx/store action from the log can be dispatched again.' };
+    }
+    const raw = keep.action;
+    if (!raw || typeof raw !== 'object')
+      return { error: 'This action cannot be dispatched again.' };
+    return dispatch({ ...(raw as Record<string, unknown>) }, `#${at} again`);
+  };
+
   const run = (request: NgrxRequest): NgrxRequestResult => {
     if (request?.type === 'latest') return backToLatest();
+    if (request?.type === 'dispatch') {
+      const problem = dispatchProblem(request.action, request.payload);
+      if (problem) return { error: problem };
+      return dispatch({ ...(request.payload ?? {}), type: request.action }, request.action);
+    }
+    if (request?.type === 'dispatch-again') return dispatchAgain(request.seq);
     if (!request || request.type !== 'restore' || typeof request.seq !== 'number') {
       return { error: 'Unknown request.' };
     }
@@ -726,11 +818,22 @@ export function createNgrxCollector(
     const id = Object.keys(actionsById).find(
       (key) => actionsById[key]?.['action'] === entry.action,
     );
-    if (id === undefined) return { error: 'Store DevTools no longer holds this action.' };
+    const logged = log.find((e) => e.seq === request.seq);
+    const notHeld = () => {
+      const reason = logged?.unrestorable ?? 'dropped';
+      if (logged && logged.restorable) {
+        logged.restorable = false;
+        logged.unrestorable = reason;
+        lost.push({ seq: logged.seq, reason, at: ++lostSeq });
+        onChange();
+      }
+      return { error: NOT_HELD[reason] };
+    };
+    if (id === undefined) return notHeld();
     if (typeof devtools['jumpToAction'] === 'function') devtools['jumpToAction'](Number(id));
     else {
       const index = ((lifted?.['stagedActionIds'] ?? []) as number[]).indexOf(Number(id));
-      if (index < 0) return { error: 'Store DevTools no longer holds this action.' };
+      if (index < 0) return notHeld();
       devtools['jumpToState'](index);
     }
     logClassic(c, `Restore #${request.seq}`, entry.action, false);
@@ -743,6 +846,10 @@ export function createNgrxCollector(
     collect,
     logSince: (after) => log.filter((entry) => entry.seq > after),
     lastSeq: () => seq,
+    unrestorableSince: (after) => ({
+      updates: lost.filter((u) => u.at > after).map(({ seq, reason }) => ({ seq, reason })),
+      last: lostSeq,
+    }),
     run,
     stop: () => {
       classic?.stop();

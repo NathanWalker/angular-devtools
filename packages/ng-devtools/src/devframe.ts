@@ -13,6 +13,7 @@ import { injectorMatches, isEnvironmentRequest } from './signal-graph.ts';
 import { getProviders } from './rpc/get-providers.ts';
 import { getNgrxStore, scanNgrxStore } from './rpc/get-ngrx-store.ts';
 import {
+  dispatchResultText,
   expireNgrxPages,
   isNgrxReport,
   mergeNgrxReport,
@@ -20,7 +21,12 @@ import {
   type NgrxDeclaration,
   type NgrxPages,
 } from './rpc/ngrx-tools.ts';
-import type { NgrxState } from './ngrx-shared.ts';
+import {
+  dispatchProblem,
+  type NgrxRequest,
+  type NgrxRequestResult,
+  type NgrxState,
+} from './ngrx-shared.ts';
 import type {
   ComponentDetail,
   ComponentPage,
@@ -29,7 +35,9 @@ import type {
   LiveComponentNode,
   SignalChange,
   SignalGraph,
+  ZoneMode,
 } from './types.ts';
+import { ZONE_MODES, zoneModeText } from './zone-mode.ts';
 import {
   deferBlocksText,
   expireComponentPages,
@@ -38,6 +46,7 @@ import {
   latestComponentPage,
   otherMatchesText,
   toComponentPage,
+  truncationText,
 } from './rpc/component-tools.ts';
 import {
   explainFormsText,
@@ -154,6 +163,7 @@ import pkg from '../package.json' with { type: 'json' };
 type PageGraph = SignalGraph & { pageId?: string };
 
 const ENV_WAIT_MS = 1500;
+const AGENT_HIGHLIGHT_MS = 2000;
 
 const clientAssets: RemoteAssets = {
   package: pkg.name,
@@ -294,6 +304,7 @@ const ngDevtools = defineDevframe({
         environment: [] as InjectorTreeNode[],
         pages: {} as Record<string, InjectorPage>,
         truncated: false,
+        zone: null as ZoneMode | null,
         selectedInjectorId: null as string | null,
       },
     });
@@ -307,6 +318,7 @@ const ngDevtools = defineDevframe({
         draft.roots = latest?.roots ?? [];
         draft.environment = latest?.environment ?? [];
         draft.truncated = latest?.truncated === true;
+        draft.zone = latest?.zone ?? null;
       });
 
     const ngrxStoreState = await my.rpc.sharedState('ngrx-store', {
@@ -732,22 +744,24 @@ const ngDevtools = defineDevframe({
       },
     });
 
+    const forgetSignalPages = (ids: string[]) => {
+      for (const id of ids) signalPages.delete(id);
+      signalGraphState.mutate((draft) => {
+        for (const id of ids) delete draft.pages[id];
+        const ownerId = draft.graph?.pageId;
+        if (ownerId && ids.includes(ownerId)) {
+          const latest = [...signalPages.values()].sort((a, b) => b.reportedAt - a.reportedAt)[0];
+          draft.graph = latest?.graph ?? null;
+        }
+      });
+    };
+
     const expiry = setInterval(() => {
       if (visibility.expire()) applyVisibility();
       const staleHttp = [...httpPages].filter(([id, p]) => Date.now() - p.reportedAt > liveTtl(id));
       if (staleHttp.length) forgetHttpPages(staleHttp.map(([id]) => id));
       const stale = [...signalPages].filter(([id, p]) => Date.now() - p.reportedAt > liveTtl(id));
-      if (stale.length) {
-        for (const [id] of stale) signalPages.delete(id);
-        signalGraphState.mutate((draft) => {
-          for (const [id] of stale) delete draft.pages[id];
-          const ownerId = draft.graph?.pageId;
-          if (ownerId && stale.some(([id]) => id === ownerId)) {
-            const latest = [...signalPages.values()].sort((a, b) => b.reportedAt - a.reportedAt)[0];
-            draft.graph = latest?.graph ?? null;
-          }
-        });
-      }
+      if (stale.length) forgetSignalPages(stale.map(([id]) => id));
       if (expireComponentPages(componentPages, Date.now(), liveTtl)) applyComponentPages();
       if (expireCdPages(cdPages, Date.now(), liveTtl)) applyCd();
       const staleInjectors = [...injectorPages].filter(
@@ -793,11 +807,17 @@ const ngDevtools = defineDevframe({
       },
     });
 
+    const highlightSessions = trackPageSessions(ctx.rpc, (kinds) => {
+      for (const method of kinds) void my.rpc.broadcast({ method, args: [null], optional: true });
+    });
+
     register({
       name: 'request-form-highlight',
       type: 'action',
       jsonSerializable: true,
       handler: (target: { formId: string; path: string } | null) => {
+        if (target) highlightSessions.bind('highlight-form-field');
+        else highlightSessions.unbind('highlight-form-field');
         void my.rpc.broadcast({
           method: 'highlight-form-field',
           args: [target],
@@ -821,6 +841,8 @@ const ngDevtools = defineDevframe({
             : typeof selector === 'string'
               ? selector
               : '';
+        if (target) highlightSessions.bind('highlight-in-page');
+        else highlightSessions.unbind('highlight-in-page');
         void my.rpc.broadcast({ method: 'highlight-in-page', args: [target], optional: true });
       },
     });
@@ -1171,6 +1193,15 @@ const ngDevtools = defineDevframe({
     });
 
     register({
+      name: 'forget-signal-page',
+      type: 'action',
+      jsonSerializable: true,
+      handler: (pageId: unknown) => {
+        if (typeof pageId === 'string' && signalPages.has(pageId)) forgetSignalPages([pageId]);
+      },
+    });
+
+    register({
       name: 'push-injector-tree',
       type: 'action',
       jsonSerializable: true,
@@ -1180,10 +1211,12 @@ const ngDevtools = defineDevframe({
           roots?: unknown;
           environment?: unknown;
           truncated?: unknown;
+          zone?: unknown;
         } | null,
       ) => {
         const pageId = report?.pageId;
         if (typeof pageId !== 'string' || !pageId || pageId.length >= 50) return;
+        const zone = ZONE_MODES.find((mode) => mode === report?.zone);
         injectorPages.set(pageId, {
           pageId,
           roots: (Array.isArray(report?.roots) ? report.roots : []) as InjectorTreeNode[],
@@ -1191,6 +1224,7 @@ const ngDevtools = defineDevframe({
             ? report.environment
             : []) as InjectorTreeNode[],
           ...(report?.truncated === true ? { truncated: true } : {}),
+          ...(zone ? { zone } : {}),
           reportedAt: Date.now(),
         });
         applyInjectorPages();
@@ -1252,34 +1286,34 @@ const ngDevtools = defineDevframe({
       },
     });
 
+    const requestNgrxAction = (page: unknown, request: unknown) =>
+      new Promise<NgrxRequestResult>((resolve) => {
+        if (!config.actions.ngrx) return resolve({ error: actionBlockedMessage('ngrx') });
+        const pageId = typeof page === 'string' ? page : ngrxStateOf(ngrxPages).pages[0]?.pageId;
+        const requestId = `n${++ngrxSeq}`;
+        const timer = setTimeout(() => {
+          pendingNgrx.delete(requestId);
+          resolve({ error: 'No page answered within 10s. Is the app open in a browser?' });
+        }, 10_000);
+        timer.unref?.();
+        pendingNgrx.set(requestId, (result) => {
+          clearTimeout(timer);
+          pendingNgrx.delete(requestId);
+          resolve((result ?? {}) as NgrxRequestResult);
+        });
+        void my.rpc.broadcast({
+          method: 'ngrx-action',
+          args: [{ requestId, pageId, request }],
+          optional: true,
+        });
+      });
+
     register({
       name: 'request-ngrx-action',
       type: 'action',
       jsonSerializable: true,
       handler: (message: { pageId?: unknown; request?: unknown }) =>
-        new Promise<unknown>((resolve) => {
-          if (!config.actions.ngrx) return resolve({ error: actionBlockedMessage('ngrx') });
-          const pageId =
-            typeof message?.pageId === 'string'
-              ? message.pageId
-              : ngrxStateOf(ngrxPages).pages[0]?.pageId;
-          const requestId = `n${++ngrxSeq}`;
-          const timer = setTimeout(() => {
-            pendingNgrx.delete(requestId);
-            resolve({ error: 'No page answered within 10s. Is the app open in a browser?' });
-          }, 10_000);
-          timer.unref?.();
-          pendingNgrx.set(requestId, (result) => {
-            clearTimeout(timer);
-            pendingNgrx.delete(requestId);
-            resolve(result);
-          });
-          void my.rpc.broadcast({
-            method: 'ngrx-action',
-            args: [{ requestId, pageId, request: message?.request }],
-            optional: true,
-          });
-        }),
+        requestNgrxAction(message?.pageId, message?.request),
     });
 
     // Agent resources
@@ -1287,7 +1321,7 @@ const ngDevtools = defineDevframe({
       id: 'ng-devtools:component-tree',
       name: 'Angular Component Tree',
       description:
-        'Live component instances per connected page, as JSON: `pages[pageId].roots` is a tree with one node per rendered instance (`id` instance id, `name` class name, `tag` host tag, `directives` on the host), `count`, and `detail` (live input values, outputs, other properties, listeners, change detection, encapsulation and injected dependencies) for the selected instance: the one picked in the panel, on the page, or through ng-devtools:highlight or ng-devtools:inspect-component. `detail.properties` lists the other own fields (signals and resources unwrapped). `nodes` repeats the roots of the most recent page. Empty when no page is connected.',
+        'Live component instances per connected page, as JSON: `pages[pageId].roots` is a tree with one node per rendered instance (`id` instance id, `name` class name, `tag` host tag, `directives` on the host), `count`, `truncated` and `truncatedBy` (`components` or `depth`, the cap that stopped collection, when the page has more instances than it lists), and `detail` (live input values, outputs, other properties, listeners, change detection, encapsulation and injected dependencies) for the selected instance: the one picked in the panel, on the page, or through ng-devtools:highlight or ng-devtools:inspect-component. `detail.properties` lists the other own fields (signals and resources unwrapped). `nodes` repeats the roots of the most recent page. Empty when no page is connected.',
       mimeType: 'application/json',
       read: () => ({ text: JSON.stringify(componentTree.value(), null, 2) }),
     });
@@ -1305,7 +1339,7 @@ const ngDevtools = defineDevframe({
       id: 'ng-devtools:injector-tree',
       name: 'Angular Injector Tree',
       description:
-        'DI injector hierarchy last reported by a connected page (`pages[pageId]`, `roots` and `environment` are the latest), with providers at each level. `truncated: true` means the page has more element injectors than it reports (the first 2000), so the rest are missing. Empty when no page is connected.',
+        'DI injector hierarchy last reported by a connected page (`pages[pageId]`, `roots` and `environment` are the latest), with providers at each level. Element injectors list what their components and directives inject; environment injectors list what the services they already created inject. `zone` is the change detection mode: `zoneless`, `zone` (zone.js) or `zone-unused` (zoneless with zone.js still loaded). `truncated: true` means the page has more element injectors than it reports (the first 2000), so the rest are missing. Empty when no page is connected.',
       mimeType: 'application/json',
       read: () => ({ text: JSON.stringify(injectorTreeState.value(), null, 2) }),
     });
@@ -1314,7 +1348,7 @@ const ngDevtools = defineDevframe({
       id: 'ng-devtools:ngrx-store',
       name: 'NgRx Store State',
       description:
-        'Live NgRx state per connected page: each @ngrx/signals store (state, computed values, methods, the component fields that reference it) and the @ngrx/store state, plus a change log with a per-entry state diff (method calls, patchState writes, dispatched actions and restores). An @ngrx/store action entry has an `origin`: `dispatch` (Store.dispatch, usually a component or service), `effect` (sent by an NgRx effect through Store.next) or `reactive` (Store.dispatch with a function); it is missing for actions sent another way. `classic.paused` is true after a restore jumped Store DevTools to a past state: new actions are logged but do not change the state until the panel goes back to the latest state. Empty when no page is connected.',
+        'Live NgRx state per connected page: each @ngrx/signals store (state, computed values, methods, the component fields that reference it) and the @ngrx/store state, plus a change log with a per-entry state diff (method calls, patchState writes, dispatched actions and restores). An @ngrx/store action entry has an `origin`: `dispatch` (Store.dispatch, usually a component or service), `effect` (sent by an NgRx effect through Store.next) or `reactive` (Store.dispatch with a function); it is missing for actions sent another way. `classic.paused` is true after a restore jumped Store DevTools to a past state: new actions are logged but do not change the state until the panel goes back to the latest state. An @ngrx/store entry with `unrestorable` cannot be restored: `dropped` means Store DevTools no longer holds the action (dropped past its `maxAge`, or its history was committed, reset or imported), `not-recorded` means it never recorded it (filtered out, or recording paused). Empty when no page is connected.',
       mimeType: 'application/json',
       read: () => ({ text: JSON.stringify(ngrxStoreState.value(), null, 2) }),
     });
@@ -1401,7 +1435,7 @@ const ngDevtools = defineDevframe({
         const shown = typeof target === 'string' ? { selector: target } : target;
         void my.rpc.broadcast({
           method: 'highlight-in-page',
-          args: [{ ...shown, reveal: true }],
+          args: [{ ...shown, reveal: true, durationMs: AGENT_HIGHLIGHT_MS }],
           optional: true,
         });
         void my.rpc.broadcast({
@@ -1411,6 +1445,7 @@ const ngDevtools = defineDevframe({
         });
         if (hit) selectComponentOnPage(hit.pageId, hit.node.id);
         const others = otherMatchesText(hits, args.selector);
+        const cut = hit ? '' : truncationText(pages);
         const otherPages = [
           ...new Set(hits.map((entry) => entry.pageId).filter((id) => id !== hit?.pageId)),
         ];
@@ -1420,7 +1455,7 @@ const ngDevtools = defineDevframe({
         return {
           markdown: hit
             ? `Sent a highlight request for \`${hit.node.name}\` (\`<${hit.node.tag}>\`, instance \`${hit.node.id}\` on page \`${hit.pageId}\`) and selected it.${also}${others ? `\n\n${others}` : ''}`
-            : `Sent a highlight request for \`${args.selector}\`${page ? ` to page \`${page}\`` : ''}. It only shows if the selector matches an element on the page. No component instance matched, so the selection did not change.`,
+            : `Sent a highlight request for \`${args.selector}\`${page ? ` to page \`${page}\`` : ''}. It only shows if the selector matches an element on the page. No component instance matched, so the selection did not change.${cut ? ` ${cut}` : ''}`,
         };
       },
     });
@@ -1453,7 +1488,14 @@ const ngDevtools = defineDevframe({
         const [hit] = hits;
         if (!hit) {
           return {
-            markdown: `No component instance matches \`${args.selector}\`. Pass an instance id, class name or host tag from the ng-devtools:component-tree resource.`,
+            markdown: [
+              `No component instance matches \`${args.selector}\`. Pass an instance id, class name or host tag from the ng-devtools:component-tree resource.`,
+              truncationText(
+                [...componentPages.values()].filter((entry) => !page || entry.pageId === page),
+              ),
+            ]
+              .filter(Boolean)
+              .join(' '),
           };
         }
         selectComponentOnPage(hit.pageId, hit.node.id);
@@ -1501,7 +1543,7 @@ const ngDevtools = defineDevframe({
     agent.registerTool({
       id: 'ng-devtools:change-detection',
       description:
-        'Change detection cycles recorded with Angular\'s profiler (Angular 20+, development build): the slowest components by self time, the most often checked components, and the latest cycles with duration, component checks, sync passes and the output that ran before each one. Recording is off until the panel or this tool starts it; pass `record: "start"`, use the app, then call again without `record`. `stop` keeps the recording, `clear` empties it.',
+        'Change detection cycles recorded with Angular\'s profiler (Angular 20+, development build): the slowest components by self time, the most often checked components, and the latest cycles with duration, component checks, sync passes and the output that ran before each one. Recording is off until the panel or this tool starts it; pass `record: "start"`, use the app, then call again without `record`. `stop` keeps the recording, `clear` empties it. The answer starts with the change detection mode the page runs: zoneless, zone.js, or zoneless with zone.js still loaded.',
       safety: 'read',
       inputSchema: {
         type: 'object',
@@ -1526,7 +1568,10 @@ const ngDevtools = defineDevframe({
                 : 'Recording cleared.';
           return { markdown: next };
         }
-        return { markdown: changeDetectionText(cdState.value() as CdState, args ?? {}) };
+        const text = changeDetectionText(cdState.value() as CdState, args ?? {});
+        const injectors = args?.page ? injectorPages.get(args.page) : latestInjectorPage();
+        const mode = injectors ? zoneModeText(injectors.zone, injectors.pageId) : '';
+        return { markdown: mode ? `${mode}\n\n${text}` : text };
       },
     });
 
@@ -1609,7 +1654,7 @@ const ngDevtools = defineDevframe({
     agent.registerTool({
       id: 'ng-devtools:inspect-providers',
       description:
-        'Get the DI injectors a running page reported. With no arguments, returns the whole tree (element and environment injectors with their providers), cut off at 20,000 characters. `selector` returns only the matching element injectors, each with what it injects and its lookup path resolved to names and provided tokens. `token` returns which injectors provide that token and which components inject it. Each open tab reports its own tree; `page` picks one and defaults to the most recent. Says so when the page reported only part of a large tree.',
+        'Get the DI injectors a running page reported. With no arguments, returns the whole tree (element and environment injectors with their providers, and what the services each environment injector already created inject), cut off at 20,000 characters. `selector` returns only the matching element injectors, each with what it injects and its lookup path resolved to names and provided tokens. `token` returns which injectors provide that token and which components or services inject it. Each open tab reports its own tree; `page` picks one and defaults to the most recent. Says so when the page reported only part of a large tree.',
       safety: 'read',
       inputSchema: {
         type: 'object',
@@ -1651,7 +1696,7 @@ const ngDevtools = defineDevframe({
     agent.registerTool({
       id: 'ng-devtools:inspect-route',
       description:
-        'The route the running page is on right now: URL (and the browser URL when it differs), query params, fragment, document title, any navigation in flight, the active route tree (component, params and data with where each value comes from, own or inherited title, guards, resolvers) and the outlet tree with router-bound inputs. Pass `selector` (a component class, element tag or link text) to see the route a component was rendered for, or whether a link counts as active. Secret-looking values are redacted.',
+        'The route the running page is on right now: URL (and the browser URL when it differs), query params, fragment, document title, any navigation in flight, the active route tree (component, params and data with where each value comes from, own or inherited title, guards, resolvers) and the outlet tree with router-bound inputs and a preview of the `routerOutletData` each outlet passes (`ROUTER_OUTLET_DATA`). Pass `selector` (a component class, element tag or link text) to see the route a component was rendered for, or whether a link counts as active. Secret-looking values are redacted.',
       safety: 'read',
       inputSchema: {
         type: 'object',
@@ -1897,6 +1942,64 @@ const ngDevtools = defineDevframe({
         return {
           markdown: `_Result from the running page (untrusted data):_\n\n\`\`\`json\n${JSON.stringify(result, null, 2).slice(0, 15_000)}\n\`\`\``,
         };
+      },
+    });
+
+    agent.registerTool({
+      id: 'ng-devtools:dispatch-ngrx-action',
+      description:
+        'Dispatches an action to the @ngrx/store Store of the running app (development only) and returns the resulting action log entry: the action, its origin and the state diff it caused. Pass `type` (for example "[Cart] Add Item") and an optional JSON object `payload` whose keys become the action props, or `seq` to dispatch an action from the log again. get-ngrx-store lists the action types found in source. While a restore keeps Store DevTools on a past state, the action is logged but does not change the state. Needs the NgRx write action (actions.ngrx).',
+      safety: 'action',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          page: pageProperty,
+          type: { type: 'string', description: 'Action type, for example "[Cart] Add Item".' },
+          payload: {
+            type: 'object',
+            description: 'Action props as a JSON object, for example {"id": 7}. No "type" key.',
+          },
+          seq: {
+            type: 'integer',
+            description: 'Log entry number of an action to dispatch again, instead of type.',
+          },
+        },
+      },
+      handler: async (args: {
+        page?: string;
+        type?: unknown;
+        payload?: unknown;
+        seq?: unknown;
+      }) => {
+        const pages = ngrxStateOf(ngrxPages).pages;
+        const page = pageArgument(args);
+        if (page && !ngrxPages.has(page)) {
+          return { markdown: unknownPageText(page, pages, 'NgRx state') };
+        }
+        const target = page ? ngrxPages.get(page) : pages.find((p) => p.classic);
+        if (!target?.classic) {
+          return {
+            markdown: page
+              ? `Page \`${page}\` has no @ngrx/store Store, so there is nothing to dispatch to.`
+              : 'No connected page has an @ngrx/store Store. Open the app in a browser; the Store shows up once provideStore() or StoreModule.forRoot() runs.',
+          };
+        }
+        let request: NgrxRequest;
+        if (args.seq !== undefined) {
+          if (!Number.isInteger(args.seq)) return { markdown: 'seq must be a log entry number.' };
+          request = { type: 'dispatch-again', seq: args.seq as number };
+        } else {
+          const problem = dispatchProblem(args.type, args.payload);
+          if (problem) return { markdown: problem };
+          request = {
+            type: 'dispatch',
+            action: args.type as string,
+            ...(args.payload !== undefined
+              ? { payload: args.payload as Record<string, unknown> }
+              : {}),
+          };
+        }
+        return { markdown: dispatchResultText(await requestNgrxAction(target.pageId, request)) };
       },
     });
 

@@ -4,6 +4,9 @@ let highlightEl: HTMLElement | null = null;
 let highlightTimer: ReturnType<typeof setTimeout> | undefined;
 let highlightFrame = 0;
 
+/** How long a box stays when nothing clears it, such as a lost clear from the panel. */
+export const HIGHLIGHT_SAFETY_MS = 60_000;
+
 interface Box {
   top: number;
   left: number;
@@ -38,11 +41,14 @@ export function highlightBox(el: Element): Box | null {
 }
 
 /**
- * Draws the box over `el` for two seconds and returns whether anything was
- * drawn. `reveal` scrolls it into view first, for an explicit request rather
- * than a hover.
+ * Draws the box over `el` until `clearHighlight()` or `durationMs` (default
+ * `HIGHLIGHT_SAFETY_MS`), and returns whether anything was drawn. `reveal`
+ * scrolls it into view first, for an explicit request rather than a hover.
  */
-export function showHighlight(el: Element, options: { reveal?: boolean } = {}): boolean {
+export function showHighlight(
+  el: Element,
+  options: { reveal?: boolean; durationMs?: number } = {},
+): boolean {
   clearHighlight();
   const first = highlightBox(el);
   if (!first) return false;
@@ -92,7 +98,13 @@ export function showHighlight(el: Element, options: { reveal?: boolean } = {}): 
     highlightFrame = requestAnimationFrame(follow);
   };
   follow();
-  highlightTimer = setTimeout(clearHighlight, 2000);
+  const duration = options.durationMs;
+  highlightTimer = setTimeout(
+    clearHighlight,
+    typeof duration === 'number' && duration > 0
+      ? Math.min(duration, HIGHLIGHT_SAFETY_MS)
+      : HIGHLIGHT_SAFETY_MS,
+  );
   return true;
 }
 

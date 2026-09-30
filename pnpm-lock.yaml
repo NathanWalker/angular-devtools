@@ -368,6 +368,9 @@ importers:
       '@angular/core':
         specifier: ^22.1.0
         version: 22.1.7(@angular/compiler@22.1.7)(rxjs@7.8.2)(zone.js@0.16.3)
+      hono:
+        specifier: 4.13.8
+        version: 4.13.8
       rxjs:
         specifier: ~7.8.0
         version: 7.8.2

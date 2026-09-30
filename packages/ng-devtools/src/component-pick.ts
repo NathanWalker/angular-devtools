@@ -40,6 +40,9 @@ export function startComponentPick(options: PickOptions): {
       if (host instanceof HTMLElement) options.highlight.show(host);
       else options.highlight.clear();
     };
+    const onLeave = (event: MouseEvent) => {
+      if (!event.relatedTarget) options.highlight.clear();
+    };
     const onClick = (event: Event) => {
       if (ownElement(event.target)) return;
       event.preventDefault();
@@ -71,6 +74,7 @@ export function startComponentPick(options: PickOptions): {
       finish = () => {};
       doc.removeEventListener('click', onClick, true);
       doc.removeEventListener('mouseover', onHover, true);
+      doc.removeEventListener('mouseout', onLeave, true);
       doc.removeEventListener('keydown', onKey, true);
       clearTimeout(timer);
       options.highlight.clear();
@@ -80,6 +84,7 @@ export function startComponentPick(options: PickOptions): {
     popup?.setAttribute('data-picking', '');
     doc.addEventListener('click', onClick, true);
     doc.addEventListener('mouseover', onHover, true);
+    doc.addEventListener('mouseout', onLeave, true);
     doc.addEventListener('keydown', onKey, true);
   });
   return { result, cancel: () => finish({ ok: false, error: 'Picking cancelled.' }) };

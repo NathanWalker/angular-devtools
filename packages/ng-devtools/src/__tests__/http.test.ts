@@ -10,6 +10,7 @@ import {
   type EnvironmentInjector,
 } from '@angular/core';
 import {
+  HttpErrorResponse,
   HttpHeaders,
   HttpParams,
   HttpRequest,
@@ -376,6 +377,38 @@ describe('interceptor', () => {
     expect(parseBody('{"a":1}', 'text')).toBe('{"a":1}');
     expect(parseBody(undefined, 'text')).toBe('');
     expect(parseBody('{"a":1}')).toEqual({ a: 1 });
+  });
+
+  it('builds mock bodies and content types that match the response type', async () => {
+    const answer = (responseType: 'json' | 'text' | 'blob' | 'arraybuffer', status: number) =>
+      new Promise<{ body: unknown; type: string | null }>((resolve) =>
+        run(new HttpRequest('GET', '/api/products', null, { responseType }), () => {
+          throw new Error('the request should not reach the backend');
+        }).subscribe({
+          next: (event) => {
+            if (event instanceof HttpResponse)
+              resolve({ body: event.body, type: event.headers.get('content-type') });
+          },
+          error: (error: HttpErrorResponse) =>
+            resolve({ body: error.error, type: error.headers.get('content-type') }),
+        }),
+      );
+    for (const status of [200, 500]) {
+      storeRules([rule({ status, body: '{"a":1}' })]);
+      const json = await answer('json', status);
+      expect(json).toEqual({ body: { a: 1 }, type: 'application/json' });
+      const text = await answer('text', status);
+      expect(text).toEqual({ body: '{"a":1}', type: 'text/plain' });
+      const blob = await answer('blob', status);
+      expect(blob.body).toBeInstanceOf(Blob);
+      expect(await (blob.body as Blob).text()).toBe('{"a":1}');
+      expect(blob.type).toBe('application/octet-stream');
+      const buffer = await answer('arraybuffer', status);
+      expect(buffer.body).toBeInstanceOf(ArrayBuffer);
+      expect(new TextDecoder().decode(buffer.body as ArrayBuffer)).toBe('{"a":1}');
+      expect(buffer.type).toBe('application/octet-stream');
+    }
+    expect(httpRegistry().calls?.[2]).toMatchObject({ mocked: true, preview: '{"a":1}' });
   });
 
   it('records a request cancelled during a delay rule', () => {

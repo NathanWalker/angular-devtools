@@ -15,6 +15,7 @@ export interface NgrxStoreEntry {
   file: string;
   line: number;
   detail?: string;
+  types?: string[];
 }
 
 export interface NgrxSignalStoreInfo {
@@ -59,6 +60,7 @@ export interface NgrxLogEntry {
   timestamp: number;
   diff: NgrxDiffEntry[];
   restorable: boolean;
+  unrestorable?: 'dropped' | 'not-recorded';
 }
 
 export interface NgrxPage {

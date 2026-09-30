@@ -236,10 +236,9 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     Date.now,
     (value, name) => graphValue(name, value),
   );
-  const restoreSignalHook = on.signals
-    ? await installSignalWriteHook(signalHistory.onWrite)
-    : () => {};
-  if (!own(restoreSignalHook)) return;
+  const restoreSignalHook = on.signals ? await installSignalWriteHook(signalHistory.onWrite) : null;
+  if (!own(restoreSignalHook ?? (() => {}))) return;
+  const writeHookMissing = on.signals && !restoreSignalHook;
 
   let signalTarget: SignalTarget = null;
   let lastSignalKey = '';
@@ -277,6 +276,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     }
     const answer = (await my.rpc.call('push-signal-graph', {
       ...graph,
+      ...(writeHookMissing ? { writeHook: false as const } : {}),
       pageId,
       ...(full ? { history } : { historyDelta: history }),
     })) as { delta?: boolean } | undefined;
@@ -502,21 +502,32 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     jsonSerializable: true,
     handler: (
       selector:
-        string | { pageId?: string; id?: string; selector?: string; reveal?: boolean } | null,
+        | string
+        | {
+            pageId?: string;
+            id?: string;
+            selector?: string;
+            reveal?: boolean;
+            durationMs?: number;
+          }
+        | null,
     ) => {
       clearHighlight();
       if (selector && typeof selector === 'object') {
         if (selector.pageId && selector.pageId !== pageId) return;
-        const reveal = selector.reveal === true;
+        const options = {
+          reveal: selector.reveal === true,
+          ...(typeof selector.durationMs === 'number' ? { durationMs: selector.durationMs } : {}),
+        };
         if (typeof selector.id === 'string') {
           const host = elementById(selector.id);
-          if (host instanceof Element) showHighlight(host, { reveal });
+          if (host instanceof Element) showHighlight(host, options);
           return;
         }
-        if (typeof selector.selector === 'string') highlightSelector(selector.selector, reveal);
+        if (typeof selector.selector === 'string') highlightSelector(selector.selector, options);
         return;
       }
-      if (typeof selector === 'string') highlightSelector(selector, false);
+      if (typeof selector === 'string') highlightSelector(selector, {});
     },
   });
 
@@ -614,6 +625,9 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     forget('router', 'forget-router-page');
     forget('pipes', 'forget-pipes-page');
     forget('components', 'forget-component-page');
+    lastSignalKey = '';
+    historyDelta = false;
+    forget('signals', 'forget-signal-page');
     cd?.leave();
     lastInjectorJson = '';
     forget('injectors', 'forget-injector-page');
@@ -653,7 +667,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   });
 }
 
-function highlightSelector(selector: string, reveal: boolean) {
+function highlightSelector(selector: string, options: { reveal?: boolean; durationMs?: number }) {
   if (!selector) return;
   // The selector comes from an agent, so it may not be valid CSS.
   let el: Element | null = null;
@@ -662,7 +676,7 @@ function highlightSelector(selector: string, reveal: boolean) {
   } catch {
     return;
   }
-  if (el) showHighlight(el, { reveal });
+  if (el) showHighlight(el, options);
 }
 
 function findAngularElements(): Element[] {
@@ -681,14 +695,15 @@ export async function installSignalWriteHook(
   onWrite: (node: RawSignalNode) => void,
   load: () => Promise<{ setPostSignalSetFn: (fn: SignalSetHook) => SignalSetHook }> = () =>
     import('@angular/core/primitives/signals') as never,
-): Promise<() => void> {
+): Promise<(() => void) | null> {
   let setHook: (fn: SignalSetHook) => SignalSetHook;
   try {
     ({ setPostSignalSetFn: setHook } = await load());
   } catch {
     // Without the hook, history falls back to poll samples only.
-    return () => {};
+    return null;
   }
+  if (typeof setHook !== 'function') return null;
   let prev: SignalSetHook = null;
   let active = true;
   const hook = (node: RawSignalNode) => {

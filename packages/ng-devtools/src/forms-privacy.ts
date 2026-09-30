@@ -2,6 +2,23 @@ export const REDACTED = '[redacted]';
 
 export type RedactReason = 'key' | 'input-type' | 'autocomplete' | 'marker' | 'parent' | 'config';
 
+export const REDACT_LABELS: Record<RedactReason, string> = {
+  key: 'name looks secret',
+  'input-type': 'password input',
+  autocomplete: 'autocomplete is a secret kind',
+  marker: 'marked as mask',
+  parent: 'inside a secret group',
+  config: 'listed in mask',
+};
+
+/** How to let DevTools write a field redacted for `reason`; `key` is the name that matched. */
+export function unmaskHint(reason: RedactReason, key: string): string {
+  const byKey = `add "${key}" to unmask on window.__NG_DEVTOOLS_FORMS__ or to redaction.unmask`;
+  return reason === 'key' || reason === 'parent' || reason === 'config'
+    ? byKey
+    : `add data-ng-devtools="unmask" to the field, or ${byKey}`;
+}
+
 const SECRET_WORDS = new Set([
   'password',
   'passwd',

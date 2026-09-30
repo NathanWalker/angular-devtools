@@ -117,6 +117,33 @@ describe('component agent tools', () => {
     }
   });
 
+  it('says a component may be past the cap when the tree is truncated', async () => {
+    const { ctx, push, call } = await boot();
+    vi.spyOn(ctx.rpc, 'broadcast').mockImplementation((async () => {}) as never);
+    await push('push-component-tree', {
+      pageId: 'p1',
+      roots,
+      count: 2000,
+      truncated: true,
+      truncatedBy: { components: 2000, depth: 'x' },
+      detail: null,
+    });
+    const state = (
+      await (
+        ctx.rpc as unknown as {
+          sharedState: { get: (key: string) => Promise<{ value: () => unknown }> };
+        }
+      ).sharedState.get('ng-devtools:component-tree')
+    ).value() as { pages: Record<string, unknown> };
+    expect(state.pages['p1']).toMatchObject({ truncated: true, truncatedBy: { components: 2000 } });
+    expect(state.pages['p1']).not.toHaveProperty('truncatedBy.depth');
+    const note =
+      'stops at the first 2000 component instances, so instances past it are not listed or searchable';
+    expect(await call('inspect-component', { selector: 'Missing' })).toContain(note);
+    expect(await call('highlight', { selector: '.missing' })).toContain(note);
+    expect(await call('inspect-component', { selector: 'c2', page: 'p1' })).not.toContain(note);
+  });
+
   it('inspect-component and highlight narrow the search to one page', async () => {
     const { ctx, push, call } = await boot();
     await push('push-component-tree', { pageId: 'p1', roots, count: 3, detail: null });

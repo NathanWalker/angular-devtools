@@ -5,6 +5,7 @@ import {
   type FormEvent,
   type FormFieldNode,
 } from '../forms.ts';
+import { REDACT_LABELS } from '../forms-privacy.ts';
 import { lintForm, lintSetupErrors, type FormLintFinding } from './forms-lint.ts';
 import {
   UNTRUSTED,
@@ -115,7 +116,7 @@ export function explainFieldText(
   const lines = [`${where} in ${code(form.label)} (${form.kind}, ${form.id}): ${flags(node)}.`];
   if (node.type === 'control') {
     lines.push(
-      `Value: ${detailOf(node.value)}${node.redacted ? ` (redacted: ${node.redacted})` : ''}.`,
+      `Value: ${detailOf(node.value)}${node.redacted ? ` (redacted: ${REDACT_LABELS[node.redacted] ?? node.redacted})` : ''}.`,
     );
   }
   if (node.uncommitted !== undefined) {

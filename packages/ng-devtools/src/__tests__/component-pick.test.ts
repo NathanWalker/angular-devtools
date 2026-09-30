@@ -52,6 +52,18 @@ describe('startComponentPick', () => {
     expect(later.defaultPrevented).toBe(false);
   });
 
+  it('keeps the hover box while the pointer stays and clears it when the pointer leaves the page', async () => {
+    const { pick, highlight, card } = setup();
+    const button = card.querySelector('button')!;
+    button.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    button.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: card }));
+    expect(highlight.clear).not.toHaveBeenCalled();
+    button.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: null }));
+    expect(highlight.clear).toHaveBeenCalledTimes(1);
+    pick.cancel();
+    await pick.result;
+  });
+
   it('ignores the devtools popup and says when a click is outside any component', async () => {
     const { pick, highlight } = setup();
     const fab = document.querySelector('.fab')!;

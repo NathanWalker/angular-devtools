@@ -1,120 +1,192 @@
-import { TestBed } from '@angular/core/testing';
+import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import type { DevframeRpcClient } from 'devframe/client';
 import { afterEach, describe, expect, it } from 'vitest';
 import { StoreInspector } from '../pages/store-inspector';
-import type { NgrxPage, NgrxState } from '../pages/store-types';
+import type { NgrxLogEntry, NgrxPage, NgrxStoreEntry } from '../pages/store-types';
 
-afterEach(() => {
-  TestBed.resetTestingModule();
-  document.body.innerHTML = '';
-});
+type Call = (name: string, arg?: Record<string, unknown>) => Promise<unknown>;
 
-function page(paused: boolean): NgrxPage {
+function fakeClient(call: Call, page: NgrxPage): DevframeRpcClient {
+  const rpc = {
+    call,
+    callEvent: () => Promise.resolve(),
+    sharedState: () => Promise.resolve({ value: () => ({ pages: [page] }), on: () => () => {} }),
+  };
+  return { connectionMeta: {}, scope: () => ({ rpc }) } as unknown as DevframeRpcClient;
+}
+
+function entry(seq: number, extra: Partial<NgrxLogEntry> = {}): NgrxLogEntry {
+  return {
+    seq,
+    source: 'store',
+    storeId: 'store',
+    type: '[Cart] Add Item',
+    action: { type: '[Cart] Add Item', id: seq },
+    origin: 'dispatch',
+    timestamp: 0,
+    diff: [],
+    restorable: true,
+    ...extra,
+  };
+}
+
+function pageWith(log: NgrxLogEntry[]): NgrxPage {
   return {
     pageId: 'p1',
-    url: 'http://localhost/',
-    title: 'Shop',
+    url: '/',
+    title: 'App',
     stores: [],
-    classic: { state: { n: 2 }, devtools: true, scope: 'root', ...(paused ? { paused } : {}) },
-    log: [1, 2].map((seq) => ({
-      seq,
-      source: 'store',
-      storeId: 'store',
-      type: 'inc',
-      timestamp: seq,
-      diff: [],
-      restorable: true,
-    })),
-    reportedAt: 1,
-  } as NgrxPage;
-}
-
-function fakeClient(result: { ok: boolean; paused?: boolean; message: string }) {
-  const listeners = new Set<(value: unknown) => void>();
-  let value: NgrxState = { pages: [page(false)] };
-  const client = {
-    connectionMeta: {},
-    scope: () => ({
-      rpc: {
-        call: async (name: string) => {
-          if (name !== 'request-ngrx-action') return [];
-          if (result.paused) {
-            value = { pages: [page(true)] };
-            listeners.forEach((listener) => listener(value));
-          }
-          return result;
-        },
-        sharedState: async () => ({
-          value: () => value,
-          on: (_: string, listener: (value: unknown) => void) => {
-            listeners.add(listener);
-            return () => listeners.delete(listener);
-          },
-        }),
-      },
-    }),
+    classic: { state: { items: [] }, devtools: true, scope: 'root' },
+    log,
+    reportedAt: 0,
   };
-  return client as unknown as DevframeRpcClient;
 }
 
-async function restoreNewest(result: { ok: boolean; paused?: boolean; message: string }) {
-  const fixture = TestBed.createComponent(StoreInspector);
-  document.body.appendChild(fixture.nativeElement);
-  fixture.componentRef.setInput('rpc', fakeClient(result));
-  await fixture.whenStable();
-  fixture.detectChanges();
-  await fixture.componentInstance.restore(2, true);
-  await fixture.whenStable();
-  fixture.detectChanges();
+const source: NgrxStoreEntry[] = [
+  {
+    name: 'CartActions',
+    kind: 'action',
+    file: 'src/cart.actions.ts',
+    line: 3,
+    types: ['[Cart] Remove Item', '[Cart] Add Item'],
+  },
+];
+
+async function settle(fixture: ComponentFixture<unknown>) {
+  for (let i = 0; i < 3; i++) {
+    await new Promise((resolve) => setTimeout(resolve));
+    await fixture.whenStable();
+  }
+}
+
+function root(fixture: ComponentFixture<unknown>): HTMLElement {
   return fixture.nativeElement as HTMLElement;
 }
 
-describe('StoreInspector restore focus', () => {
-  it('focuses the state when restoring the newest action does not pause the store', async () => {
-    const host = await restoreNewest({ ok: true, paused: false, message: 'Jumped.' });
-    expect(host.querySelector('.paused')).toBeNull();
-    expect(document.activeElement).toBe(host.querySelector('pre.tree'));
-  });
+function button(fixture: ComponentFixture<unknown>, name: string): HTMLButtonElement | undefined {
+  return Array.from(root(fixture).querySelectorAll<HTMLButtonElement>('button')).find(
+    (b) => (b.textContent ?? '').trim() === name,
+  );
+}
 
-  it('focuses "Back to latest" when the restore pauses the store', async () => {
-    const host = await restoreNewest({ ok: true, paused: true, message: 'Jumped. Paused.' });
-    const latest = host.querySelector('.paused button');
-    expect(latest).not.toBeNull();
-    expect(document.activeElement).toBe(latest);
-  });
+function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  el.value = value;
+  el.dispatchEvent(new Event('input'));
+}
 
-  it('focuses "Back to latest" after a deferred restore on an already paused page', async () => {
-    let resolve!: (value: unknown) => void;
-    const client = {
-      connectionMeta: {},
-      scope: () => ({
-        rpc: {
-          call: async (name: string) =>
-            name === 'request-ngrx-action' ? new Promise((done) => (resolve = done)) : [],
-          sharedState: async () => ({
-            value: () => ({ pages: [page(true)] }),
-            on: () => () => undefined,
-          }),
-        },
+async function mount(log: NgrxLogEntry[], answer: Call = () => Promise.resolve({ ok: true })) {
+  const calls: { name: string; arg?: Record<string, unknown> }[] = [];
+  const fixture = TestBed.createComponent(StoreInspector);
+  fixture.componentRef.setInput(
+    'rpc',
+    fakeClient((name, arg) => {
+      if (name === 'get-ngrx-store') return Promise.resolve(source);
+      calls.push({ name, arg });
+      return answer(name, arg);
+    }, pageWith(log)),
+  );
+  await settle(fixture);
+  return { fixture, calls };
+}
+
+afterEach(() => {
+  document.body.innerHTML = '';
+});
+
+describe('StoreInspector dispatch', () => {
+  it('suggests action types from source and the log, and dispatches the typed action', async () => {
+    const { fixture, calls } = await mount([entry(1)], () =>
+      Promise.resolve({
+        ok: true,
+        message: 'Dispatched [Cart] Remove Item as #2.',
+        entry: entry(2, { type: '[Cart] Remove Item' }),
       }),
-    } as unknown as DevframeRpcClient;
-    const fixture = TestBed.createComponent(StoreInspector);
-    document.body.appendChild(fixture.nativeElement);
-    fixture.componentRef.setInput('rpc', client);
-    await fixture.whenStable();
-    fixture.detectChanges();
-    const host = fixture.nativeElement as HTMLElement;
-    const latest = host.querySelector('.paused button');
-    expect(latest).not.toBeNull();
+    );
+    const options = Array.from(root(fixture).querySelectorAll('#ngrx-action-types option')).map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(options).toEqual(['[Cart] Add Item', '[Cart] Remove Item']);
 
-    const restoring = fixture.componentInstance.restore(1, true);
-    fixture.detectChanges();
-    await Promise.resolve();
-    fixture.detectChanges();
-    resolve({ ok: true, paused: true, message: 'Jumped. Paused.' });
-    await restoring;
-    await fixture.whenStable();
-    fixture.detectChanges();
-    expect(document.activeElement).toBe(latest);
+    const dispatch = button(fixture, 'Dispatch')!;
+    expect(dispatch.disabled).toBe(true);
+    type(
+      root(fixture).querySelector<HTMLInputElement>('.dispatch-form input')!,
+      '[Cart] Remove Item',
+    );
+    const payload = root(fixture).querySelector<HTMLTextAreaElement>('.dispatch-form textarea')!;
+    type(payload, '[1]');
+    await settle(fixture);
+    expect(root(fixture).querySelector('#ngrx-payload-error')?.textContent).toContain(
+      'JSON object',
+    );
+    expect(payload.getAttribute('aria-invalid')).toBe('true');
+    expect(dispatch.disabled).toBe(true);
+
+    type(payload, '{"id": 7}');
+    await settle(fixture);
+    expect(dispatch.disabled).toBe(false);
+    dispatch.click();
+    await settle(fixture);
+    expect(calls).toEqual([
+      {
+        name: 'request-ngrx-action',
+        arg: {
+          pageId: 'p1',
+          request: { type: 'dispatch', action: '[Cart] Remove Item', payload: { id: 7 } },
+        },
+      },
+    ]);
+    expect(root(fixture).querySelector('.message')?.textContent).toContain('as #2');
+  });
+
+  it('dispatches a logged action again', async () => {
+    const { fixture, calls } = await mount([entry(1)]);
+    (
+      Array.from(root(fixture).querySelectorAll<HTMLButtonElement>('.log-item')).find((b) =>
+        b.textContent?.includes('#1'),
+      ) as HTMLButtonElement
+    ).click();
+    await settle(fixture);
+    button(fixture, 'Dispatch again')!.click();
+    await settle(fixture);
+    expect(calls.at(-1)).toEqual({
+      name: 'request-ngrx-action',
+      arg: { pageId: 'p1', request: { type: 'dispatch-again', seq: 1 } },
+    });
+  });
+});
+
+describe('StoreInspector restore', () => {
+  async function select(log: NgrxLogEntry[], seq: number) {
+    const { fixture } = await mount(log);
+    Array.from(root(fixture).querySelectorAll<HTMLButtonElement>('.log-item'))
+      .find((b) => b.textContent?.includes(`#${seq}`))!
+      .click();
+    await settle(fixture);
+    return fixture;
+  }
+
+  it('offers Restore only for an entry Store DevTools still holds', async () => {
+    const fixture = await select([entry(1)], 1);
+    expect(button(fixture, 'Restore this state')).toBeDefined();
+  });
+
+  it('explains an entry Store DevTools no longer holds', async () => {
+    const fixture = await select([entry(1, { restorable: false, unrestorable: 'dropped' })], 1);
+    expect(button(fixture, 'Restore this state')).toBeUndefined();
+    expect(root(fixture).textContent).toMatch(/no longer holds this action/);
+    expect(root(fixture).textContent).toMatch(/dropped past\s+maxAge/);
+    expect(root(fixture).textContent).toMatch(/committed, reset or imported/);
+    expect(button(fixture, 'Dispatch again')).toBeDefined();
+  });
+
+  it('explains an entry Store DevTools never recorded', async () => {
+    const fixture = await select(
+      [entry(1, { restorable: false, unrestorable: 'not-recorded' })],
+      1,
+    );
+    expect(button(fixture, 'Restore this state')).toBeUndefined();
+    expect(root(fixture).textContent).toMatch(/never recorded this action/);
+    expect(root(fixture).textContent).toContain('actionsBlocklist');
   });
 });

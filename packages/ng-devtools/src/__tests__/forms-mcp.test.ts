@@ -257,6 +257,9 @@ describe('forms MCP tools', () => {
     const age = await call('explain-field', { form: 'form-1', path: 'age' });
     expect(age).toContain('Uncommitted: the input holds 30, which reaches the model on blur.');
     expect(age).toContain('Stale:');
+    expect(await call('explain-field', { form: 'form-1', path: 'password' })).toContain(
+      'Value: "[redacted]" (redacted: name looks secret).',
+    );
     const card = await call('explain-field', { form: 'Profile', path: 'card' });
     expect(card).toContain('Validation is skipped because the field is hidden.');
     expect(await call('explain-field', { form: 'Profile', path: 'nope' })).toContain(

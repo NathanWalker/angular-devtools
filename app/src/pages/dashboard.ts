@@ -62,7 +62,18 @@ interface InjectorNode {
 interface InjectorSnapshot {
   roots?: InjectorNode[];
   environment?: InjectorNode[];
+  zone?: string | null;
   pages?: Record<string, InjectorSnapshot>;
+}
+
+const ZONE_LABELS: Record<string, string> = {
+  zoneless: 'Zoneless',
+  zone: 'zone.js',
+  'zone-unused': 'Zoneless, zone.js loaded',
+};
+
+export function zoneLabel(mode: string | null | undefined): string | null {
+  return mode && Object.hasOwn(ZONE_LABELS, mode) ? ZONE_LABELS[mode] : null;
 }
 
 interface GraphSnapshot {
@@ -170,6 +181,9 @@ export function storeCard(rows: Row[]): Card {
         @if (meta()?.analog; as analog) {
           <li class="analog"><span>Analog</span>{{ analog }}</li>
         }
+        @if (zone(); as zone) {
+          <li><span>Change detection</span>{{ zone }}</li>
+        }
       </ul>
     </section>
 
@@ -206,9 +220,11 @@ export function storeCard(rows: Row[]): Card {
       }
     </div>
 
-    <section class="config" aria-labelledby="config-title">
+    <section class="config" aria-labelledby="config-title" [attr.aria-busy]="!rpc()">
       <h2 id="config-title">Configuration</h2>
-      @if (configItems().length) {
+      @if (!rpc()) {
+        <p>Loading…</p>
+      } @else if (configItems().length) {
         <dl>
           @for (item of configItems(); track item.label) {
             <div>
@@ -496,7 +512,7 @@ export class Dashboard {
   meta = signal<BuildMeta | null>(null);
   private readonly config = computed(() => panelConfig(this.rpc()));
   protected readonly stats = computed(() =>
-    STATS.filter((stat) => tabEnabled(stat.tab, this.config())),
+    this.rpc() ? STATS.filter((stat) => tabEnabled(stat.tab, this.config())) : [],
   );
   protected readonly configItems = computed(() => summarizeNgDevtoolsConfig(this.config()));
   protected readonly metaState = signal<LoadState>('loading');
@@ -507,6 +523,10 @@ export class Dashboard {
   private readonly pageId = hostPageId();
   private readonly destroyRef = inject(DestroyRef);
   private stopLive: (() => void)[] = [];
+
+  protected readonly zone = computed(() =>
+    zoneLabel(injectorTreeFor(this.injectorTree(), this.pageId)?.zone),
+  );
 
   private readonly liveInjectors = computed(() => {
     const tree = injectorTreeFor(this.injectorTree(), this.pageId);

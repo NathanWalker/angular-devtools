@@ -22,6 +22,7 @@ import { Select, type SelectOption } from '../ui/select';
 import {
   countText,
   filterAnnouncement,
+  truncationNotice,
   filterTree,
   nearestRow,
   reconcileSelection,
@@ -96,6 +97,7 @@ interface Page {
   roots: LiveNode[];
   count: number;
   truncated?: boolean;
+  truncatedBy?: { components?: number; depth?: number };
   detail: Detail | null;
   reportedAt: number;
 }
@@ -190,7 +192,7 @@ function bare(name: string): string {
         <p class="pick-message">{{ pickMessage() }}</p>
       }
       @if (page()!.truncated) {
-        <p class="notice">The page has more components than the tree shows.</p>
+        <p class="notice" role="status">{{ truncationText() }}</p>
       }
 
       <div class="layout">
@@ -199,6 +201,9 @@ function bare(name: string): string {
           @if (!rows().length) {
             <div class="state compact tree">
               <p class="state-title">No components match “{{ filter().trim() }}”</p>
+              @if (page()!.truncated) {
+                <p class="state-hint">The filter only searches the components the tree lists.</p>
+              }
               <button type="button" (click)="setFilter('')">Clear filter</button>
             </div>
           }
@@ -1398,8 +1403,15 @@ export class ComponentTree {
   readonly deferBlocks = computed(() => this.page()?.deferBlocks ?? []);
 
   readonly countLabel = computed(() =>
-    countText(this.page()?.count ?? 0, this.filtered().matches, !!this.query()),
+    countText(
+      this.page()?.count ?? 0,
+      this.filtered().matches,
+      !!this.query(),
+      !!this.page()?.truncated,
+    ),
   );
+
+  readonly truncationText = computed(() => truncationNotice(this.page()?.truncatedBy));
 
   readonly rows = computed<Row[]>(() => {
     const rows: Row[] = [];
@@ -1639,7 +1651,9 @@ export class ComponentTree {
   setFilter(value: string) {
     this.filter.set(value);
     const { matches } = this.filtered();
-    this.announcement.set(filterAnnouncement(this.page()?.count ?? 0, matches, value));
+    this.announcement.set(
+      filterAnnouncement(this.page()?.count ?? 0, matches, value, !!this.page()?.truncated),
+    );
   }
 
   async pick() {

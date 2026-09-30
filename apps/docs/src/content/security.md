@@ -135,7 +135,9 @@ A field's value is replaced with `[redacted]` when the field:
 - has a password, one-time-code or credit-card `autocomplete`,
 - sits inside `.sentry-mask`, `.rr-mask`, `[data-private]` or `[data-ng-devtools="mask"]`,
 - has a name that contains a secret word (password, token, card, cvv, apiKey and similar), or a name listed in `mask`, or
-- sits inside a group or array whose name contains a secret word. The panel marks these fields `redacted (parent)`.
+- sits inside a group or array whose name contains a secret word.
+
+The Fields view says why a field is redacted: **name looks secret**, **password input**, **autocomplete is a secret kind**, **marked as mask**, **inside a secret group** or **listed in mask**. The field details say the same where the Set editor is hidden, with a link to this section.
 
 Those values are also removed from error messages. The devtools don't write secret fields unless you unmask them (see [Opt fields in or out](#opt-fields-in-or-out)). Other values are sent as they are, so keep real credentials out of forms you inspect.
 
@@ -159,6 +161,8 @@ The `mask` and `unmask` lists apply to every inspector on the page, not only for
 You can also name secret and unmasked fields on the server, with the `redaction` option. `redaction.secretNames` adds secret names for forms, the router, components, signals, NgRx, pipes, Analog and SSR & HTTP URLs, and `redaction.unmask` joins the `window` list. See [Redaction options](./getting-started/configuration.md#redaction).
 
 Unmasking also changes what the devtools can write. A key listed in `unmask` on `window` can be written. The element marker only lifts the checks that come from the element (password type, `autocomplete` and mask markers), so a field with a secret-looking name is still not written.
+
+A refused write names the reason and the unmask that lifts it. The panel, `form-action` and `fill-form` show the same message.
 
 <ngmd-accordion>
   <ngmd-accordion-item title="The full list of secret words">

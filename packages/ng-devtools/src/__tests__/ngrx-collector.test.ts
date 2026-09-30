@@ -2,7 +2,8 @@
 import { signal } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createNgrxCollector } from '../ngrx-collector.ts';
-import { diff, serialize } from '../ngrx-shared.ts';
+import { attachNgrx } from '../ngrx-overlay.ts';
+import { diff, serialize, type NgrxPageReport } from '../ngrx-shared.ts';
 import { mergeNgrxReport, nameStore, ngrxStateOf, type NgrxPages } from '../rpc/ngrx-tools.ts';
 
 const SIGNAL = Symbol('SIGNAL');
@@ -487,7 +488,7 @@ describe('ngrx collector with Store DevTools', () => {
       () => {},
     );
     collector.collect();
-    return { store, collector, current };
+    return { store, collector, current, ng, lifted };
   }
 
   it('logs a restore with its diff so the next action is not blamed for it', () => {
@@ -531,6 +532,47 @@ describe('ngrx collector with Store DevTools', () => {
       restorable: true,
     });
     expect(collector.run({ type: 'latest' }).message).toMatch(/already/);
+  });
+
+  it('tells the server about entries Store DevTools dropped after they were sent', async () => {
+    const { store, ng, lifted } = setupDevtools();
+    const pages: NgrxPages = new Map();
+    const reports: NgrxPageReport[] = [];
+    const my = {
+      rpc: {
+        call: async (name: string, report: unknown) => {
+          if (name !== 'push-ngrx-state') return undefined;
+          reports.push(report as NgrxPageReport);
+          return { seq: mergeNgrxReport(pages, report as NgrxPageReport, []) };
+        },
+        register: () => {},
+      },
+    };
+    const overlay = attachNgrx(my, 'p1', () => ng as any);
+    try {
+      await overlay.push();
+      store.dispatch({ type: 'inc' });
+      store.dispatch({ type: 'inc' });
+      await overlay.push();
+      const log = () => ngrxStateOf(pages).pages[0].log;
+      expect(log().map((e) => e.restorable)).toEqual([true, true]);
+      delete lifted.actionsById[1];
+      await overlay.push();
+      expect(reports.at(-1)).toMatchObject({
+        log: [],
+        unrestorable: [{ seq: 1, reason: 'dropped' }],
+      });
+      expect(log().map((e) => [e.restorable, e.unrestorable])).toEqual([
+        [false, 'dropped'],
+        [true, undefined],
+      ]);
+      store.dispatch({ type: 'inc' });
+      await overlay.push();
+      expect(reports.at(-1)?.unrestorable).toBeUndefined();
+      expect(log().map((e) => e.restorable)).toEqual([false, true, true]);
+    } finally {
+      overlay.stop();
+    }
   });
 
   it('does not call a restore to the newest action paused', () => {
@@ -634,6 +676,49 @@ describe('ngrx tools', () => {
     expect(ngrxStateOf(pages).pages[0].log.map((e) => e.seq)).toEqual([4, 5]);
     expect(ngrxStateOf(pages).pages[0].dropped).toBe(3);
     expect(ngrxStateOf(pages).pages[0]).not.toHaveProperty('session');
+  });
+
+  it('marks earlier entries the page can no longer restore', () => {
+    const pages: NgrxPages = new Map();
+    const entry = (seq: number) => ({
+      seq,
+      source: 'store' as const,
+      storeId: 'store',
+      type: 'inc',
+      timestamp: 0,
+      diff: [],
+      restorable: true,
+    });
+    const report = (log: ReturnType<typeof entry>[], unrestorable?: unknown) => ({
+      pageId: 'p1',
+      session: 's1',
+      url: '/',
+      title: '',
+      stores: [],
+      classic: { state: {}, devtools: true, scope: 'root' },
+      log,
+      ...(unrestorable ? { unrestorable: unrestorable as NgrxPageReport['unrestorable'] } : {}),
+    });
+    mergeNgrxReport(pages, report([entry(1), entry(2)]), []);
+    mergeNgrxReport(
+      pages,
+      report(
+        [entry(3)],
+        [
+          { seq: 1, reason: 'dropped' },
+          { seq: 2, reason: 'bogus' },
+          { seq: 9, reason: 'not-recorded' },
+        ],
+      ) as NgrxPageReport,
+      [],
+    );
+    expect(
+      ngrxStateOf(pages).pages[0].log.map((e) => [e.seq, e.restorable, e.unrestorable]),
+    ).toEqual([
+      [1, false, 'dropped'],
+      [2, true, undefined],
+      [3, true, undefined],
+    ]);
   });
 });
 
@@ -872,7 +957,11 @@ async function testBed() {
 
 describe('ngrx collector with @ngrx/store', () => {
   async function realStore(
-    options: { devtools?: { maxAge?: number }; hide?: string[]; store?: boolean } = {},
+    options: {
+      devtools?: { maxAge?: number; actionsBlocklist?: string[] };
+      hide?: string[];
+      store?: boolean;
+    } = {},
   ) {
     const TestBed = await testBed();
     const { EnvironmentInjector } = await import('@angular/core');
@@ -982,8 +1071,126 @@ describe('ngrx collector with @ngrx/store', () => {
     const { store, collector, add } = await realStore({ devtools: { maxAge: 3 } });
     collector.collect();
     for (let i = 0; i < 5; i++) store.dispatch(add({ by: 1 }));
-    expect(collector.run({ type: 'restore', seq: 1 }).error).toMatch(/no longer holds this action/);
+    expect(collector.run({ type: 'restore', seq: 1 }).error).toMatch(
+      /no longer holds this action.*maxAge/,
+    );
+    expect(collector.logSince(0)[0]).toMatchObject({ restorable: false, unrestorable: 'dropped' });
     expect(collector.run({ type: 'restore', seq: 5 })).toMatchObject({ ok: true });
+  });
+
+  it('does not blame maxAge when the Store DevTools history was committed', async () => {
+    const { TestBed, store, collector, add } = await realStore({ devtools: { maxAge: 25 } });
+    const { StoreDevtools } = await import('@ngrx/store-devtools');
+    collector.collect();
+    store.dispatch(add({ by: 1 }));
+    TestBed.inject(StoreDevtools).commit();
+    collector.collect();
+    expect(collector.logSince(0)[0]).toMatchObject({ restorable: false, unrestorable: 'dropped' });
+    const error = collector.run({ type: 'restore', seq: 1 }).error;
+    expect(error).toMatch(/no longer holds this action/);
+    expect(error).toMatch(/committed, reset or imported/);
+  });
+
+  it('marks the actions Store DevTools dropped past maxAge as not restorable', async () => {
+    const { store, collector, add } = await realStore({ devtools: { maxAge: 3 } });
+    collector.collect();
+    for (let i = 0; i < 5; i++) store.dispatch(add({ by: 1 }));
+    expect(collector.logSince(0).every((e) => e.restorable)).toBe(true);
+    collector.collect();
+    expect(collector.logSince(0).map((e) => [e.seq, e.restorable, e.unrestorable])).toEqual([
+      [1, false, 'dropped'],
+      [2, false, 'dropped'],
+      [3, false, 'dropped'],
+      [4, true, undefined],
+      [5, true, undefined],
+    ]);
+    const first = collector.unrestorableSince(0);
+    expect(first.updates).toEqual([1, 2, 3].map((seq) => ({ seq, reason: 'dropped' })));
+    store.dispatch(add({ by: 1 }));
+    collector.collect();
+    expect(collector.unrestorableSince(first.last).updates).toEqual([
+      { seq: 4, reason: 'dropped' },
+    ]);
+    expect(collector.run({ type: 'restore', seq: 2 }).error).toMatch(/no longer holds this action/);
+  });
+
+  it('marks an action Store DevTools never recorded as not restorable', async () => {
+    const { store, collector, add } = await realStore({
+      devtools: { actionsBlocklist: ['Skip'] },
+    });
+    collector.collect();
+    store.dispatch(add({ by: 1 }));
+    store.dispatch({ type: '[Counter] Skip' });
+    collector.collect();
+    expect(collector.logSince(0).map((e) => [e.type, e.restorable, e.unrestorable])).toEqual([
+      ['[Counter] Add', true, undefined],
+      ['[Counter] Skip', false, 'not-recorded'],
+    ]);
+    expect(collector.unrestorableSince(0).updates).toEqual([]);
+    expect(collector.run({ type: 'restore', seq: 2 }).error).toMatch(
+      /never recorded this action.*actionsBlocklist/,
+    );
+  });
+
+  it('dispatches an action with a payload and returns its log entry', async () => {
+    const { store, collector } = await realStore();
+    collector.collect();
+    const result = collector.run({
+      type: 'dispatch',
+      action: '[Counter] Add',
+      payload: { by: 5 },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      message: 'Dispatched [Counter] Add as #1.',
+      entry: {
+        seq: 1,
+        type: '[Counter] Add',
+        action: { type: '[Counter] Add', by: 5 },
+        origin: 'dispatch',
+        diff: [{ path: 'count', op: 'change', before: 0, after: 5 }],
+      },
+    });
+    let count: unknown;
+    store.select('count').subscribe((value) => (count = value));
+    expect(count).toBe(5);
+    const again = collector.run({ type: 'dispatch-again', seq: 1 });
+    expect(again).toMatchObject({ ok: true, entry: { seq: 2, action: { by: 5 } } });
+    expect(count).toBe(10);
+    expect(collector.run({ type: 'dispatch-again', seq: 9 }).error).toMatch(/no longer/);
+  });
+
+  it('refuses a dispatch with a bad type or payload, or without a Store', async () => {
+    const { collector } = await realStore();
+    collector.collect();
+    const bad = (action: unknown, payload?: unknown) =>
+      collector.run({ type: 'dispatch', action, payload } as never).error;
+    expect(bad('')).toMatch(/non-empty string/);
+    expect(bad(7)).toMatch(/non-empty string/);
+    expect(bad('x'.repeat(201))).toMatch(/longer than 200/);
+    expect(bad('[A]\nB')).toMatch(/control characters/);
+    expect(bad('[A] B', [1])).toMatch(/JSON object/);
+    expect(bad('[A] B', { type: 'other' })).toMatch(/"type" key/);
+    expect(bad('[A] B', { big: 'x'.repeat(20_001) })).toMatch(/larger than/);
+    expect(collector.logSince(0)).toEqual([]);
+    const none = await realStore({ store: false });
+    none.collector.collect();
+    expect(none.collector.run({ type: 'dispatch', action: '[A] B' }).error).toMatch(
+      /No @ngrx\/store Store/,
+    );
+  });
+
+  it('does not dispatch a restore entry again and notes a paused store', async () => {
+    const { store, collector, add } = await realStore({ devtools: {} });
+    collector.collect();
+    store.dispatch(add({ by: 1 }));
+    store.dispatch(add({ by: 2 }));
+    collector.run({ type: 'restore', seq: 1 });
+    expect(collector.run({ type: 'dispatch-again', seq: 3 }).error).toMatch(
+      /Only an @ngrx\/store action/,
+    );
+    const result = collector.run({ type: 'dispatch', action: '[Counter] Add', payload: { by: 5 } });
+    expect(result.message).toMatch(/as #4\. The store is paused/);
   });
 
   it('falls back to ActionsSubject when ScannedActionsSubject is not found', async () => {

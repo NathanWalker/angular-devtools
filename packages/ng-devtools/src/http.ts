@@ -38,8 +38,17 @@ export { decodePayload, type PayloadEntry, type PayloadSummary } from './http-pa
 const MAX_WARNINGS = 50;
 const PREVIEW_CHARS = 2000;
 
+function mockContentType(responseType = 'json'): string {
+  if (responseType === 'text') return 'text/plain';
+  if (responseType === 'blob' || responseType === 'arraybuffer') return 'application/octet-stream';
+  return 'application/json';
+}
+
 export function parseBody(body: string | undefined, responseType = 'json'): unknown {
   if (responseType === 'text') return body ?? '';
+  if (responseType === 'blob') return new Blob([body ?? ''], { type: mockContentType('blob') });
+  if (responseType === 'arraybuffer')
+    return Uint8Array.from(new TextEncoder().encode(body ?? '')).buffer;
   if (body === undefined || body === '') return null;
   try {
     return JSON.parse(body);
@@ -208,6 +217,7 @@ export const ngDevtoolsHttpInterceptor: HttpInterceptorFn = (req, next) => {
   let source: Observable<HttpEvent<unknown>>;
   if (status !== undefined) {
     const body = parseBody(rule?.body, req.responseType);
+    const headers = new HttpHeaders({ 'content-type': mockContentType(req.responseType) });
     source =
       status >= 400
         ? throwError(
@@ -217,6 +227,7 @@ export const ngDevtoolsHttpInterceptor: HttpInterceptorFn = (req, next) => {
                 statusText: 'Injected by Angular DevTools',
                 url,
                 error: body,
+                headers,
               }),
           )
         : of(
@@ -225,7 +236,7 @@ export const ngDevtoolsHttpInterceptor: HttpInterceptorFn = (req, next) => {
               statusText: 'Mocked by Angular DevTools',
               url,
               body,
-              headers: new HttpHeaders({ 'content-type': 'application/json' }),
+              headers,
             }),
           );
   } else {
@@ -246,7 +257,7 @@ export const ngDevtoolsHttpInterceptor: HttpInterceptorFn = (req, next) => {
           done({
             status: event.status,
             cacheHit: side === 'client' ? cacheable && (sync || fromPayload) : !mocked && sync,
-            preview: preview(event.body),
+            preview: preview(mocked ? rule?.body : event.body),
           });
         }
         subscriber.next(event);

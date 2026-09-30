@@ -284,6 +284,34 @@ describe('dropped navigations', () => {
 });
 
 describe('router tool text', () => {
+  it('lists the routerOutletData each outlet passes', () => {
+    const outlets = [
+      {
+        outlet: 'primary',
+        activated: true,
+        component: 'Shell',
+        route: '/shell',
+        data: '{"user":"Ada"}',
+        children: [
+          { outlet: 'side', activated: true, component: 'Filters', route: '/side', data: '"x"' },
+          { outlet: 'primary', activated: true, component: 'List', route: '/shell' },
+        ],
+      },
+    ];
+    const text = inspectRouteText(state({ outlets }), {}, 1_000);
+    expect(text).toContain(
+      '- outlet `primary`: `Shell` for `/shell`\n  - routerOutletData (ROUTER_OUTLET_DATA): `{"user":"Ada"}`',
+    );
+    expect(text).toContain(
+      '  - outlet `side`: `Filters` for `/side`\n    - routerOutletData (ROUTER_OUTLET_DATA): `"x"`',
+    );
+    expect(text.match(/routerOutletData/g)).toHaveLength(2);
+    expect(inspectRouteText(state({ outlets }), { selector: 'Filters' }, 1_000)).toContain(
+      'routerOutletData (ROUTER_OUTLET_DATA): `"x"`',
+    );
+    expect(isRouterReport({ pageId: 'a', snapshot: null, navigations: [], outlets })).toBe(true);
+  });
+
   it('describes the active route tree', () => {
     const text = inspectRouteText(state(), {}, 1_000);
     expect(text).toContain('come from the running page');

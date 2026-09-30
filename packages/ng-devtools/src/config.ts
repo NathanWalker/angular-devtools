@@ -319,7 +319,7 @@ export const ROUTER_WRITE_ACTIONS: readonly string[] = ['navigate', 'abort', 're
 export const ACTION_TOOLS: Record<NgDevtoolsAction, readonly string[]> = {
   forms: ['form-action', 'fill-form'],
   router: ['navigate'],
-  ngrx: [],
+  ngrx: ['dispatch-ngrx-action'],
   http: [],
   analog: ['analog-call-api'],
 };
@@ -328,7 +328,7 @@ export function actionBlockedMessage(action: NgDevtoolsAction): string {
   const what = {
     forms: 'Writing to forms',
     router: 'Navigating',
-    ngrx: 'Restoring NgRx state',
+    ngrx: 'Restoring NgRx state and dispatching actions',
     http: 'Changing HTTP mock rules and clearing HTTP calls',
     analog: 'Calling API routes',
   }[action];
@@ -356,6 +356,7 @@ export const RPC_INSPECTOR: Record<string, NgDevtoolsInspector> = {
   'get-signals': 'signals',
   'push-signal-graph': 'signals',
   'ping-signal-graph': 'signals',
+  'forget-signal-page': 'signals',
   'select-signal-target': 'signals',
   'get-providers': 'injectors',
   'push-injector-tree': 'injectors',
@@ -411,6 +412,7 @@ export const AGENT_INSPECTOR: Record<string, NgDevtoolsInspector> = {
   'injector-tree': 'injectors',
   'inspect-providers': 'injectors',
   'ngrx-store': 'ngrx',
+  'dispatch-ngrx-action': 'ngrx',
   forms: 'forms',
   'inspect-forms': 'forms',
   'explain-form-invalid': 'forms',
@@ -454,6 +456,7 @@ export const PAGE_AGENT_ENTRIES: readonly string[] = [
   'injector-tree',
   'inspect-providers',
   'ngrx-store',
+  'dispatch-ngrx-action',
   'forms',
   'inspect-forms',
   'explain-form-invalid',
@@ -531,7 +534,7 @@ const INSPECTOR_LABEL: Record<NgDevtoolsInspector, string> = {
 const ACTION_LABEL: Record<NgDevtoolsAction, string> = {
   forms: 'Form writes',
   router: 'Navigation',
-  ngrx: 'NgRx restore',
+  ngrx: 'NgRx restore and dispatch',
   http: 'HTTP mocking',
   analog: 'Analog API calls',
 };

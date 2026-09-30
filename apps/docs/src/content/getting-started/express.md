@@ -12,7 +12,7 @@ description: Mount the devtools hub in the Express server of an Angular SSR app.
 In an *Angular app with server-side rendering, the devtools run inside your Express server. You add a middleware on the server and load the overlay in the browser.
 
 <ngmd-callout type="info" title="You need an SSR app">
-  This setup mounts the devtools in the Express <code>server.ts</code> that Angular SSR generates. For an Analog app, follow <a href="./vite.md">Vite and Analog</a> instead.
+  This setup mounts the devtools in the Express <code>server.ts</code> that Angular SSR generates. For an Analog app, follow <a href="./vite.md">Vite and Analog</a> instead. For a server on Hono, h3 or Fastify, follow <a href="./other-servers.md">Hono, h3 and Fastify</a>.
 </ngmd-callout>
 
 ## Setup at a glance

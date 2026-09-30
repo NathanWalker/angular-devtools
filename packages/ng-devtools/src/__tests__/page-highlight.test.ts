@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearHighlight, highlightBox, showHighlight } from '../page-highlight.ts';
+import {
+  clearHighlight,
+  HIGHLIGHT_SAFETY_MS,
+  highlightBox,
+  showHighlight,
+} from '../page-highlight.ts';
 
 const handlers = new Map<string, (arg: unknown) => void>();
 
@@ -100,6 +105,36 @@ describe('page highlight', () => {
     showHighlight(item);
     expect(box()?.hasAttribute('popover')).toBe(false);
     expect(box()?.style.zIndex).toBe('2147483645');
+  });
+
+  it('keeps a panel highlight until a clear arrives, and an agent highlight clears itself', async () => {
+    vi.stubGlobal('BroadcastChannel', undefined);
+    const { initOverlay } = await import('../overlay.ts');
+    const stop = await initOverlay();
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<app-card class="card"></app-card>';
+      place(document.querySelector('app-card')!, { x: 1, y: 2, width: 3, height: 4 });
+      handlers.get('highlight-in-page')!('app-card');
+      vi.advanceTimersByTime(10_000);
+      expect(box()).toBeDefined();
+      handlers.get('highlight-in-page')!(null);
+      expect(box()).toBeUndefined();
+
+      handlers.get('highlight-in-page')!('app-card');
+      vi.advanceTimersByTime(HIGHLIGHT_SAFETY_MS);
+      expect(box()).toBeUndefined();
+
+      handlers.get('highlight-in-page')!({ selector: '.card', reveal: true, durationMs: 2000 });
+      vi.advanceTimersByTime(1900);
+      expect(box()).toBeDefined();
+      vi.advanceTimersByTime(200);
+      expect(box()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      stop();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('accepts an SVG element from the highlight-in-page request', async () => {

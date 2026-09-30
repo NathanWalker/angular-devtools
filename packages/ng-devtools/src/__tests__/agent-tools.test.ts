@@ -63,6 +63,41 @@ describe('agent tools', () => {
     expect(await push('ping-change-detection', 'p1')).toEqual({ known: false });
   });
 
+  it('report the change detection mode and what services inject', async () => {
+    const { push, call, injectorState } = await boot();
+    const rootEnv = {
+      injector: { id: 'root-1', type: 'environment', name: 'Root', providerCount: 1 },
+      providers: [{ token: 'HttpClient', type: 'class', isViewProvider: false }],
+      children: [],
+      dependencies: [{ from: 'Api', token: 'HttpClient', flags: [], providedBy: 'root-1' }],
+    };
+    await push('push-injector-tree', {
+      pageId: 'p1',
+      roots: [injectorRoot('app-root')],
+      environment: [rootEnv],
+      zone: 'zone-unused',
+    });
+    expect(await injectorState()).toMatchObject({ zone: 'zone-unused' });
+    expect(await call('change-detection', '')).toMatch(
+      /^Page `p1` runs zoneless change detection, but zone\.js is still loaded\./,
+    );
+    const tree = await call('inspect-providers', '');
+    expect(tree).toContain('Page `p1` runs zoneless change detection');
+    expect(tree).toContain('"from":"Api"');
+    expect(await call('inspect-providers', '', { token: 'HttpClient' })).toContain(
+      '"injectedBy":[{"id":"root-1","name":"Root","from":"Api"',
+    );
+
+    await push('push-injector-tree', {
+      pageId: 'p1',
+      roots: [injectorRoot('app-root')],
+      environment: [],
+      zone: 'bogus',
+    });
+    expect(await injectorState()).toMatchObject({ zone: null });
+    expect(await call('change-detection', '')).toMatch(/^No change detection recording yet/);
+  });
+
   it('say so when nothing has been reported', async () => {
     const { call } = await boot();
     // Worded after the data, not the connection: an empty tree is what both a
@@ -252,6 +287,49 @@ describe('agent tools', () => {
     ]);
   });
 
+  it('forgets a signal page on request and moves the shown graph to the latest remaining page', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { ctx, push, call } = await boot();
+    const signalState = async () =>
+      (
+        await (
+          ctx.rpc as unknown as {
+            sharedState: {
+              get: (key: string) => Promise<{ value: () => Record<string, unknown> }>;
+            };
+          }
+        ).sharedState.get('ng-devtools:signal-graph')
+      ).value();
+    const graph = (pageId: string, label: string) => ({
+      pageId,
+      componentSelector: 'app-root',
+      nodes: [{ id: 'a', kind: 'signal', label, epoch: 0 }],
+      edges: [],
+    });
+    vi.setSystemTime(1000);
+    await push('push-signal-graph', graph('p1', 'first'));
+    vi.setSystemTime(2000);
+    await push('push-signal-graph', graph('p2', 'second'));
+    vi.setSystemTime(3000);
+    await push('push-signal-graph', graph('p3', 'third'));
+
+    await push('forget-signal-page', 'p1');
+    expect(Object.keys((await signalState())['pages'] as object).sort()).toEqual(['p2', 'p3']);
+    expect(await signalState()).toMatchObject({ graph: { pageId: 'p3' } });
+
+    await push('forget-signal-page', 'p3');
+    expect(Object.keys((await signalState())['pages'] as object)).toEqual(['p2']);
+    expect(await signalState()).toMatchObject({ graph: { pageId: 'p2' } });
+    expect(await push('ping-signal-graph', 'p3')).toEqual({ known: false });
+    expect(JSON.parse(await call('inspect-signals', 'app-root'))).toMatchObject({
+      nodes: [{ label: 'second' }],
+    });
+
+    await push('forget-signal-page', 'p2');
+    expect(await signalState()).toMatchObject({ graph: null, pages: {} });
+    expect(await call('inspect-signals', 'app-root')).toMatch(/no signal graph/i);
+  });
+
   it('keeps injector trees per page, forgets a page on request and ignores reports without a page', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const { push, call, injectorState } = await boot();
@@ -409,7 +487,7 @@ describe('agent tools', () => {
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         method: 'ng-devtools:highlight-in-page',
-        args: [{ pageId: 'p1', selector: '.promo', reveal: true }],
+        args: [{ pageId: 'p1', selector: '.promo', reveal: true, durationMs: 2000 }],
       }),
     );
   });

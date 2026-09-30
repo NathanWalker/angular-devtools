@@ -314,11 +314,17 @@ function isTree(value: unknown): value is InjectorNode[] {
               </ol>
             </div>
 
-            @if (sel.injector.type === 'element') {
+            @if (sel.injector.type === 'element' || sel.dependencies) {
               <div class="block">
                 <h3>
-                  Injected here <span class="pill">{{ sel.dependencies?.length ?? 0 }}</span>
+                  {{
+                    sel.injector.type === 'element' ? 'Injected here' : 'Injected by its services'
+                  }}
+                  <span class="pill">{{ sel.dependencies?.length ?? 0 }}</span>
                 </h3>
+                @if (sel.injector.type !== 'element') {
+                  <p class="hint">Only services this injector has already created are listed.</p>
+                }
                 @if (sel.dependencies?.length) {
                   <ul class="deps">
                     @for (dep of sel.dependencies; track dep.from + dep.token + $index) {
@@ -330,7 +336,10 @@ function isTree(value: unknown): value is InjectorNode[] {
                           }
                         </div>
                         <div class="dep-meta">
-                          @if (sel.injector.directives && sel.injector.directives.length > 1) {
+                          @if (
+                            sel.injector.type !== 'element' ||
+                            (sel.injector.directives && sel.injector.directives.length > 1)
+                          ) {
                             <span>for {{ dep.from }}</span>
                           }
                           @if (dep.providedBy; as by) {
@@ -351,8 +360,10 @@ function isTree(value: unknown): value is InjectorNode[] {
                       </li>
                     }
                   </ul>
-                } @else {
+                } @else if (sel.injector.type === 'element') {
                   <p class="empty-line">Nothing is injected through the constructor or inject().</p>
+                } @else {
+                  <p class="empty-line">No service created here has injected anything yet.</p>
                 }
               </div>
             }

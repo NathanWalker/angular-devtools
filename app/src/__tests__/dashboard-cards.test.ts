@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { componentsCard, routesCard, storeCard } from '../pages/dashboard';
+import { componentsCard, routesCard, storeCard, zoneLabel } from '../pages/dashboard';
 
 describe('dashboard cards', () => {
+  it('names the change detection mode the page reported', () => {
+    expect(zoneLabel('zoneless')).toBe('Zoneless');
+    expect(zoneLabel('zone')).toBe('zone.js');
+    expect(zoneLabel('zone-unused')).toBe('Zoneless, zone.js loaded');
+    expect(zoneLabel(null)).toBeNull();
+    expect(zoneLabel('toString')).toBeNull();
+  });
+
   it('counts source components when the rows carry no kind', () => {
     expect(componentsCard([{}, {}, {}])).toEqual({ value: 3, sub: 'discovered in source' });
   });

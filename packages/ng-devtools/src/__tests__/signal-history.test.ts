@@ -271,7 +271,7 @@ describe('installSignalWriteHook', () => {
     core.fire({ debugName: 'x' });
     expect(prev).toHaveBeenCalledTimes(1);
     expect(onWrite).toHaveBeenCalledTimes(1);
-    restore();
+    restore!();
     expect(core.get()).toBe(prev);
   });
 
@@ -281,7 +281,7 @@ describe('installSignalWriteHook', () => {
     const restore = await installSignalWriteHook(onWrite, async () => core);
     const later = vi.fn();
     core.setPostSignalSetFn(later);
-    restore();
+    restore!();
     expect(core.get()).toBe(later);
     core.fire({ debugName: 'x' });
     expect(onWrite).not.toHaveBeenCalled();
@@ -298,10 +298,18 @@ describe('installSignalWriteHook', () => {
     expect(() => core.fire({ debugName: 'x' })).not.toThrow();
   });
 
-  it('returns a no-op when the primitives cannot load', async () => {
+  it('returns null when the primitives cannot load', async () => {
     const restore = await installSignalWriteHook(vi.fn(), async () => {
       throw new Error('missing');
     });
-    expect(() => restore()).not.toThrow();
+    expect(restore).toBeNull();
+  });
+
+  it('returns null when the primitives lack the write hook', async () => {
+    expect(await installSignalWriteHook(vi.fn(), async () => ({}) as never)).toBeNull();
+  });
+
+  it('returns a restore function when the hook installs', async () => {
+    expect(await installSignalWriteHook(vi.fn(), async () => fakeCore())).toBeTypeOf('function');
   });
 });

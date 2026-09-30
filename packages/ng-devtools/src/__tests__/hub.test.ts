@@ -1,4 +1,5 @@
 import { connect } from 'node:net';
+import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hubDefaultOrigins, initNgDevtoolsHub, type NgDevtoolsHubOptions } from '../hub.ts';
 import { makeProject } from './analog-fixture.ts';
@@ -101,6 +102,36 @@ async function sseStatus(
   await res.body?.cancel();
   return res.status;
 }
+
+describe('ng-devtools hub behind a web router', () => {
+  it('answers under its base and lets other routes reach the app', async () => {
+    const cwd = makeProject({ 'package.json': '{}' });
+    const devtools = initNgDevtoolsHub({ cwd, ws: false, auth: false });
+    hubs.push(devtools);
+    await devtools.ready;
+    const app = new Hono();
+    app.all(`${devtools.base}*`, (c) => devtools.handler(c.req.raw));
+    app.get('*', (c) => c.text('angular app'));
+    const get = (path: string) => app.request(`http://localhost${path}`);
+
+    const meta = await get('/__devframes/__connection.json');
+    expect(meta.status).toBe(200);
+    expect(await meta.json()).toHaveProperty('backend');
+    expect((await get('/__devframes/ng-devtools/__connection.json')).status).toBe(200);
+    expect((await get('/__devframes/')).status).toBe(200);
+    const page = await get('/trips/42');
+    expect(page.status).toBe(200);
+    expect(await page.text()).toBe('angular app');
+  });
+
+  it('answers 404 outside its base instead of falling through', async () => {
+    const cwd = makeProject({ 'package.json': '{}' });
+    const devtools = initNgDevtoolsHub({ cwd, ws: false, auth: false });
+    hubs.push(devtools);
+    await devtools.ready;
+    expect((await devtools.handler(new Request('http://localhost/trips/42'))).status).toBe(404);
+  });
+});
 
 describe('ng-devtools hub origins', () => {
   it('accepts loopback pages and the Chrome extension by default, and nothing else', () => {

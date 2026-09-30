@@ -28,15 +28,42 @@ export function filterTree<T extends TreeNode>(
   return { nodes: prune(roots), matches };
 }
 
-export function countText(total: number, matches: number, filtering: boolean): string {
-  if (filtering) return `${matches} of ${total}`;
-  return `${total} ${total === 1 ? 'instance' : 'instances'}`;
+export function countText(
+  total: number,
+  matches: number,
+  filtering: boolean,
+  truncated = false,
+): string {
+  const shown = truncated ? `${total}+` : `${total}`;
+  if (filtering) return `${matches} of ${shown}`;
+  return `${shown} ${total === 1 && !truncated ? 'instance' : 'instances'}`;
 }
 
-export function filterAnnouncement(total: number, matches: number, query: string): string {
+export function filterAnnouncement(
+  total: number,
+  matches: number,
+  query: string,
+  truncated = false,
+): string {
   if (!query.trim()) return '';
   if (!matches) return 'No components match.';
-  return `${matches} of ${total} ${total === 1 ? 'instance' : 'instances'} match.`;
+  const shown = truncated ? `${total}+` : `${total}`;
+  return `${matches} of ${shown} ${total === 1 && !truncated ? 'instance' : 'instances'} match.`;
+}
+
+export function truncationNotice(truncatedBy?: { components?: number; depth?: number }): string {
+  const components = truncatedBy?.components;
+  const depth = truncatedBy?.depth;
+  if (components && depth) {
+    return `Showing the first ${components} component instances, and none nested more than ${depth} elements deep. Others are not listed or searchable.`;
+  }
+  if (components) {
+    return `Showing the first ${components} component instances. Others are not listed or searchable.`;
+  }
+  if (depth) {
+    return `Components nested more than ${depth} elements deep are not listed or searchable.`;
+  }
+  return 'The page has more components than the tree shows.';
 }
 
 export interface SelectionState {

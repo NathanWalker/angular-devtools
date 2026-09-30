@@ -25,6 +25,7 @@ import {
   actionMessage,
   formAction,
   pageOf,
+  redactLabel,
   type CollectedForm,
   type FormEvent,
   type FormFieldError,
@@ -88,6 +89,7 @@ function countFields(node: FormFieldNode): number {
 @Component({
   selector: 'app-forms-inspector',
   imports: [JsonPipe, FormsFieldDetail, FormsTimeline, FormsSubmit, FormsLint, LimitNote],
+  host: { '(keydown.escape)': 'cancelPick()' },
   template: `
     @if (!rpc()) {
       <div class="empty" role="status">
@@ -242,7 +244,15 @@ function countFields(node: FormFieldNode): number {
                 <button type="button" class="small" (click)="act('focus-first-invalid')">
                   Focus first invalid
                 </button>
-                <button type="button" class="small" (click)="pick()">Pick field on page</button>
+                <button
+                  type="button"
+                  class="small"
+                  [class.on]="picking()"
+                  [attr.aria-pressed]="!!picking()"
+                  (click)="picking() ? cancelPick() : pick()"
+                >
+                  {{ picking() ? 'Cancel picking' : 'Pick field on page' }}
+                </button>
                 <span class="divider" aria-hidden="true"></span>
                 <button type="button" class="small" (click)="act('snapshot')">Snapshot</button>
                 @if (snapshot()) {
@@ -418,7 +428,7 @@ function countFields(node: FormFieldNode): number {
                                 <span class="warn">view out of sync</span>
                               }
                               @if (row.node.redacted) {
-                                <span>redacted ({{ row.node.redacted }})</span>
+                                <span>redacted: {{ redactLabel(row.node.redacted) }}</span>
                               }
                               @if (row.node.required) {
                                 <span>required</span>
@@ -862,6 +872,11 @@ function countFields(node: FormFieldNode): number {
     .actions .small:not(.primary):not(.danger) {
       max-width: 240px;
     }
+    .small.on {
+      background: var(--accent-soft);
+      border-color: var(--accent-line);
+      color: var(--text-strong);
+    }
     .status:empty {
       height: 0;
       margin-top: -8px;
@@ -1226,6 +1241,7 @@ export class FormsInspector {
   rpc = input<DevframeRpcClient | null>(null);
   focus = input<{ id: string } | null>(null);
   readonly canWrite = computed(() => actionAllowed(this.rpc(), 'forms'));
+  protected readonly redactLabel = redactLabel;
   protected readonly writesOff = actionBlockedMessage('forms');
   readonly focusHandled = output<void>();
 
@@ -1258,6 +1274,8 @@ export class FormsInspector {
   readonly message = signal('');
   readonly armed = signal<string | null>(null);
   readonly snapshot = signal<string | null>(null);
+  readonly picking = signal<string | null>(null);
+  private pickSeq = 0;
 
   private unsubscribe: (() => void) | null = null;
   private readonly destroyRef = inject(DestroyRef);
@@ -1386,8 +1404,12 @@ export class FormsInspector {
   async pick() {
     const form = this.selected();
     if (!form) return;
-    this.message.set('Click a field in the app (Esc cancels).');
+    const seq = ++this.pickSeq;
+    this.picking.set(form.id);
+    this.message.set('Click a field in the app. Press Escape or Cancel picking to stop.');
     const result = await formAction(this.rpc(), { action: 'pick', formId: form.id });
+    if (seq !== this.pickSeq) return;
+    this.picking.set(null);
     const picked = result as typeof result & { formId?: string; path?: string };
     if (!result.ok || !picked.formId) {
       this.message.set(actionMessage(result));
@@ -1397,6 +1419,12 @@ export class FormsInspector {
     this.tab_.set('fields');
     this.fieldPath.set(picked.path ?? '');
     this.message.set(`Picked ${picked.path || '(form)'}.`);
+  }
+
+  cancelPick() {
+    const formId = this.picking();
+    if (!formId) return;
+    void formAction(this.rpc(), { action: 'cancel-pick', formId });
   }
 
   async setRecording(on: boolean) {

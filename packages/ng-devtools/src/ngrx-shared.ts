@@ -31,6 +31,9 @@ export interface NgrxDiffEntry {
 
 export type NgrxActionOrigin = 'dispatch' | 'effect' | 'reactive';
 
+/** Why Store DevTools cannot restore an @ngrx/store entry: it no longer holds the action (dropped past `maxAge`, or the history was committed, reset or imported), or never recorded it. */
+export type NgrxUnrestorable = 'dropped' | 'not-recorded';
+
 export interface NgrxLogEntry {
   seq: number;
   source: 'signal-store' | 'store';
@@ -42,6 +45,12 @@ export interface NgrxLogEntry {
   timestamp: number;
   diff: NgrxDiffEntry[];
   restorable: boolean;
+  unrestorable?: NgrxUnrestorable;
+}
+
+export interface NgrxUnrestorableUpdate {
+  seq: number;
+  reason: NgrxUnrestorable;
 }
 
 export interface NgrxPageReport {
@@ -52,9 +61,11 @@ export interface NgrxPageReport {
   stores: NgrxSignalStoreInfo[];
   classic: NgrxClassicStoreInfo | null;
   log: NgrxLogEntry[];
+  /** Entries sent earlier that Store DevTools can no longer restore. */
+  unrestorable?: NgrxUnrestorableUpdate[];
 }
 
-export interface NgrxPage extends Omit<NgrxPageReport, 'session'> {
+export interface NgrxPage extends Omit<NgrxPageReport, 'session' | 'unrestorable'> {
   reportedAt: number;
   /** Older change log entries removed at `limits.changeLog`. */
   dropped?: number;
@@ -64,13 +75,49 @@ export interface NgrxState {
   pages: NgrxPage[];
 }
 
-export type NgrxRequest = { type: 'restore'; seq: number } | { type: 'latest' };
+export type NgrxRequest =
+  | { type: 'restore'; seq: number }
+  | { type: 'latest' }
+  | { type: 'dispatch'; action: string; payload?: Record<string, unknown> }
+  | { type: 'dispatch-again'; seq: number };
 
 export interface NgrxRequestResult {
   ok?: boolean;
   message?: string;
   error?: string;
+  entry?: NgrxLogEntry;
   paused?: boolean;
+}
+
+export const MAX_ACTION_TYPE = 200;
+export const MAX_ACTION_PAYLOAD = 20_000;
+
+/** Checks an action type and payload sent from the panel or an agent. Returns the problem, or null. */
+export function dispatchProblem(type: unknown, payload: unknown): string | null {
+  if (typeof type !== 'string' || !type.trim())
+    return 'The action type must be a non-empty string.';
+  if (type.length > MAX_ACTION_TYPE) {
+    return `The action type is longer than ${MAX_ACTION_TYPE} characters.`;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(type)) return 'The action type has control characters.';
+  if (payload === undefined) return null;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return 'The payload must be a JSON object, like {"id": 7}.';
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'type')) {
+    return 'The payload cannot have a "type" key. Put the action type in the type field.';
+  }
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(payload);
+  } catch {
+    json = undefined;
+  }
+  if (json === undefined) return 'The payload must be plain JSON.';
+  if (json.length > MAX_ACTION_PAYLOAD) {
+    return `The payload is larger than ${MAX_ACTION_PAYLOAD} characters of JSON.`;
+  }
+  return null;
 }
 
 export interface SerializeOptions {

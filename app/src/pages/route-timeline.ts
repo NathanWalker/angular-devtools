@@ -5,6 +5,7 @@ import { LimitNote } from '../ui/limit-note';
 import { time } from '../format';
 import {
   SHARED_STYLES,
+  isReplayableUrl,
   routerAction,
   routerCall,
   tone,
@@ -275,8 +276,8 @@ const PHASE_COLORS: Record<string, string> = {
               <button
                 type="button"
                 class="small"
-                [disabled]="!navigationAllowed()"
-                [attr.aria-describedby]="navigationAllowed() ? null : 'route-timeline-writes-off'"
+                [disabled]="!navigationAllowed() || !replayable(nav)"
+                [attr.aria-describedby]="replayNote(nav)"
                 (click)="replay(nav)"
                 [attr.aria-label]="'Replay navigation ' + nav.id"
               >
@@ -290,6 +291,11 @@ const PHASE_COLORS: Record<string, string> = {
               >
                 Copy repro
               </button>
+              @if (!replayable(nav)) {
+                <p id="replay-note-{{ nav.id }}" class="muted replay-note">
+                  Replay is off: the URL is redacted or not relative.
+                </p>
+              }
             </div>
           </li>
         }
@@ -544,6 +550,11 @@ const PHASE_COLORS: Record<string, string> = {
       padding-top: 12px;
       border-top: 1px solid var(--border);
     }
+    .replay-note {
+      align-self: center;
+      margin: 0;
+      font-size: 12px;
+    }
     @media (max-width: 480px) {
       .details {
         grid-template-columns: minmax(0, 1fr);
@@ -668,15 +679,26 @@ export class RouteTimeline {
   readonly time = time;
 
   async toggleInstrument(event: Event) {
-    const on = (event.target as HTMLInputElement).checked;
+    const checkbox = event.target as HTMLInputElement;
+    const on = checkbox.checked;
     const result = await routerAction(this.rpc(), this.page().pageId, { action: 'instrument', on });
+    if (result['error']) {
+      checkbox.checked = !!this.page().instrumented;
+      this.message.set(String(result['error']));
+      return;
+    }
     this.message.set(
-      result?.['error']
-        ? String(result['error'])
-        : on
-          ? 'Recording each guard and resolver.'
-          : 'Stopped recording guards and resolvers.',
+      on ? 'Recording each guard and resolver.' : 'Stopped recording guards and resolvers.',
     );
+  }
+
+  replayable(nav: NavigationRecord) {
+    return isReplayableUrl(nav.url);
+  }
+
+  replayNote(nav: NavigationRecord) {
+    if (!this.navigationAllowed()) return 'route-timeline-writes-off';
+    return this.replayable(nav) ? null : `replay-note-${nav.id}`;
   }
 
   async replay(nav: NavigationRecord) {
@@ -685,8 +707,8 @@ export class RouteTimeline {
       action: 'replay',
       id: nav.id,
     });
-    if (!result || result['error']) {
-      this.message.set(String(result?.['error'] ?? 'Replay failed.'));
+    if (result['error']) {
+      this.message.set(String(result['error']));
       return;
     }
     const replay = result['replay'] as { outcome?: string } | undefined;

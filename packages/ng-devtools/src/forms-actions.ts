@@ -8,7 +8,13 @@ import {
   type FormsDebugApi,
   type FoundForm,
 } from './forms.ts';
-import { isRedactedKey, redactReason } from './forms-privacy.ts';
+import {
+  REDACT_LABELS,
+  isRedactedKey,
+  redactReason,
+  unmaskHint,
+  type RedactReason,
+} from './forms-privacy.ts';
 import { fieldPath, submitSetup } from './forms-read.ts';
 import { clip } from './text.ts';
 
@@ -35,6 +41,7 @@ export const FORM_ACTIONS = [
   'locate',
   'instrument',
   'pick',
+  'cancel-pick',
 ] as const;
 
 export type FormActionName = (typeof FORM_ACTIONS)[number];
@@ -291,12 +298,22 @@ function rawValue(found: FoundForm, node: AnyRecord): unknown {
   );
 }
 
-function lastKey(path: string, found: FoundForm): string {
-  return path ? path.split('.').pop()! : '';
+function secretOf(
+  path: string,
+  element: Element | null,
+): { key: string; reason: RedactReason } | null {
+  const keys = path.split('.');
+  for (const [i, key] of keys.entries()) {
+    const reason = redactReason(key);
+    if (reason) return { key, reason: i < keys.length - 1 ? 'parent' : reason };
+  }
+  const key = keys.at(-1)!;
+  const reason = element && redactReason(key, element);
+  return reason ? { key, reason } : null;
 }
 
-function isSecretPath(path: string): boolean {
-  return path.split('.').some((key) => !!redactReason(key));
+function secretRefusal(key: string, reason: RedactReason): string {
+  return `is redacted (${REDACT_LABELS[reason]}). DevTools never writes secret fields; to write it, ${unmaskHint(reason, key)}`;
 }
 
 function elementFor(ctx: ActionContext, found: FoundForm, path: string): Element | null {
@@ -310,10 +327,8 @@ function refusal(
   path: string,
   force = false,
 ): string | null {
-  const element = elementFor(ctx, found, path);
-  if (isSecretPath(path) || (element && redactReason(lastKey(path, found), element))) {
-    return 'looks secret (password, token, card…); DevTools never writes secret fields';
-  }
+  const secret = secretOf(path, elementFor(ctx, found, path));
+  if (secret) return secretRefusal(secret.key, secret.reason);
   if (found.kind === 'signal') {
     if (read(() => node['hidden'](), false)) return 'is hidden';
     if (read(() => node['readonly'](), false)) return 'is readonly';
@@ -487,7 +502,9 @@ function writeValue(
   const current = rawValue(found, node);
   const secret = secretInside(value);
   if (secret) {
-    return `contains the secret field "${secret}"; DevTools never writes secret fields`;
+    const key = secret.split('.').pop()!;
+    const reason = redactReason(key) ?? 'key';
+    return `contains the secret field "${secret}" (${REDACT_LABELS[reason]}). DevTools never writes secret fields; to write it, ${unmaskHint(reason, key)}`;
   }
   if (current && typeof current === 'object' && !(current instanceof Date)) {
     const guarded = guardedFields(ctx, found, node, path, force);

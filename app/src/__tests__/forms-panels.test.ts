@@ -155,6 +155,18 @@ describe('FormsFieldDetail', () => {
     button(fixture, 'Close details for email').click();
     expect(closed).toBe(1);
   });
+
+  it('says why a redacted field has no Set editor and links to unmasking', async () => {
+    const fixture = detail(() => Promise.resolve('about pin'));
+    fixture.componentRef.setInput('node', field('pin', { redacted: 'input-type' }));
+    await settle(fixture);
+    const host = fixture.nativeElement as HTMLElement;
+    expect(host.querySelector('#field-value')).toBeNull();
+    expect(text(fixture)).toContain('this field is redacted (password input)');
+    const link = host.querySelector<HTMLAnchorElement>('a')!;
+    expect(link.textContent).toContain('How to unmask it');
+    expect(link.href).toContain('security.md#opt-fields-in-or-out');
+  });
 });
 
 describe('FormsInspector fields', () => {
@@ -187,5 +199,86 @@ describe('FormsInspector fields', () => {
     await settle(fixture);
     expect(host.querySelector('app-forms-field-detail')).toBeNull();
     expect(document.activeElement).toBe(row);
+  });
+});
+
+describe('FormsInspector pick', () => {
+  it('turns into Cancel picking and cancels from the button and Escape', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const pending: ((value: unknown) => void)[] = [];
+    const fixture = TestBed.createComponent(FormsInspector);
+    fixture.componentRef.setInput(
+      'rpc',
+      fakeClient(
+        (_name, arg) => {
+          calls.push(arg);
+          if (arg['action'] === 'pick') return new Promise((resolve) => pending.push(resolve));
+          return Promise.resolve({ ok: true, message: 'Picking cancelled.' });
+        },
+        [form],
+      ),
+    );
+    document.body.append(fixture.nativeElement);
+    await settle(fixture);
+    const host = fixture.nativeElement as HTMLElement;
+
+    button(fixture, 'Pick field on page').click();
+    await settle(fixture);
+    const cancel = button(fixture, 'Cancel picking');
+    expect(cancel.getAttribute('aria-pressed')).toBe('true');
+    cancel.click();
+    await settle(fixture);
+    expect(calls.at(-1)).toEqual({ action: 'cancel-pick', formId: form.id });
+    pending.shift()!({ ok: false, error: 'Picking cancelled.' });
+    await settle(fixture);
+    expect(button(fixture, 'Pick field on page').getAttribute('aria-pressed')).toBe('false');
+    expect(text(fixture)).toContain('Picking cancelled.');
+
+    button(fixture, 'Pick field on page').click();
+    await settle(fixture);
+    calls.length = 0;
+    host.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle(fixture);
+    expect(calls).toEqual([{ action: 'cancel-pick', formId: form.id }]);
+  });
+
+  it('ignores the answer of a superseded pick', async () => {
+    const pending: ((value: unknown) => void)[] = [];
+    const fixture = TestBed.createComponent(FormsInspector);
+    fixture.componentRef.setInput(
+      'rpc',
+      fakeClient(() => new Promise((resolve) => pending.push(resolve)), [form]),
+    );
+    await settle(fixture);
+    const inspector = fixture.componentInstance;
+    void inspector.pick();
+    void inspector.pick();
+    await settle(fixture);
+    pending[1]({ ok: true, formId: form.id, path: 'email' });
+    await settle(fixture);
+    pending[0]({ ok: false, error: 'Picking cancelled.' });
+    await settle(fixture);
+    expect(inspector.message()).toBe('Picked email.');
+    expect(inspector.picking()).toBeNull();
+  });
+});
+
+describe('FormsInspector redaction', () => {
+  it('labels redacted fields in plain words', async () => {
+    const secret: CollectedForm = {
+      ...form,
+      root: {
+        ...form.root,
+        children: [field('pinCode', { redacted: 'key', value: '[redacted]' })],
+      },
+    };
+    const fixture = TestBed.createComponent(FormsInspector);
+    fixture.componentRef.setInput(
+      'rpc',
+      fakeClient(() => Promise.resolve(''), [secret]),
+    );
+    await settle(fixture);
+    expect(text(fixture)).toContain('redacted: name looks secret');
+    expect(text(fixture)).not.toContain('redacted (key)');
   });
 });

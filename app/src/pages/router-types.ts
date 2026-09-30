@@ -134,6 +134,7 @@ export interface OutletInfo {
   activated: boolean;
   detached?: boolean;
   inputs?: { input: string; source: string }[];
+  data?: string;
   children?: OutletInfo[];
 }
 
@@ -201,12 +202,28 @@ export type LintResult =
 
 export const routerCall = rpcTry;
 
-export function routerAction(
+export function isReplayableUrl(url: string): boolean {
+  return (
+    url.startsWith('/') &&
+    !url.startsWith('//') &&
+    !/^\/*[a-z][a-z0-9+.-]*:/i.test(url) &&
+    !url.includes('[redacted]') &&
+    url.length <= 2000
+  );
+}
+
+export const PAGE_UNREACHABLE = 'Could not reach the page.';
+
+export async function routerAction(
   client: DevframeRpcClient | null,
   pageId: string | undefined,
   request: Record<string, unknown>,
-): Promise<Record<string, unknown> | null> {
-  return routerCall<Record<string, unknown>>(client, 'request-router-action', { pageId, request });
+): Promise<Record<string, unknown>> {
+  const result = await routerCall<Record<string, unknown>>(client, 'request-router-action', {
+    pageId,
+    request,
+  });
+  return result ?? { error: PAGE_UNREACHABLE };
 }
 
 export const SHARED_STYLES = `
