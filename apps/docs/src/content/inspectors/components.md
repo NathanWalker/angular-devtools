@@ -62,7 +62,7 @@ A notice at the top says why you see the source list: no page is connected, or t
 
 <ngmd-card-grid columns="2">
   <ngmd-card icon="zap" title="Live page">
-    The overlay walks the page with Angular's debug API every 3 seconds. It resends an unchanged tree only every fourth time.
+    The overlay walks the page with Angular's debug API after change detection. It resends an unchanged tree only after 8 seconds.
   </ngmd-card>
   <ngmd-card icon="file" title="Source scan">
     The server scans your files for <code>&#64;Component</code> and <code>&#64;Directive</code> classes. It also supplies the file and line in the detail header.
@@ -83,7 +83,7 @@ The live tree reads `window.ng`, which only development builds expose. It uses t
 
 ### Refresh rate
 
-The page reads the tree every 3 seconds, and at once when you select an instance. It reads the detail block only for the selected instance. The server drops a page after 15 seconds without a report.
+On Angular 20 and later, the page reads the tree about 250 ms after Angular runs change detection, and every 4 seconds as a heartbeat. On older versions, it reads the tree every 3 seconds. It also reads it at once when you select an instance. It reads the detail block only for the selected instance. The server drops a page after 15 seconds without a report.
 
 ## How to use it
 

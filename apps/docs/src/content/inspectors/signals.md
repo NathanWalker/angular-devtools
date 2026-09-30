@@ -42,13 +42,13 @@ Expand a card to see:
 
 ### Value history
 
-| Tag         | Meaning                                        |
-| ----------- | ---------------------------------------------- |
-| **set**     | A write set the value. This entry is exact.    |
-| **sampled** | The overlay saw a changed value while polling. |
-| **initial** | The first value the overlay saw.               |
+| Tag         | Meaning                                                |
+| ----------- | ------------------------------------------------------ |
+| **set**     | A write set the value. This entry is exact.            |
+| **sampled** | The overlay saw a changed value when it read the page. |
+| **initial** | The first value the overlay saw.                       |
 
-When values change faster than the overlay polls, an entry says how many earlier values were not captured. Only `signal`, `computed` and `linkedSignal` nodes have a history.
+When values change faster than the overlay reads the page, an entry says how many earlier values were not captured. Only `signal`, `computed` and `linkedSignal` nodes have a history.
 
 ### Source mode
 
@@ -58,7 +58,7 @@ Without a live graph, the tab lists `signal()`, `computed()`, `linkedSignal()`, 
 
 <ngmd-card-grid columns="2">
   <ngmd-card icon="zap" title="Live page">
-    The overlay reads the graph of the chosen component and pushes it every 3 seconds.
+    The overlay reads the graph of the chosen component after change detection and pushes it when it changes.
   </ngmd-card>
   <ngmd-card icon="file" title="Source scan">
     The server scans your files for signal declarations.

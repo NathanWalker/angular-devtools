@@ -83,7 +83,7 @@ The actions bar works on the selected form:
 
 ### When the page reports
 
-The overlay reads the forms every 3 seconds and pushes them when they change. It also pushes shortly after each `input`, `change`, `focusout`, `submit` or `reset` event. Reactive and template-driven forms also report each change through `control.events`.
+The overlay reads the forms after change detection and pushes them when they change. It also pushes shortly after each `input`, `change`, `focusout`, `submit` or `reset` event. Reactive and template-driven forms also report each change through `control.events`.
 
 ### Validators run only when needed
 

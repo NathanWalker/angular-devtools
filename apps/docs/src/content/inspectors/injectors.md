@@ -56,7 +56,7 @@ Without a live tree, the tab lists DI found in your source files, in four groups
 
 <ngmd-card-grid columns="2">
   <ngmd-card icon="zap" title="Live page">
-    The overlay reads the tree with Angular's debug API and pushes it with the component tree, every 3 seconds.
+    The overlay reads the tree with Angular's debug API and pushes it with the component tree, after change detection.
   </ngmd-card>
   <ngmd-card icon="file" title="Source scan">
     The server reads your <code>.ts</code> files, skipping specs and type declarations.

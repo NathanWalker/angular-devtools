@@ -34,6 +34,7 @@ import { collectComponentTree, componentHostOf } from './component-tree.ts';
 import { elementById, elementId } from './element-id.ts';
 import { collectSignalGraph, graphKey, toSignalTarget, type SignalTarget } from './signal-graph.ts';
 import { serializeNamed } from './serialize.ts';
+import { outsideAngular, watchChangeDetection } from './change-detection.ts';
 
 declare global {
   interface Window {
@@ -46,6 +47,7 @@ let highlightTimer: ReturnType<typeof setTimeout> | undefined;
 let highlightFrame = 0;
 const PAGE_ID_KEY = 'ng-devtools-page-id';
 const ROUTER_HEARTBEAT_MS = 5000;
+const KEEPALIVE_MS = 8000;
 
 function storedPageId(): string | null {
   try {
@@ -125,7 +127,7 @@ export function initOverlay(options: OverlayOptions = {}): Promise<() => void> {
     else cleanups.push(cleanup);
     return !stopped;
   };
-  return startOverlay(options, own).then(
+  return outsideAngular(() => startOverlay(options, own)).then(
     () => instance.stop,
     (error) => {
       instance.stop();
@@ -152,13 +154,13 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
 
   let componentTarget: string | null = null;
   let lastTreeJson = '';
-  let treeSkips = 0;
+  let treeSentAt = 0;
   async function pushTree(force = false) {
     const tree = collectComponentTree(getNg(), { selectedId: componentTarget });
     const json = JSON.stringify(tree);
-    if (!force && json === lastTreeJson && ++treeSkips < 4) return;
+    if (!force && json === lastTreeJson && Date.now() - treeSentAt < KEEPALIVE_MS) return;
     lastTreeJson = json;
-    treeSkips = 0;
+    treeSentAt = Date.now();
     await my.rpc.call('push-component-tree', { ...tree, pageId });
   }
 
@@ -170,7 +172,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
 
   let signalTarget: SignalTarget = null;
   let lastSignalKey = '';
-  let signalSkips = 0;
+  let signalSentAt = 0;
   let historyDelta = false;
   let historyFor = '';
 
@@ -178,9 +180,9 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     const graph = collectSignalGraph(getNg(), signalTarget);
     if (!graph) return;
     const key = graphKey(graph);
-    if (!force && key === lastSignalKey && ++signalSkips < 4) return;
+    if (!force && key === lastSignalKey && Date.now() - signalSentAt < KEEPALIVE_MS) return;
     lastSignalKey = key;
-    signalSkips = 0;
+    signalSentAt = Date.now();
     const owner = graph.component?.id ?? '';
     const full = force || !historyDelta || owner !== historyFor;
     historyFor = owner;
@@ -194,13 +196,13 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   }
 
   let lastInjectorJson = '';
-  let injectorSkips = 0;
+  let injectorSentAt = 0;
   async function pushInjectorTree() {
     const tree = collectInjectorTree(getNg());
     const json = JSON.stringify(tree);
-    if (json === lastInjectorJson && ++injectorSkips < 4) return;
+    if (json === lastInjectorJson && Date.now() - injectorSentAt < KEEPALIVE_MS) return;
     lastInjectorJson = json;
-    injectorSkips = 0;
+    injectorSentAt = Date.now();
     await my.rpc.call('push-injector-tree', { ...tree, pageId });
   }
 
@@ -359,7 +361,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
     pushHttp();
   };
   pushAll();
-  const interval = setInterval(pushAll, 3000);
+  const refresher = watchChangeDetection({ getNg, refresh: pushAll });
 
   my.rpc.register({
     name: 'highlight-in-page',
@@ -457,7 +459,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   addEventListener('pageshow', resendConfig);
 
   own(() => {
-    clearInterval(interval);
+    refresher.stop();
     removeEventListener('pagehide', leave);
     removeEventListener('pageshow', resendConfig);
     leave();

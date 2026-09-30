@@ -84,7 +84,9 @@ It also adds the [floating button](/getting-started/popup-and-hub). With the hub
 
 ### Snapshots and events
 
-The overlay sends a fresh snapshot every 3 seconds and skips data that did not change. Router events are sent as they happen.
+On Angular 20 and later, the overlay reads the page about 250 ms after Angular runs change detection. It also reads it every 4 seconds as a heartbeat. On older versions, it reads the page every 3 seconds instead.
+
+Each read skips data that did not change. Router events are sent as they happen.
 
 ### One id per tab
 
@@ -167,7 +169,7 @@ When you hover a component in the devtools, the overlay draws an amber box aroun
     No. The overlay adds the floating button itself. See <a href="/getting-started/popup-and-hub">Popup and hub</a>.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Does it slow down my app?">
-    It polls every 3 seconds and only sends data that changed. With the dynamic import above, it never loads in production builds.
+    It reads the page after change detection, at most once every 250 ms, plus a heartbeat every 4 seconds. It only sends data that changed. With the dynamic import above, it never loads in production builds.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Which values leave the page?">
     Live values are sent to the devtools server. Secret-looking values are redacted first. See <a href="/security">Access and redaction</a>.

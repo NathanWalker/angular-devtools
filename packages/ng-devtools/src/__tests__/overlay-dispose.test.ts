@@ -85,6 +85,56 @@ describe.sequential('overlay dispose', () => {
     expect(clients[0].calls.length).toBe(pushes);
   });
 
+  it('removes its profiler and clears the change detection timers', async () => {
+    document.body.innerHTML = '<app-root ng-version="22.1.7"></app-root>';
+    const profilers: ((event: number) => void)[] = [];
+    const other = vi.fn();
+    profilers.push(other);
+    const setProfiler = vi.fn((profiler: ((event: number) => void) | null) => {
+      if (!profiler) return () => {};
+      profilers.push(profiler);
+      return () => profilers.splice(profilers.indexOf(profiler), 1);
+    });
+    vi.stubGlobal('ng', { ɵsetProfiler: setProfiler });
+    const { initOverlay } = await loadOverlay();
+
+    const dispose = await initOverlay();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(profilers).toHaveLength(2);
+    for (const profiler of [...profilers]) profiler(2);
+    expect(vi.getTimerCount()).toBeGreaterThan(1);
+    dispose();
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(profilers).toEqual([other]);
+    expect(setProfiler).not.toHaveBeenCalledWith(null);
+    const pushes = clients[0].calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(clients[0].calls.length).toBe(pushes);
+  });
+
+  it('stops the change detection hook of the overlay it replaces', async () => {
+    document.body.innerHTML = '<app-root ng-version="22.1.7"></app-root>';
+    const profilers: ((event: number) => void)[] = [];
+    vi.stubGlobal('ng', {
+      ɵsetProfiler: (profiler: (event: number) => void) => {
+        profilers.push(profiler);
+        return () => profilers.splice(profilers.indexOf(profiler), 1);
+      },
+    });
+    const { initOverlay, disposeOverlay } = await loadOverlay();
+    await initOverlay();
+    const first = profilers[0];
+    await initOverlay({ baseURL: '/__elsewhere/' });
+
+    expect(profilers).toHaveLength(1);
+    expect(profilers[0]).not.toBe(first);
+
+    await disposeOverlay();
+    expect(profilers).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('is safe to dispose twice', async () => {
     const { initOverlay } = await loadOverlay();
     const dispose = await initOverlay();
