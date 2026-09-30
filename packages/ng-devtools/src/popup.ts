@@ -74,6 +74,13 @@ export function showDevtools(): Promise<void> {
   return shown;
 }
 
+/** Removes the popup, waiting for one that is still being created. */
+export async function hideDevtools(): Promise<void> {
+  await shown?.catch(() => {});
+  handle?.destroy();
+  shown = undefined;
+}
+
 function getBaseURL(): string {
   const paths = ['/__ng-devtools/', '/__devframes/ng-devtools/', '/__devframe/', '/'];
   for (const base of paths) {
@@ -578,6 +585,7 @@ export function createDevtoolsPopup(options: { src?: string } = {}) {
       popupRoot?.remove();
       popupRoot = null;
       handle = undefined;
+      shown = undefined;
       isOpen = false;
     },
   };

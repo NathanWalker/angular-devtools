@@ -90,12 +90,64 @@ async function claimPageId(): Promise<{ id: string; release: () => void }> {
   return { id, release: () => channel.close() };
 }
 
-export async function initOverlay(options: { baseURL?: string | string[] } = {}) {
+interface OverlayOptions {
+  baseURL?: string | string[];
+}
+
+let current: { stop: () => void } | null = null;
+let popup: Promise<typeof import('./popup.ts')> | undefined;
+
+/**
+ * Starts the overlay and resolves with its dispose. Only one overlay runs per
+ * page: starting another stops the one before it, including the auto-started one.
+ */
+export function initOverlay(options: OverlayOptions = {}): Promise<() => void> {
+  current?.stop();
+  const cleanups: (() => void)[] = [];
+  let stopped = false;
+  const instance = {
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      if (current === instance) current = null;
+      for (const cleanup of cleanups.splice(0).reverse()) {
+        try {
+          cleanup();
+        } catch {
+          continue;
+        }
+      }
+    },
+  };
+  current = instance;
+  const own = (cleanup: () => void) => {
+    if (stopped) cleanup();
+    else cleanups.push(cleanup);
+    return !stopped;
+  };
+  return startOverlay(options, own).then(
+    () => instance.stop,
+    (error) => {
+      instance.stop();
+      throw error;
+    },
+  );
+}
+
+/** Stops the running overlay and removes the floating devtools button. */
+export async function disposeOverlay(): Promise<void> {
+  current?.stop();
+  const loaded = await popup?.catch(() => undefined);
+  await loaded?.hideDevtools();
+}
+
+async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) => boolean) {
   // `connectDevframe()` alone looks for the connection next to the page, which
   // misses the documented `/__ng-devtools/` mount in a host app.
   const rpc = await connectDevframe({
     baseURL: options.baseURL ?? ['./', '/__ng-devtools/', '/__devframes/ng-devtools/'],
   });
+  if (!own(() => rpc.close?.())) return;
   const my = rpc.scope('ng-devtools');
 
   let componentTarget: string | null = null;
@@ -114,6 +166,7 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     serializeNamed(name, value, { budget: 1000 }),
   );
   const restoreSignalHook = await installSignalWriteHook(signalHistory.onWrite);
+  if (!own(restoreSignalHook)) return;
 
   let signalTarget: SignalTarget = null;
   let lastSignalKey = '';
@@ -152,6 +205,7 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
   }
 
   const { id: pageId, release: releasePageId } = await claimPageId();
+  if (!own(releasePageId)) return;
   const stopAnalog = attachAnalog(my, pageId, getNg);
   const forms = attachForms(my, pageId, getNg, { show: showHighlight, clear: clearHighlight });
   const pushForms = forms.push;
@@ -294,25 +348,18 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     routerPushTimer = setTimeout(() => void pushRouter(), 50);
   }
 
-  pushTree();
-  pushSignalGraph();
-  pushInjectorTree();
-  pushNgrxState();
-  pushForms();
-  pushPipes();
-  pushRouter();
-  pushHttp();
-
-  const interval = setInterval(() => {
-    pushTree();
-    pushSignalGraph();
-    pushInjectorTree();
+  const pushAll = () => {
+    pushTree().catch(() => {});
+    pushSignalGraph().catch(() => {});
+    pushInjectorTree().catch(() => {});
     pushNgrxState();
     pushForms();
     pushPipes();
-    pushRouter();
+    void pushRouter();
     pushHttp();
-  }, 3000);
+  };
+  pushAll();
+  const interval = setInterval(pushAll, 3000);
 
   my.rpc.register({
     name: 'highlight-in-page',
@@ -381,10 +428,14 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
     },
   });
 
-  window.__ngDevtoolsComponentOf = (el) => {
+  const componentOf = (el: unknown) => {
     const host = el instanceof Element ? componentHostOf(getNg(), el) : null;
     return host ? elementId(host) : null;
   };
+  window.__ngDevtoolsComponentOf = componentOf;
+  own(() => {
+    if (window.__ngDevtoolsComponentOf === componentOf) delete window.__ngDevtoolsComponentOf;
+  });
 
   const leave = () => {
     pipes.pause();
@@ -405,25 +456,23 @@ export async function initOverlay(options: { baseURL?: string | string[] } = {})
   };
   addEventListener('pageshow', resendConfig);
 
-  return () => {
+  own(() => {
     clearInterval(interval);
-    restoreSignalHook();
     removeEventListener('pagehide', leave);
+    removeEventListener('pageshow', resendConfig);
+    leave();
     forms.stop();
     pipes.stop();
-    void my.rpc.call('forget-pipes-page', pageId).catch(() => {});
     ngrx.stop();
     stopAnalog();
-    removeEventListener('pageshow', resendConfig);
     for (const cleanup of routerCleanup) cleanup();
     routerCleanup = [];
     stopInstrument?.();
+    stopInstrument = null;
     routerDomObserver?.disconnect();
     clearTimeout(routerPushTimer);
-    releasePageId();
     clearHighlight();
-    delete window.__ngDevtoolsComponentOf;
-  };
+  });
 }
 
 function findAngularElements(): Element[] {
@@ -523,5 +572,6 @@ if (
   !(typeof process !== 'undefined' && process.env?.['VITEST'])
 ) {
   initOverlay().catch(console.error);
-  import('./popup.ts').then((m) => m.showDevtools()).catch(console.error);
+  popup = import('./popup.ts');
+  popup.then((m) => m.showDevtools()).catch(console.error);
 }
