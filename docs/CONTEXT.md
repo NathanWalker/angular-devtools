@@ -20,6 +20,10 @@ _Avoid_: content script, agent, injected script
 One inspector's page-side code inside the overlay, such as `forms-collector.ts` or `pipes-collector.ts`. It reads the app through Angular's debug APIs, gives objects stable ids through a `WeakMap`, and pushes a report tagged with the `pageId`.
 _Avoid_: scraper, probe, watcher
 
+**Host tree**:
+The tree Angular rendered into, as the component, injector and NgRx collectors walk it: roots, children, parent and a tag for each host (`HostTree` in `host-tree.ts`). In the browser it is the DOM, through `domTree()`; a platform without a DOM describes its own views.
+_Avoid_: view tree, render tree, DOM (when the code does not depend on it)
+
 **Push**:
 A report a collector sends to the server over RPC, such as `push-component-tree`. A collector sends one when something changed, and a keepalive at intervals so the server knows the page is still there. Pushes stay cheap.
 _Avoid_: sync, upload, post

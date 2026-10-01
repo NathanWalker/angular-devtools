@@ -1,3 +1,4 @@
+import { domTree } from './host-tree.ts';
 import { createNgrxCollector, type NgrxDebugNg } from './ngrx-collector.ts';
 import type { NgrxPageReport, NgrxRequest } from './ngrx-shared.ts';
 
@@ -41,7 +42,7 @@ export function attachNgrx(
     }, 50);
   };
 
-  const collector = createNgrxCollector(getNg, () => schedule(), document, maxLog);
+  const collector = createNgrxCollector(getNg, () => schedule(), domTree(), maxLog);
 
   const push = async (rediscover = true) => {
     if (pushing) return schedule(rediscover);

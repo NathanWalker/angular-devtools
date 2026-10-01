@@ -1,5 +1,6 @@
 import { componentHosts, hostPath, type ComponentDebugNg } from './component-tree.ts';
 import { elementById, elementId } from './element-id.ts';
+import { domTree } from './host-tree.ts';
 import { className, injectorRef } from './injector-tree.ts';
 import { serializeNamed } from './serialize.ts';
 import { cleanValue, groupResources, rawNodeOf, type RawNode } from './signal-resources.ts';
@@ -281,7 +282,7 @@ function graphForEnvironment(ng: SignalDebugNg, env: Environment): SignalGraph |
 }
 
 function environmentHosts(ng: SignalDebugNg, doc: Document): Element[] {
-  const hosts = componentHosts(ng, doc, 1);
+  const hosts = componentHosts(ng, domTree(doc), 1);
   const routed = routedComponent(ng, doc);
   return routed ? [...hosts, routed] : hosts;
 }
@@ -324,7 +325,7 @@ function pickGraph(
     if (graph) return graph;
   }
   let empty: SignalGraph | null = null;
-  for (const host of componentHosts(ng, doc, MAX_FALLBACK_HOSTS)) {
+  for (const host of componentHosts(ng, domTree(doc), MAX_FALLBACK_HOSTS)) {
     const graph = graphFor(ng, host, 'root');
     if (graph?.nodes.length) return graph;
     empty ??= graph;
