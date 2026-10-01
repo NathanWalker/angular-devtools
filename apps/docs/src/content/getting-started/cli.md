@@ -87,7 +87,7 @@ npx @santoshyadavdev/ng-devtools dev --port 9999 --open
 When the server is ready, it prints the version, the panel URL and the MCP endpoint:
 
 ```text
-  ng-devtools v0.0.5
+  ng-devtools v0.0.6
   Panel: http://localhost:9999/
   MCP:   http://localhost:9999/__mcp
 ```
