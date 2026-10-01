@@ -39,15 +39,31 @@ Join the conversation, ask questions, and share feedback on [Discord](https://di
 
 ## Sponsors
 
-If Angular DevTools helps your work, please consider [sponsoring the project on GitHub](https://github.com/sponsors/santoshyadavdev). Your support keeps development going.
+Angular DevTools is free and open source. If it helps your work, please consider sponsoring it. Your support keeps development going.
 
-Thanks to the current sponsors:
+<p>
+  <a href="https://github.com/sponsors/santoshyadavdev"><img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white" alt="Sponsor Angular DevTools on GitHub" /></a>
+</p>
+
+### Company sponsors
+
+<!-- prettier-ignore-start -->
+<a href="https://coderabbit.ai"><img src="https://github.com/coderabbitai.png?size=120" width="120" height="120" alt="CodeRabbit" /></a>
+<!-- prettier-ignore-end -->
+
+### Individual sponsors
 
 <!-- sponsors -->
-
-<a href="https://github.com/coderabbitai"><img src="https://github.com/coderabbitai.png?size=60" width="60" height="60" alt="CodeRabbit" /></a>
-<a href="https://github.com/umairhm"><img src="https://github.com/umairhm.png?size=60" width="60" height="60" alt="umairhm" /></a>
-<a href="https://github.com/Sonichigo"><img src="https://github.com/Sonichigo.png?size=60" width="60" height="60" alt="Sonichigo" /></a>
+<!-- prettier-ignore-start -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/umairhm"><img src="https://github.com/umairhm.png?size=100" width="80px;" alt="Umair Hafeez"/><br /><sub><b>Umair Hafeez</b></sub></a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Sonichigo"><img src="https://github.com/Sonichigo.png?size=100" width="80px;" alt="Animesh Pathak"/><br /><sub><b>Animesh Pathak</b></sub></a></td>
+    </tr>
+  </tbody>
+</table>
+<!-- prettier-ignore-end -->
 <!-- /sponsors -->
 
 ## Contributors
