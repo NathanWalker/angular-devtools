@@ -46,7 +46,7 @@ The **Navigations** view looks for loops in the recorded navigations. A loop is 
 | **navigation loop**           | Your code calls `navigate` or `navigateByUrl` within 500 ms of the previous navigation ending, and the chain returns to an earlier URL.                                                                  |
 | **redirect loop** (`NG04016`) | Angular stops a navigation with `NG04016` because `redirectTo` entries of the config form a cycle.                                                                                                       |
 
-To see one, click **Guard loop** in the Routes lab of the demo app (`/examples/routes`). Its two guards redirect to each other five times, then to **Summary**.
+To see one, open the Routes lab of the demo app (`/examples/routes`). **Guard loop** makes two guards redirect to each other five times, then to **Summary** (a redirect loop). **Navigation ping-pong** navigates between **Details** and **Summary** from code (a navigation loop).
 
 When the view finds a loop, a **Loop detected** section appears above the list. It shows the cycle of URLs, such as `/account → /login → /account`. Under it, each hop names its cause: the guard, the `redirectTo` entry or the `navigate` call. A last line lists the navigation ids, how many times the chain came back, how it ended and the guards involved.
 

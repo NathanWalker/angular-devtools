@@ -42,15 +42,16 @@ Destination photos are from Unsplash, credited in `public/destinations/CREDITS.m
 
 `/examples/routes` has one link per router case, so the Router tab has something to show:
 
-| Link           | What it does                                                                                                                                |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Summary**    | Target of the empty-path redirect.                                                                                                          |
-| **Details**    | A plain child route.                                                                                                                        |
-| **User 7**     | A `:id` param with a slow resolver.                                                                                                         |
-| **Admin**      | A guard that redirects to **Summary**.                                                                                                      |
-| **Locked**     | A guard that returns `false`.                                                                                                               |
-| **Broken**     | A resolver that throws.                                                                                                                     |
-| **Guard loop** | `loop-a` and `loop-b` guards that redirect to each other five times, then to **Summary**. The Navigations view flags it as a redirect loop. |
+| Link                     | What it does                                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Summary**              | Target of the empty-path redirect.                                                                                                          |
+| **Details**              | A plain child route.                                                                                                                        |
+| **User 7**               | A `:id` param with a slow resolver.                                                                                                         |
+| **Admin**                | A guard that redirects to **Summary**.                                                                                                      |
+| **Locked**               | A guard that returns `false`.                                                                                                               |
+| **Broken**               | A resolver that throws.                                                                                                                     |
+| **Guard loop**           | `loop-a` and `loop-b` guards that redirect to each other five times, then to **Summary**. The Navigations view flags it as a redirect loop. |
+| **Navigation ping-pong** | A button whose code navigates between **Details** and **Summary** six times in a row. The Navigations view flags it as a navigation loop.   |
 
 Keep `redirectTo` cycles (`NG04016`) in the unit tests: Angular stops them before any guard runs.
 
