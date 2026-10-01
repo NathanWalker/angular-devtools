@@ -51,7 +51,7 @@ Lists the tabs that report to the server, newest first: page id, URL, seconds si
 
 ### Turn tools off
 
-The server decides which tools exist. Set `agent.readOnly` to drop the six action tools. Set `agent.tools.<inspector>` to `false` to hide one inspector's tools and resources, and keep its tab. Turning an inspector off with `inspectors`, or blocking an action with `actions`, drops the matching tools too. See [Inspectors and agent tools](../getting-started/configuration.md#inspectors-and-agent-tools).
+The server decides which tools exist. Set `agent.readOnly` to drop the six action tools. Set `agent.tools.<inspector>` to `false` to hide one inspector's tools and resources, and keep its tab. Turning an inspector off with `inspectors`, or blocking an action with `actions`, drops the matching tools too. `actions.router` is the exception: `navigate` stays and refuses `navigate`, `abort`, `replay` and `probe`. See [Inspectors and agent tools](../getting-started/configuration.md#inspectors-and-agent-tools).
 
 ## Source scan
 
@@ -191,7 +191,7 @@ Use `explain-navigation` for "why was I redirected". Pass `perf: true` for "why 
 | `instrument`   | Turns per-guard and per-resolver recording on or off.                                            | `on`                                                                                                    |
 | `resolve-lazy` | Reads the routes of an unloaded lazy route without registering them.                             | `routeId`, from `list-routes`                                                                           |
 
-`action` is required. Only same-origin URLs that start with `/` are accepted.
+`action` is required. Only same-origin URLs that start with `/` are accepted. With `actions.router` set to `false`, `navigate`, `abort`, `replay` and `probe` answer **Navigating is turned off in the devtools config (actions.router).** `instrument` and `resolve-lazy` still work. `agent.readOnly` drops the whole tool.
 
 `waitFor` sets when `navigate` answers:
 

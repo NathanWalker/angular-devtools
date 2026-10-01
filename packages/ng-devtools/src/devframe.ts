@@ -1862,7 +1862,7 @@ const ngDevtools = defineDevframe({
     agent.registerTool({
       id: 'ng-devtools:navigate',
       description:
-        'Acts on the running app\'s router (development only). action "navigate" goes to `url` (same-origin, starting with "/") or to `pattern` with `params` (e.g. /users/:id with {"id":"7"}), optionally with replaceUrl or skipLocationChange, and waits for the outcome; "abort" stops the navigation in flight; "replay" re-runs navigation `id` and compares the outcome; "probe" runs the real matcher for `url` without navigating (it runs canMatch and may load lazy chunks; when a canMatch guard redirects, it stops the redirect and returns `redirectedTo`); "instrument" turns per-guard and per-resolver recording on or off; "resolve-lazy" reads the routes of an unloaded lazy route (`routeId` from list-routes) without registering them.',
+        'Acts on the running app\'s router (development only). action "navigate" goes to `url` (same-origin, starting with "/") or to `pattern` with `params` (e.g. /users/:id with {"id":"7"}), optionally with replaceUrl or skipLocationChange, and waits for the outcome; "abort" stops the navigation in flight; "replay" re-runs navigation `id` and compares the outcome; "probe" runs the real matcher for `url` without navigating (it runs canMatch and may load lazy chunks; when a canMatch guard redirects, it stops the redirect and returns `redirectedTo`); "instrument" turns per-guard and per-resolver recording on or off; "resolve-lazy" reads the routes of an unloaded lazy route (`routeId` from list-routes) without registering them. navigate, abort, replay and probe need the router write action (actions.router); instrument and resolve-lazy work without it.',
       safety: 'action',
       inputSchema: {
         type: 'object',
@@ -1902,6 +1902,8 @@ const ngDevtools = defineDevframe({
         on?: boolean;
         routeId?: string;
       }) => {
+        if (!config.actions.router && ROUTER_WRITE_ACTIONS.includes(args.action))
+          return { markdown: actionBlockedMessage('router') };
         const state = routerState.value() as RouterState;
         const target = args.page
           ? state.pages.find((p) => p.pageId === args.page)

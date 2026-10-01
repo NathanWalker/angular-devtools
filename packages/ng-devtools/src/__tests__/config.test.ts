@@ -248,7 +248,7 @@ describe('agent tool and RPC registration', () => {
     );
     expect(forms.tools).toEqual(expect.arrayContaining(['inspect-forms', 'form-history']));
     const router = await boot({ actions: { router: false } });
-    expect(router.actionTools).not.toContain('navigate');
+    expect(router.actionTools).toContain('navigate');
     expect(router.actionTools).toEqual(expect.arrayContaining(['form-action', 'fill-form']));
     expect(router.tools).toContain('list-routes');
     const analog = await boot({ actions: { analog: false } });
@@ -319,6 +319,24 @@ describe('panel actions', () => {
       error: expect.stringContaining('actions.analog'),
     });
     expect(await invoke('get-http-rules', undefined)).toEqual([]);
+  });
+
+  it('refuses a panel probe with router actions off and lets record and resolve lazy through', async () => {
+    const { ctx, invoke } = await boot({ actions: { router: false } });
+    const broadcast = vi.spyOn(ctx.rpc, 'broadcast').mockImplementation((async (options: never) => {
+      const { requestId } = (options as { args: [{ requestId: string }] }).args[0];
+      await invoke('router-action-result', { requestId, result: { ok: true } });
+    }) as never);
+    expect(
+      await invoke('request-router-action', { request: { action: 'probe', url: '/' } }),
+    ).toEqual({ error: 'Navigating is turned off in the devtools config (actions.router).' });
+    expect(
+      await invoke('request-router-action', { request: { action: 'instrument', on: true } }),
+    ).toEqual({ ok: true });
+    expect(
+      await invoke('request-router-action', { request: { action: 'resolve-lazy', id: '2' } }),
+    ).toEqual({ ok: true });
+    expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
   it('lets HTTP and Analog writes through when only other actions are blocked', async () => {

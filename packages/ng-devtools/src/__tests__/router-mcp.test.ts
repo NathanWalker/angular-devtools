@@ -1,17 +1,18 @@
 import { createHostContext } from 'devframe/node';
 import { describe, expect, it, vi } from 'vitest';
-import ngDevtools from '../devframe.ts';
+import ngDevtools, { createNgDevtools } from '../devframe.ts';
+import type { NgDevtoolsConfig } from '../config.ts';
 import type { NavigationRecord } from '../router.ts';
 import type { RouteNode } from '../router-config.ts';
 
-async function boot() {
+async function boot(options?: NgDevtoolsConfig) {
   const host = {
     mountStatic: () => {},
     resolveOrigin: () => 'http://localhost',
     getStorageDir: () => '',
   };
   const ctx = await createHostContext({ cwd: process.cwd(), mode: 'dev', host: host as never });
-  await ngDevtools.setup(ctx as never);
+  await (options ? createNgDevtools(options) : ngDevtools).setup(ctx as never);
   const push = (name: string, payload: unknown) =>
     ctx.rpc.invokeLocal(`ng-devtools:${name}` as never, ...([payload] as never));
   const call = async (tool: string, args: Record<string, unknown> = {}) =>
@@ -429,6 +430,33 @@ describe('router MCP tools', () => {
     expect(unknown).not.toMatch(/stdio/);
     expect(await call('navigate', { action: 'resolve-lazy' })).toContain('routeId is required');
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('blocks navigate, abort, replay and probe with actions.router off but keeps instrument and resolve-lazy', async () => {
+    const { ctx, push, call } = await boot({ actions: { router: false } });
+    expect(ctx.agent.list().tools.map((tool) => tool.id)).toContain('ng-devtools:navigate');
+    await push('push-router', report());
+    const sent: unknown[] = [];
+    vi.spyOn(ctx.rpc, 'broadcast').mockImplementation((async (options: never) => {
+      const { requestId, request } = (
+        options as { args: [{ requestId: string; request: unknown }] }
+      ).args[0];
+      sent.push(request);
+      await push('router-action-result', { requestId, result: { ok: true } });
+    }) as never);
+    for (const action of ['navigate', 'abort', 'replay', 'probe']) {
+      expect(await call('navigate', { action, url: '/users/9', id: 3 })).toBe(
+        'Navigating is turned off in the devtools config (actions.router).',
+      );
+    }
+    expect(await call('navigate', { action: 'instrument', on: true })).toContain('"ok": true');
+    expect(await call('navigate', { action: 'resolve-lazy', routeId: '2' })).toContain(
+      '"ok": true',
+    );
+    expect(sent).toEqual([
+      { action: 'instrument', on: true },
+      { action: 'resolve-lazy', id: '2' },
+    ]);
   });
 
   it('tells the page whether its route config is stored', async () => {

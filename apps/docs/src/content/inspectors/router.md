@@ -194,7 +194,7 @@ Without that recording, the guards listed for a navigation are candidates: the `
 | `ng-devtools:navigate`            | Acts on the router: `navigate`, `abort`, `replay`, `probe`, `instrument` and `resolve-lazy`.                                                                                       |
 | `ng-devtools:router` (resource)   | The active route tree and recent navigations of each page.                                                                                                                         |
 
-`navigate` only accepts same-origin relative URLs that start with `/`. `resolve-lazy` needs a `routeId`. See [Tools](../agents/tools.md).
+`navigate` only accepts same-origin relative URLs that start with `/`. `resolve-lazy` needs a `routeId`. With [`actions.router`](../getting-started/configuration.md#actions) set to `false`, the tool refuses `navigate`, `abort`, `replay` and `probe`, and keeps `instrument` and `resolve-lazy`. See [Tools](../agents/tools.md).
 
 ## Limits and gotchas
 
@@ -230,6 +230,9 @@ The page keeps the last 50 navigations and 50 preloads. Set the navigation count
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Does Probe in app change the URL?">
     No. It runs the real matcher with <code>skipLocationChange</code> and stops after recognition. <code>canActivate</code>, <code>canDeactivate</code> and resolvers do not run. If a <code>canMatch</code> guard or the navigation error handler redirects, the probe stops the redirected navigation too and names its target.
+  </ngmd-accordion-item>
+  <ngmd-accordion-item title="Why is Probe in app turned off?">
+    The probe runs your app's <code>canMatch</code> guards, so <a href="../getting-started/configuration.md#actions"><code>actions.router</code></a> set to <code>false</code> turns it off, along with <strong>Go</strong>, <strong>Abort</strong> and <strong>Replay</strong>. <strong>Record each guard and resolver</strong> and <strong>Read lazy</strong> stay on.
   </ngmd-accordion-item>
   <ngmd-accordion-item title="Why is the source table collapsed?">
     The live config is available, so it is the better source. Click <strong>Show table</strong> to open the source list.

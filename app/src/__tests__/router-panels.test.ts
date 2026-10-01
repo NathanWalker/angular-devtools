@@ -9,10 +9,12 @@ import type { NavigationRecord, RouterPage } from '../pages/router-types';
 
 type Call = (name: string, arg: Record<string, unknown>) => Promise<unknown>;
 
-function fakeClient(call: Call): DevframeRpcClient {
+function fakeClient(call: Call, connectionMeta: object = {}): DevframeRpcClient {
   const rpc = { call, callEvent: () => Promise.resolve() };
-  return { connectionMeta: {}, scope: () => ({ rpc }) } as unknown as DevframeRpcClient;
+  return { connectionMeta, scope: () => ({ rpc }) } as unknown as DevframeRpcClient;
 }
+
+const routerActionsOff = { configs: { 'ng-devtools': { actions: { router: false } } } };
 
 const offline: Call = () => Promise.reject(new Error('offline'));
 
@@ -54,10 +56,10 @@ function button(fixture: ComponentFixture<unknown>, name: string): HTMLButtonEle
   return found;
 }
 
-function mount<T>(type: Type<T>, data: RouterPage, call: Call) {
+function mount<T>(type: Type<T>, data: RouterPage, call: Call, connectionMeta?: object) {
   const fixture = TestBed.createComponent(type);
   fixture.componentRef.setInput('page', data);
-  fixture.componentRef.setInput('rpc', fakeClient(call));
+  fixture.componentRef.setInput('rpc', fakeClient(call, connectionMeta));
   document.body.append(el(fixture));
   return fixture;
 }
@@ -107,6 +109,20 @@ describe('RouteTree row actions', () => {
     expect(el(fixture).querySelector('tr.row-result')?.textContent).toContain(
       'Navigation #3: succeeded at /users/7.',
     );
+  });
+
+  it('turns Probe off with the config hint when router actions are off and keeps Read lazy', async () => {
+    const fixture = mount(RouteTree, config, offline, routerActionsOff);
+    await settle(fixture);
+    const probe = button(fixture, 'Probe in app');
+    const hint = el(fixture).querySelector('#route-tree-writes-off');
+    expect(probe.disabled).toBe(true);
+    expect(probe.getAttribute('aria-describedby')).toBe('route-tree-writes-off');
+    expect(hint?.textContent?.trim()).toBe(
+      'Navigating is turned off in the devtools config (actions.router).',
+    );
+    expect(button(fixture, 'Navigate to users/:id').disabled).toBe(true);
+    expect(button(fixture, 'Read lazy routes of lazy').disabled).toBe(false);
   });
 
   it('shows Read lazy results and unreachable pages under the row', async () => {

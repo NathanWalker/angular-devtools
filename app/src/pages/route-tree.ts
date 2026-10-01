@@ -42,7 +42,15 @@ interface MatchResult {
         (input)="testUrl.set($any($event.target).value)"
       />
       <button type="submit" class="small primary">Predict</button>
-      <button type="button" class="small" (click)="probe()">Probe in app</button>
+      <button
+        type="button"
+        class="small"
+        [disabled]="!navigationAllowed()"
+        [attr.aria-describedby]="navigationAllowed() ? null : 'route-tree-writes-off'"
+        (click)="probe()"
+      >
+        Probe in app
+      </button>
     </form>
     @if (match(); as result) {
       <div class="result" role="status" [attr.data-matched]="result.matched">

@@ -312,13 +312,13 @@ export const FORM_WRITE_ACTIONS: readonly string[] = [
   'restore',
 ];
 
-/** Router actions that start, stop or repeat a navigation. */
-export const ROUTER_WRITE_ACTIONS: readonly string[] = ['navigate', 'abort', 'replay'];
+/** Router actions that start, stop, repeat or probe a navigation. */
+export const ROUTER_WRITE_ACTIONS: readonly string[] = ['navigate', 'abort', 'replay', 'probe'];
 
 /** Agent tools that perform an action's writes; blocking the action drops them. */
 export const ACTION_TOOLS: Record<NgDevtoolsAction, readonly string[]> = {
   forms: ['form-action', 'fill-form'],
-  router: ['navigate'],
+  router: [],
   ngrx: ['dispatch-ngrx-action'],
   http: [],
   analog: ['analog-call-api'],
