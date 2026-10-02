@@ -1,6 +1,6 @@
 import { componentHostOf, type ComponentDebugNg } from './component-tree.ts';
-import { angularRoots } from './host-tree.ts';
 import { elementId } from './element-id.ts';
+import { angularRoots } from './host-tree.ts';
 import { className } from './injector-tree.ts';
 import type { DeferBlockInfo } from './types.ts';
 

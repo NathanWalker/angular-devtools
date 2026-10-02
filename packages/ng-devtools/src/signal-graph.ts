@@ -1,6 +1,6 @@
 import { componentHosts, hostPath, type ComponentDebugNg } from './component-tree.ts';
 import { elementById, elementId } from './element-id.ts';
-import { documentTree, type HostTree } from './host-tree.ts';
+import { domTree, hostBySelector, type HostTree } from './host-tree.ts';
 import { className, injectorRef } from './injector-tree.ts';
 import { serializeNamed } from './serialize.ts';
 import { cleanValue, groupResources, rawNodeOf, type RawNode } from './signal-resources.ts';
@@ -12,7 +12,7 @@ import type {
   SignalNodeKind,
 } from './types.ts';
 
-export interface SignalDebugNg<H = Element> extends ComponentDebugNg<H> {
+export interface SignalDebugNg<H extends object = Element> extends ComponentDebugNg<H> {
   ɵgetSignalGraph?(injector: unknown): {
     nodes: { id?: string; kind?: string; label?: string; epoch?: number; value?: unknown }[];
     edges?: SignalGraphEdge[];
@@ -38,7 +38,7 @@ function read<T>(fn: () => T, fallback: T): T {
   }
 }
 
-function isComponentHost<H>(ng: SignalDebugNg<H>, el: H | null): el is H {
+function isComponentHost<H extends object>(ng: SignalDebugNg<H>, el: H | null): el is H {
   return !!el && !!read(() => ng.getComponent?.(el), null);
 }
 
@@ -60,20 +60,83 @@ export function toSignalTarget(request: unknown, pageId: string): SignalTarget |
   return typeof selector === 'string' && selector && selector.length < 500 ? { selector } : null;
 }
 
-function resolveTarget<H extends object>(target: SignalTarget, tree: HostTree<H>): H | null {
-  if (!target || 'env' in target) return null;
-  if ('id' in target) {
-    const host = elementById(target.id, (h) => tree.isHost(h) && tree.connected(h));
-    return host && tree.isHost(host) ? host : null;
-  }
-  return tree.find(target.selector);
+interface HostSource<H extends object> {
+  tree: HostTree<H>;
+  find(target: { id: string } | { selector: string }): H | null;
+  routed(ng: SignalDebugNg<H>): H | null;
 }
 
-export function routedComponent<H extends object = Element>(
-  ng: SignalDebugNg<H>,
-  tree: HostTree<H> = documentTree(),
-): H | null {
-  return tree.routed?.((host) => isComponentHost(ng, host)) ?? null;
+function pageSource(doc: Document): HostSource<Element> {
+  return {
+    tree: domTree(doc),
+    find: (target) => {
+      if ('id' in target) return elementById(target.id);
+      try {
+        return doc.querySelector(target.selector);
+      } catch {
+        return null;
+      }
+    },
+    routed: (ng) => routedComponent(ng, doc),
+  };
+}
+
+function treeSource<H extends object>(tree: HostTree<H>): HostSource<H> {
+  return {
+    tree,
+    find: (target) =>
+      'id' in target
+        ? elementById<H>(target.id, (host) => tree.isHost(host) && tree.connected(host))
+        : hostBySelector(tree, target.selector),
+    routed: () => null,
+  };
+}
+
+function sourceOf<H extends object>(from: Document | HostTree<H>): HostSource<H> {
+  return 'roots' in from && typeof from.roots === 'function'
+    ? treeSource(from)
+    : (pageSource(from as Document) as unknown as HostSource<H>);
+}
+
+function resolveTarget<H extends object>(target: SignalTarget, source: HostSource<H>): H | null {
+  if (!target || 'env' in target) return null;
+  return source.find(target);
+}
+
+function isPrimaryOutlet(outlet: Element): boolean {
+  const name = outlet.getAttribute('name');
+  return !name || name === 'primary';
+}
+
+function outletBefore(el: Element): Element | null {
+  const prev = el.previousElementSibling;
+  return prev && prev.tagName === 'ROUTER-OUTLET' ? prev : null;
+}
+
+export function routedComponent(ng: SignalDebugNg, doc: Document = document): Element | null {
+  let best: Element | null = null;
+  let bestDepth = -1;
+  for (const outlet of Array.from(doc.querySelectorAll('router-outlet'))) {
+    if (!isPrimaryOutlet(outlet)) continue;
+    const el = outlet.nextElementSibling;
+    if (!isComponentHost(ng, el)) continue;
+    let depth = 0;
+    let primary = true;
+    for (let node: Element | null = el; node; node = node.parentElement) {
+      const before = outletBefore(node);
+      if (!before || !isComponentHost(ng, node)) continue;
+      if (!isPrimaryOutlet(before)) {
+        primary = false;
+        break;
+      }
+      depth++;
+    }
+    if (primary && depth > bestDepth) {
+      best = el;
+      bestDepth = depth;
+    }
+  }
+  return best;
 }
 
 interface LinkedReader {
@@ -81,7 +144,10 @@ interface LinkedReader {
   node: RawNode;
 }
 
-function linkedSignalReaders<H>(ng: SignalDebugNg<H>, instance: object): LinkedReader[] {
+function linkedSignalReaders<H extends object>(
+  ng: SignalDebugNg<H>,
+  instance: object,
+): LinkedReader[] {
   const readers: LinkedReader[] = [];
   for (const key of read(() => Object.keys(instance), [] as string[])) {
     const value = read(() => (instance as Record<string, unknown>)[key], undefined);
@@ -114,7 +180,11 @@ function linkedValue(
 
 type RawGraph = NonNullable<ReturnType<NonNullable<SignalDebugNg['ɵgetSignalGraph']>>>;
 
-function buildGraph<H>(raw: RawGraph, instance: object | null, ng: SignalDebugNg<H>) {
+function buildGraph<H extends object>(
+  raw: RawGraph,
+  instance: object | null,
+  ng: SignalDebugNg<H>,
+) {
   let linked: LinkedReader[] | null = null;
   const kept = raw.nodes.slice(0, MAX_NODES);
   const twins = new Map<string, number>();
@@ -160,7 +230,7 @@ function hasIds(raw: RawGraph): boolean {
   return raw.nodes.every((n) => typeof n.id === 'string' || typeof n.id === 'number');
 }
 
-function rawGraph<H>(ng: SignalDebugNg<H>, injector: unknown): RawGraph | null {
+function rawGraph<H extends object>(ng: SignalDebugNg<H>, injector: unknown): RawGraph | null {
   const raw = read(() => ng.ɵgetSignalGraph?.(injector) ?? null, null);
   return raw && Array.isArray(raw.nodes) ? raw : null;
 }
@@ -170,8 +240,8 @@ const UNSUPPORTED: SignalGraph = { nodes: [], edges: [], unsupported: true };
 function graphFor<H extends object>(
   ng: SignalDebugNg<H>,
   el: H,
-  tree: HostTree<H>,
   source: NonNullable<SignalGraph['source']>,
+  tree: HostTree<H>,
 ): SignalGraph | null {
   const instance = read(() => ng.getComponent?.(el), null);
   if (!instance || typeof instance !== 'object') return null;
@@ -245,7 +315,10 @@ export function isEnvironmentRequest(wanted: string): boolean {
   );
 }
 
-function graphForEnvironment<H>(ng: SignalDebugNg<H>, env: Environment): SignalGraph | null {
+function graphForEnvironment<H extends object>(
+  ng: SignalDebugNg<H>,
+  env: Environment,
+): SignalGraph | null {
   const raw = rawGraph(ng, env.injector);
   if (!raw) return null;
   if (!hasIds(raw)) return UNSUPPORTED;
@@ -256,22 +329,23 @@ function graphForEnvironment<H>(ng: SignalDebugNg<H>, env: Environment): SignalG
   };
 }
 
-function environmentHosts<H extends object>(ng: SignalDebugNg<H>, tree: HostTree<H>): H[] {
-  const hosts = componentHosts(ng, tree, 1);
-  const routed = routedComponent(ng, tree);
+function environmentHosts<H extends object>(ng: SignalDebugNg<H>, source: HostSource<H>): H[] {
+  const hosts = componentHosts(ng, source.tree, 1);
+  const routed = source.routed(ng);
   return routed ? [...hosts, routed] : hosts;
 }
 
 export function collectSignalGraph<H extends object = Element>(
   ng: SignalDebugNg<H> | undefined,
   target: SignalTarget = null,
-  tree: HostTree<H> = documentTree(),
+  from: Document | HostTree<H> = document,
 ): SignalGraph | null {
   if (!ng?.ɵgetSignalGraph || !ng.getInjector || !ng.getComponent) return null;
+  const source = sourceOf(from);
   const environments = ng.ɵgetInjectorResolutionPath
-    ? environmentsFor(ng, environmentHosts(ng, tree), tree)
+    ? environmentsFor(ng, environmentHosts(ng, source), source.tree)
     : [];
-  const graph = pickGraph(ng, target, tree, environments);
+  const graph = pickGraph(ng, target, source, environments);
   if (graph && !graph.unsupported && environments.length) {
     return { ...graph, environments: environments.map(({ id, name }) => ({ id, name })) };
   }
@@ -281,7 +355,7 @@ export function collectSignalGraph<H extends object = Element>(
 function pickGraph<H extends object>(
   ng: SignalDebugNg<H>,
   target: SignalTarget,
-  tree: HostTree<H>,
+  source: HostSource<H>,
   environments: Environment[],
 ): SignalGraph | null {
   if (target && 'env' in target) {
@@ -289,19 +363,19 @@ function pickGraph<H extends object>(
     const graph = env ? graphForEnvironment(ng, env) : null;
     if (graph) return graph;
   }
-  const picked = resolveTarget(target, tree);
+  const picked = resolveTarget(target, source);
   if (isComponentHost(ng, picked)) {
-    const graph = graphFor(ng, picked, tree, 'selected');
+    const graph = graphFor(ng, picked, 'selected', source.tree);
     if (graph) return graph;
   }
-  const routed = routedComponent(ng, tree);
+  const routed = source.routed(ng);
   if (routed) {
-    const graph = graphFor(ng, routed, tree, 'routed');
+    const graph = graphFor(ng, routed, 'routed', source.tree);
     if (graph) return graph;
   }
   let empty: SignalGraph | null = null;
-  for (const host of componentHosts(ng, tree, MAX_FALLBACK_HOSTS)) {
-    const graph = graphFor(ng, host, tree, 'root');
+  for (const host of componentHosts(ng, source.tree, MAX_FALLBACK_HOSTS)) {
+    const graph = graphFor(ng, host, 'root', source.tree);
     if (graph?.nodes.length) return graph;
     empty ??= graph;
   }

@@ -96,7 +96,7 @@ export function isNativeView(value: unknown): value is NativeView {
 export function nativeScriptTree(
   getNg: () => NativeScriptDebugNg | undefined,
   getRootView: () => NativeView | undefined,
-): HostTree<NativeView, never> {
+): HostTree<NativeView> {
   let root: NativeView | null = null;
   let rootChildren: NativeView[] = [];
   const refresh = () => {
@@ -126,16 +126,6 @@ export function nativeScriptTree(
     connected: (view) => view.isLoaded !== false,
     isHost: isNativeView,
     selector: tag,
-    find: (selector) => {
-      const top = refresh();
-      const stack = top ? [top] : [];
-      while (stack.length) {
-        const view = stack.pop()!;
-        if (tag(view) === selector) return view;
-        stack.push(...viewChildren(view).reverse());
-      }
-      return null;
-    },
   };
 }
 

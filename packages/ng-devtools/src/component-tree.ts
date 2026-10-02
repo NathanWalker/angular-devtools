@@ -9,7 +9,7 @@ import type {
   LiveComponentNode,
 } from './types.ts';
 
-export interface ComponentDebugNg<H = Element> extends DebugNg<H> {
+export interface ComponentDebugNg<H extends object = Element> extends DebugNg<H> {
   getComponent?(el: H): unknown;
   getDirectives?(el: H): unknown[];
   getDirectiveMetadata?(instance: unknown): {
@@ -48,7 +48,7 @@ function nameOf(instance: unknown): string {
   return typeof ctor === 'function' ? className(ctor) : 'Anonymous';
 }
 
-function componentAt<H>(ng: ComponentDebugNg<H>, el: H): object | null {
+function componentAt<H extends object>(ng: ComponentDebugNg<H>, el: H): object | null {
   const found = read(() => ng.getComponent?.(el) ?? null, null);
   return found && typeof found === 'object' ? found : null;
 }
@@ -75,9 +75,9 @@ export function componentHosts<H extends object = Element>(
 
 function hostsUnder<H extends object>(
   ng: ComponentDebugNg<H>,
+  tree: HostTree<H>,
   scope: H,
   tag: string,
-  tree: HostTree<H>,
 ): H[] {
   const out: H[] = [];
   const visit = (el: H, depth: number) => {
@@ -109,7 +109,7 @@ export function hostPath<H extends object = Element>(
     .map((node, i) => {
       const tag = tree.tag(node);
       const scope = i > 0 ? chain[i - 1] : top === node ? null : top;
-      const twins = scope ? hostsUnder(ng, scope, tag, tree) : [node];
+      const twins = scope ? hostsUnder(ng, tree, scope, tag) : [node];
       return twins.length > 1 ? `${tag}[${twins.indexOf(node) + 1}]` : tag;
     })
     .join(' > ');
@@ -127,7 +127,7 @@ export function componentHostOf<H extends object = Element>(
   return null;
 }
 
-function unwrap<H>(ng: ComponentDebugNg<H>, value: unknown): unknown {
+function unwrap<H extends object>(ng: ComponentDebugNg<H>, value: unknown): unknown {
   if (typeof value !== 'function') return value;
   const signal = read(() => !!ng.isSignal?.(value), false);
   return signal ? read(() => (value as () => unknown)(), undefined) : value;
@@ -139,7 +139,7 @@ function propName(entry: unknown, fallback: string): string {
   return fallback;
 }
 
-function readInputs<H>(
+function readInputs<H extends object>(
   ng: ComponentDebugNg<H>,
   instance: object,
   inputs: Record<string, unknown> | undefined,
@@ -154,7 +154,10 @@ function readInputs<H>(
     });
 }
 
-function resourceOf<H>(ng: ComponentDebugNg<H>, value: unknown): Record<string, unknown> | null {
+function resourceOf<H extends object>(
+  ng: ComponentDebugNg<H>,
+  value: unknown,
+): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null;
   const ref = value as Record<string, unknown>;
   const isSignal = (field: unknown) => read(() => !!ng.isSignal?.(field), false);
@@ -177,7 +180,7 @@ function resourceOf<H>(ng: ComponentDebugNg<H>, value: unknown): Record<string, 
   return snapshot;
 }
 
-function injectedValues<H>(
+function injectedValues<H extends object>(
   ng: ComponentDebugNg<H>,
   injector: unknown,
   owner: unknown,
@@ -190,7 +193,7 @@ function injectedValues<H>(
   return values;
 }
 
-function readProperties<H>(
+function readProperties<H extends object>(
   ng: ComponentDebugNg<H>,
   instance: object,
   skip: Set<string>,
@@ -238,8 +241,9 @@ function readOutputs(
 export function componentDetail<H extends object = Element>(
   ng: ComponentDebugNg<H>,
   el: H,
-  tree: HostTree<H> = documentTree(),
+  tree?: HostTree<H>,
 ): ComponentDetail | null {
+  const hosts = tree ?? documentTree<H>();
   const instance = componentAt(ng, el);
   if (!instance) return null;
   const meta = read(() => ng.getDirectiveMetadata?.(instance) ?? null, null);
@@ -261,8 +265,8 @@ export function componentDetail<H extends object = Element>(
   const detail: ComponentDetail = {
     id: elementId(el),
     name: nameOf(instance),
-    tag: tree.tag(el),
-    path: hostPath(ng, el, tree),
+    tag: hosts.tag(el),
+    path: hostPath(ng, el, hosts),
     inputs: readInputs(ng, instance, meta?.inputs),
     outputs: readOutputs(meta?.outputs, listened),
     properties: readProperties(ng, instance, bound, injected),
@@ -283,7 +287,14 @@ export function componentDetail<H extends object = Element>(
   if (typeof enc === 'number' && ENCAPSULATION[enc]) detail.encapsulation = ENCAPSULATION[enc];
 
   if (injector) {
-    detail.dependencies = dependenciesOf(ng, injector, [instance.constructor], true, tree);
+    detail.dependencies = dependenciesOf(
+      ng,
+      injector,
+      [instance.constructor],
+      true,
+      undefined,
+      tree,
+    );
   }
   return detail;
 }
@@ -330,7 +341,7 @@ export function collectComponentTree<H extends object = Element>(
 
   const connected = (host: object) => tree.isHost(host) && tree.connected(host);
   pruneElementIds(connected);
-  const selected = options.selectedId ? elementById(options.selectedId, connected) : null;
-  if (selected && tree.isHost(selected)) report.detail = componentDetail(ng, selected, tree);
+  const selected = options.selectedId ? elementById<H>(options.selectedId, connected) : null;
+  if (selected) report.detail = componentDetail(ng, selected, options.tree);
   return report;
 }

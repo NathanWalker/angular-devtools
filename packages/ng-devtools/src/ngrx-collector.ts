@@ -21,7 +21,7 @@ import { registeredPatchState } from './ngrx-register.ts';
 
 type AnyRecord = Record<PropertyKey, any>;
 
-export interface NgrxDebugNg<H = Element> {
+export interface NgrxDebugNg<H extends object = Element> {
   getInjector?(el: H): unknown;
   getComponent?(el: H): unknown;
   ɵgetInjectorMetadata?(injector: unknown): { type: string; source: unknown } | null;
@@ -109,16 +109,16 @@ function stripped(token: unknown): string {
 
 function componentElements<H extends object>(ng: NgrxDebugNg<H>, tree: HostTree<H>): H[] {
   const out: H[] = [];
-  const stack = tree.roots().reverse();
+  const stack = [...tree.roots()].reverse();
   while (stack.length) {
     const el = stack.pop()!;
     if (read(() => !!ng.getComponent?.(el), false)) out.push(el);
-    stack.push(...tree.children(el).reverse());
+    stack.push(...[...tree.children(el)].reverse());
   }
   return out;
 }
 
-function envScope<H>(ng: NgrxDebugNg<H>, injector: AnyRecord): string {
+function envScope<H extends object>(ng: NgrxDebugNg<H>, injector: AnyRecord): string {
   if (read(() => injector['scopes']?.has?.('root'), false)) return 'root';
   if (read(() => injector['scopes']?.has?.('platform'), false)) return 'platform';
   const source = read(() => ng.ɵgetInjectorMetadata?.(injector)?.source, undefined);

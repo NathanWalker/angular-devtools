@@ -7,6 +7,7 @@ export default defineConfig({
     'src/popup.ts',
     'src/overlay.ts',
     'src/overlay-nativescript.ts',
+    'src/overlay-angular-native.ts',
     'src/vite.ts',
     'src/http.ts',
     'src/hub.ts',

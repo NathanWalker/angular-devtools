@@ -10,6 +10,7 @@ import { Application, isAndroid } from '@nativescript/core';
 import { connectDevframe } from 'devframe/client';
 import { collectComponentTree, type ComponentDebugNg } from './component-tree.ts';
 import { elementById } from './element-id.ts';
+import { hostBySelector } from './host-tree.ts';
 import { collectInjectorTree } from './injector-tree.ts';
 import { attachNgrx } from './ngrx-overlay.ts';
 import {
@@ -207,7 +208,7 @@ async function startSession(
     await my.rpc.call('push-injector-tree', { ...report, pageId });
   }
 
-  const ngrx = attachNgrx(my, pageId, angularDebugApi, {
+  const ngrx = attachNgrx(my, pageId, angularDebugApi, undefined, {
     tree,
     describe: () => ({ url: '/', title: `NativeScript (${isAndroid ? 'Android' : 'iOS'})` }),
   });
@@ -240,7 +241,7 @@ async function startSession(
         return;
       }
       if (typeof selector !== 'string' || !selector) return;
-      const host = tree.find(selector);
+      const host = hostBySelector(tree, selector);
       if (host) flash(renderedView(host));
     },
   });

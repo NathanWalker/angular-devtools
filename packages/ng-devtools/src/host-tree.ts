@@ -1,34 +1,58 @@
-import { childElements, childNodes, isComment, parentOf } from './dom-walk.ts';
-
 /**
- * The tree Angular rendered into, as the collectors walk it. The browser
- * overlay walks the DOM; a platform without one, such as NativeScript,
- * describes its own views instead.
- *
- * An anchor (`A`) is a node that carries an element injector but renders
- * nothing and has no children, such as the comment an `<ng-container>` sits on.
+ * The tree Angular rendered into, as the collectors walk it. In the browser it
+ * is the DOM (`domTree()`); a platform without one, such as NativeScript or
+ * Angular Native, describes its own views instead.
  */
-export interface HostTree<H extends object, A extends object = object> {
+export interface HostTree<H extends object> {
   /** Where a walk of the app starts, in render order. */
   roots(): H[];
-  /** Direct children, in render order. */
+  /** The direct children of a host, in render order. */
   children(host: H): H[];
-  /** `children` with the anchors among them, in render order. */
-  childNodes?(host: H): (H | A)[];
-  parent(node: H | A): H | null;
-  /** What the node is called in a component path: a tag name or a view type. */
-  tag(node: H | A): string;
+  /** The host this one renders in, or null at the top. */
+  parent(host: H): H | null;
+  /** What a host is called in a component path: a tag name or a view type. */
+  tag(host: H): string;
   /** Whether the host is still part of the rendered tree. */
   connected(host: H): boolean;
-  /** Whether a value, such as an element injector's source, is a host of this tree. */
+  /** Whether a value, such as the source of an element injector, is a host of this tree. */
   isHost(value: unknown): value is H;
-  isAnchor?(value: unknown): value is A;
-  /** A string that `find()` resolves back to the node, or null when none can. */
-  selector(node: H | A): string | null;
-  /** The host a selector names, or null when it names none or is not valid. */
-  find(selector: string): H | null;
-  /** The component the router rendered deepest in the primary outlet chain. */
-  routed?(isComponentHost: (host: H) => boolean): H | null;
+  /** A query that finds the host again, or null when it has none. */
+  selector?(host: H): string | null;
+  /**
+   * Whether the host renders nothing itself, such as the comment Angular
+   * anchors an `<ng-container>` on. It can carry directives but no component.
+   */
+  isAnchor?(host: H): boolean;
+}
+
+export function childElements(el: Element): Element[] {
+  const children = Array.from(el.children);
+  const shadow = (el as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+  if (shadow) children.push(...Array.from(shadow.children));
+  return children;
+}
+
+export function parentOf(node: Node): Element | null {
+  if (node.parentElement) return node.parentElement;
+  const root = node.parentNode;
+  return root && 'host' in root ? ((root as ShadowRoot).host ?? null) : null;
+}
+
+export function isComment(value: unknown): value is Comment {
+  return !!value && typeof value === 'object' && (value as Node).nodeType === 8;
+}
+
+function childNodes(el: Element): (Element | Comment)[] {
+  const out: (Element | Comment)[] = [];
+  const add = (parent: ParentNode) => {
+    for (const child of Array.from(parent.childNodes)) {
+      if (child.nodeType === 1 || isComment(child)) out.push(child as Element | Comment);
+    }
+  };
+  add(el);
+  const shadow = (el as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+  if (shadow) add(shadow);
+  return out;
 }
 
 export function angularRoots(doc: Document = document): Element[] {
@@ -48,52 +72,11 @@ export function angularRoots(doc: Document = document): Element[] {
   return [...roots, ...outside];
 }
 
-function isPrimaryOutlet(outlet: Element): boolean {
-  const name = outlet.getAttribute('name');
-  return !name || name === 'primary';
-}
-
-function outletBefore(el: Element): Element | null {
-  const prev = el.previousElementSibling;
-  return prev && prev.tagName === 'ROUTER-OUTLET' ? prev : null;
-}
-
-function routedElement(doc: Document, isComponentHost: (el: Element) => boolean): Element | null {
-  let best: Element | null = null;
-  let bestDepth = -1;
-  for (const outlet of Array.from(doc.querySelectorAll('router-outlet'))) {
-    if (!isPrimaryOutlet(outlet)) continue;
-    const el = outlet.nextElementSibling;
-    if (!el || !isComponentHost(el)) continue;
-    let depth = 0;
-    let primary = true;
-    for (let node: Element | null = el; node; node = node.parentElement) {
-      const before = outletBefore(node);
-      if (!before || !isComponentHost(node)) continue;
-      if (!isPrimaryOutlet(before)) {
-        primary = false;
-        break;
-      }
-      depth++;
-    }
-    if (primary && depth > bestDepth) {
-      best = el;
-      bestDepth = depth;
-    }
-  }
-  return best;
-}
-
-/**
- * The DOM of `doc`, with `<ng-container>` comments as anchors. Elements in a
- * shadow root have no selector, since `querySelector` can't reach them.
- * Selectors are cached, so take a fresh tree for each collection.
- */
-export function domTree(doc: Document = document): HostTree<Element, Comment> {
+function selectorCache(doc: Document) {
   const selectors = new Map<Element, string | null>();
   const positions = new Map<Element, number>();
   const top = doc.documentElement;
-  const elementSelector = (el: Element): string | null => {
+  const selectorOf = (el: Element): string | null => {
     if (el === top) return '';
     const known = selectors.get(el);
     if (known !== undefined) return known;
@@ -105,36 +88,55 @@ export function domTree(doc: Document = document): HostTree<Element, Comment> {
         let index = 0;
         for (const child of Array.from(parent.children)) positions.set(child, ++index);
       }
-      const prefix = elementSelector(parent);
+      const prefix = selectorOf(parent);
       const part = `${tag}:nth-child(${positions.get(el)})`;
       out = prefix === null ? null : prefix ? `${prefix} > ${part}` : part;
     }
     selectors.set(el, out);
     return out;
   };
+  return selectorOf;
+}
 
+/**
+ * The DOM of `doc`, going into open shadow roots. With `anchors`, the comments
+ * Angular anchors an `<ng-container>` on are hosts too, named `ng-container`.
+ * Selectors are cached, so take a fresh tree for each collection.
+ */
+export function domTree(doc?: Document): HostTree<Element>;
+export function domTree(doc: Document, options: { anchors: true }): HostTree<Element | Comment>;
+export function domTree(
+  doc: Document = document,
+  options: { anchors?: boolean } = {},
+): HostTree<Element | Comment> {
+  const selectorOf = selectorCache(doc);
   return {
     roots: () => angularRoots(doc),
-    children: childElements,
-    childNodes: (el) => childNodes(el, true),
+    children: (host) =>
+      isComment(host) ? [] : options.anchors ? childNodes(host) : childElements(host),
     parent: parentOf,
-    tag: (node) => (isComment(node) ? 'ng-container' : node.tagName.toLowerCase()),
-    connected: (el) => el.isConnected,
-    isHost: (value): value is Element => typeof Element !== 'undefined' && value instanceof Element,
+    tag: (host) => (isComment(host) ? 'ng-container' : host.tagName.toLowerCase()),
+    connected: (host) => host.isConnected,
+    isHost: (value): value is Element | Comment =>
+      (typeof Element !== 'undefined' && value instanceof Element) ||
+      (!!options.anchors && isComment(value)),
+    selector: (host) => (isComment(host) ? null : selectorOf(host)),
     isAnchor: isComment,
-    selector: (node) => (isComment(node) ? null : elementSelector(node)),
-    find: (query) => {
-      try {
-        return doc.querySelector(query);
-      } catch {
-        return null;
-      }
-    },
-    routed: (isComponentHost) => routedElement(doc, isComponentHost),
   };
 }
 
 /** The DOM tree, for a collector whose host type is a parameter that defaults to Element. */
-export function documentTree<H extends object, A extends object = object>(): HostTree<H, A> {
-  return domTree() as unknown as HostTree<H, A>;
+export function documentTree<H extends object>(): HostTree<H> {
+  return domTree() as unknown as HostTree<H>;
+}
+
+export function hostBySelector<H extends object>(tree: HostTree<H>, selector: string): H | null {
+  if (!tree.selector) return null;
+  const stack = [...tree.roots()].reverse();
+  while (stack.length) {
+    const host = stack.pop()!;
+    if (tree.selector(host) === selector) return host;
+    stack.push(...[...tree.children(host)].reverse());
+  }
+  return null;
 }

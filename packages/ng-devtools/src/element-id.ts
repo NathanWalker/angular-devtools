@@ -17,6 +17,8 @@ export function elementId(el: object): string {
   return id;
 }
 
+export function elementById(id: string): Element | null;
+export function elementById<H extends object>(id: string, connected: Connected): H | null;
 export function elementById(id: string, connected: Connected = isConnected): object | null {
   const el = byId.get(id)?.deref();
   if (!el) {

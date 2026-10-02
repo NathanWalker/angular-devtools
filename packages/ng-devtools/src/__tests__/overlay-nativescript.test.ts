@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { collectComponentTree, componentHosts } from '../component-tree.ts';
+import { hostBySelector } from '../host-tree.ts';
 import { collectInjectorTree } from '../injector-tree.ts';
 import {
   angularRootHost,
@@ -92,8 +93,8 @@ describe('NativeScript host tree', () => {
 
   it('lists component hosts parents first and finds a host by selector', () => {
     expect(componentHosts(ng, tree)).toEqual([appHost, personHost]);
-    expect(tree.find('ns-person')).toBe(personHost);
-    expect(tree.find('ns-missing')).toBeNull();
+    expect(hostBySelector(tree, 'ns-person')).toBe(personHost);
+    expect(hostBySelector(tree, 'ns-missing')).toBeNull();
   });
 
   it('links the root content back to the root component host', () => {

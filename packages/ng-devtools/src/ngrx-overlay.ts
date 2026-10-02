@@ -19,23 +19,16 @@ const HEARTBEAT_MS = 5000;
 
 export interface NgrxPageOptions<H extends object> {
   tree?: HostTree<H>;
-  /** Where the app is, for the page list. */
   describe?: () => { url: string; title: string };
-  maxLog?: number;
 }
-
-const describeDocument = () => ({
-  url: location.pathname + location.search,
-  title: document.title,
-});
 
 export function attachNgrx<H extends object = Element>(
   my: RpcScope,
   pageId: string,
   getNg: () => NgrxDebugNg<H> | undefined,
+  maxLog?: number,
   options: NgrxPageOptions<H> = {},
 ) {
-  const describe = options.describe ?? describeDocument;
   const session = Math.random().toString(36).slice(2, 10);
   let sentSeq = 0;
   let sentLost = 0;
@@ -58,8 +51,8 @@ export function attachNgrx<H extends object = Element>(
   const collector = createNgrxCollector(
     getNg,
     () => schedule(),
-    options.tree ?? documentTree(),
-    options.maxLog,
+    options.tree ?? documentTree<H>(),
+    maxLog,
   );
 
   const push = async (rediscover = true) => {
@@ -75,10 +68,14 @@ export function attachNgrx<H extends object = Element>(
       if (quiet && body === lastBody && Date.now() - lastPushAt < HEARTBEAT_MS) return;
       lastBody = body;
       lastPushAt = Date.now();
+      const page = options.describe?.() ?? {
+        url: location.pathname + location.search,
+        title: document.title,
+      };
       const report: NgrxPageReport = {
         pageId,
         session,
-        ...describe(),
+        ...page,
         stores,
         classic,
         log,

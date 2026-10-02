@@ -1,6 +1,5 @@
 import { connectDevframe } from 'devframe/client';
 export { registerNgrxSignals } from './ngrx-register.ts';
-export { installSignalWriteHook } from './signal-history.ts';
 import { attachAnalog } from './analog-runtime.ts';
 import { attachForms } from './forms-collector.ts';
 import { attachPipes } from './pipes-collector.ts';
@@ -36,6 +35,7 @@ import {
   type PreloadRecord,
 } from './router-actions.ts';
 import { createSignalHistory, installSignalWriteHook } from './signal-history.ts';
+export { installSignalWriteHook } from './signal-history.ts';
 import { collectComponentTree, componentHostOf } from './component-tree.ts';
 import { startComponentPick } from './component-pick.ts';
 import { createDeferTracker } from './defer-blocks.ts';
@@ -314,7 +314,7 @@ async function startOverlay(options: OverlayOptions, own: (cleanup: () => void) 
   const pipes = on.pipes ? attachPipes(my, pageId, getNg) : null;
   const http = on.http ? attachHttp(my, pageId, tickMs) : null;
   const cd = on.components ? attachChangeDetection(my, pageId, getNg, limits.cdCycles) : null;
-  const ngrx = on.ngrx ? attachNgrx(my, pageId, getNg, { maxLog: limits.changeLog }) : null;
+  const ngrx = on.ngrx ? attachNgrx(my, pageId, getNg, limits.changeLog) : null;
 
   const navigations: NavigationRecord[] = [];
   const preloads: PreloadRecord[] = [];
