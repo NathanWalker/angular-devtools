@@ -91,7 +91,7 @@ const NATIVESCRIPT_SETUP: ComingSoonInfo = {
   ],
   link: {
     label: 'NativeScript setup guide',
-    href: 'https://github.com/santoshyadavdev/angular-devtools#nativescript',
+    href: 'https://santoshyadavdev.github.io/angular-devtools/guides/nativescript',
   },
 };
 
