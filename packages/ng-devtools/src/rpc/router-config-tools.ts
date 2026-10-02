@@ -7,12 +7,15 @@ import {
   describeNavigation,
   freshness,
   list,
+  loopsOf,
+  loopsText,
   noPage,
   otherPages,
   pickPage,
   type RouterPage,
   type RouterState,
 } from './router-tools.ts';
+import { hopText, loopChain, loopTitle, redirectCycles } from './router-loops.ts';
 
 export interface SourceRoute {
   path: string;
@@ -225,12 +228,15 @@ export function listRoutesText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   const config = page.config;
   if (!config) {
     return `Page ${code(page.pageId)} has not reported its route config yet${page.setup?.mode === 'events-only' ? ' (events-only mode: this build has no debug utils, so the config cannot be read)' : ''}.${freshness(page, now)}`;
   }
   const active = new Set(page.activeIds ?? []);
+  const truncated = page.configTruncated
+    ? `${page.configTruncated} route(s) were left out: the page lists at most 200 routes per level and 1000 in total.`
+    : '';
   if (args.match) {
     const result = matchUrl(config, args.match);
     const lines = result.matched
@@ -241,10 +247,13 @@ export function listRoutesText(
             : '',
         ]
       : [
-          `${code(args.match)} matches no configured route (NG04002 at runtime).`,
+          truncated
+            ? `${code(args.match)} matches no route in the reported part of the config; a left-out route may still match it.`
+            : `${code(args.match)} matches no configured route (NG04002 at runtime).`,
           result.nearest.length ? `Nearest routes: ${list(result.nearest)}` : '',
         ];
     lines.push(...result.notes.map((note) => `- ${note}`));
+    if (truncated) lines.push(truncated);
     lines.push(
       'This is a prediction from the config; use the navigate tool with action "probe" to run the real matcher (runs canMatch and loads lazy chunks).',
     );
@@ -254,6 +263,7 @@ export function listRoutesText(
     const lines: string[] = [
       'Protection per route (client-side only: the server must enforce access too):',
     ];
+    if (truncated) lines.push(truncated);
     walk(config, (node, parents) => {
       if (node.children?.length || node.redirectTo !== undefined) return;
       const guards = effectiveGuards(node, parents);
@@ -286,38 +296,25 @@ export function listRoutesText(
     }
   };
   visit(config, 0);
-  const header = `Live route config (generation ${page.generation ?? '?'}): ${count} route(s)${needle ? ` matching ${code(args.filter!)}` : ''}. Lazy routes show their children once loaded.`;
+  const header = `Live route config (generation ${page.generation ?? '?'}): ${count} route(s)${needle ? ` matching ${code(args.filter!)}` : ''}. Lazy routes show their children once loaded.${truncated ? ` ${truncated}` : ''}`;
   return capped(
     `${UNTRUSTED}\n\n${header}\n\n${lines.join('\n')}${otherPages(state, page)}${freshness(page, now)}`,
   );
 }
 
-function redirectCycles(config: RouteNode[]): string[][] {
-  const edges = new Map<string, string>();
-  walk(config, (node, parents) => {
-    if (typeof node.redirectTo !== 'string' || node.redirectTo.startsWith('function ')) return;
-    if (/:/.test(node.path) || node.path === '**') return;
-    const base = parents.length ? parents[parents.length - 1].fullPath : '';
-    const target = node.redirectTo.startsWith('/')
-      ? node.redirectTo
-      : `${base.replace(/\/$/, '')}/${node.redirectTo}`;
-    edges.set(node.fullPath.replace(/\/$/, '') || '/', target.replace(/\/$/, '') || '/');
-  });
-  const cycles: string[][] = [];
-  for (const start of edges.keys()) {
-    const seen = [start];
-    let cursor = edges.get(start);
-    while (cursor && seen.length < 20) {
-      if (cursor === start) {
-        if (seen.every((node) => node >= start)) cycles.push([...seen, start]);
-        break;
-      }
-      if (seen.includes(cursor)) break;
-      seen.push(cursor);
-      cursor = edges.get(cursor);
-    }
-  }
-  return cycles;
+export type RouterLintResult =
+  | { checked: true; findings: LintFinding[] }
+  | { checked: false; reason: 'no-page' | 'events-only' | 'no-config' };
+
+/** Lint findings for the panel, or why no check could run. */
+export function routerLintResult(page: RouterPage | undefined): RouterLintResult {
+  if (!page) return { checked: false, reason: 'no-page' };
+  if (!page.config)
+    return {
+      checked: false,
+      reason: page.setup?.mode === 'events-only' ? 'events-only' : 'no-config',
+    };
+  return { checked: true, findings: lintRoutes(page) };
 }
 
 /**
@@ -493,6 +490,22 @@ export function lintRoutes(page: RouterPage): LintFinding[] {
       angular: 'throws',
     });
   }
+  for (const loop of loopsOf(page)) {
+    if (loop.kind === 'config' && findings.some((f) => f.rule === 'redirect-cycle')) continue;
+    const hops = loop.hops.map(hopText).join('; ');
+    const guards = loop.guards.length ? ` Guards involved: ${list(loop.guards)}.` : '';
+    findings.push({
+      rule: 'redirect-loop',
+      severity: loop.end.startsWith('settled') && loop.bounces < 2 ? 'warning' : 'error',
+      route: loop.cycle[0],
+      message: `Navigations ${loop.ids.map((id) => `#${id}`).join(', ')} formed a ${loopTitle(loop)}: ${loopChain(loop)} (${loop.end}). ${hops}.${guards}`,
+      fix:
+        loop.kind === 'config'
+          ? 'Point one of these redirectTo entries elsewhere.'
+          : 'Make the guards agree on who may see each URL, e.g. a guard on the login page must not send users back to a route whose guard sends them to login; redirect to a page no guard in the chain protects.',
+      angular: loop.kind === 'config' ? 'throws' : 'silent',
+    });
+  }
   for (const link of page.links ?? []) {
     if (link.linkActive !== undefined && link.ariaCurrent === undefined) {
       findings.push({
@@ -552,9 +565,11 @@ export function lintRoutesText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   if (!page.config)
-    return `Page ${code(page.pageId)} has not reported its route config yet.${freshness(page, now)}`;
+    return page.setup?.mode === 'events-only'
+      ? `No checks ran: page ${code(page.pageId)} runs in events-only mode (no debug utils, for example a production build), so it cannot report its route config.${freshness(page, now)}`
+      : `Page ${code(page.pageId)} has not reported its route config yet.${freshness(page, now)}`;
   const findings = lintRoutes(page);
   if (!findings.length)
     return `${UNTRUSTED}\n\nNo route config problems found (${countNodes(page.config)} routes checked). Lazy routes that have not loaded yet are not checked.${freshness(page, now)}`;
@@ -582,7 +597,7 @@ export function routerConfigText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   const setup = page.setup;
   if (!setup)
     return `Page ${code(page.pageId)} has not reported its router setup yet.${freshness(page, now)}`;
@@ -621,7 +636,7 @@ export function exportNavigationText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   const nav: NavigationRecord | undefined =
     args.id !== undefined
       ? page.navigations.find((n) => n.id === args.id)
@@ -667,6 +682,8 @@ export function exportNavigationText(
   );
   lines.push('', '### Navigation chain');
   for (const item of chain) lines.push(describeNavigation(item, page));
+  const loops = loopsOf(page).filter((loop) => loop.ids.some((id) => chainIds.has(id)));
+  if (loops.length) lines.push('', '### Redirect loop', loopsText(loops).trim());
   if (page.config) {
     const relevant: RouteNode[] = [];
     const target = segmentsOf(nav.finalUrl ?? nav.url)[0] ?? '';
@@ -720,6 +737,7 @@ export function explainRenderModeText(
   if (!entries.length)
     return 'No ServerRoute config found (no *.routes.server.ts in the workspace), so every route uses the default server rendering setup.';
   const page = pickPage(state, args.page);
+  if (args.page && !page) return noPage(args.page, state);
   const url = args.url ?? page?.snapshot?.url;
   const lines: string[] = [];
   if (url) {

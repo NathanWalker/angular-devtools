@@ -8,3 +8,4 @@ examples/nativescript/platforms
 examples/nativescript/hooks
 examples/nativescript/App_Resources
 examples/nativescript/package-lock.json
+.all-contributorsrc

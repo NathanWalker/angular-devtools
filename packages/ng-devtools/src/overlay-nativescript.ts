@@ -270,7 +270,7 @@ async function startSession(
 
   return () => {
     clearInterval(interval);
-    restoreSignalHook();
+    restoreSignalHook?.();
     ngrx.stop();
     void Promise.allSettled([
       my.rpc.call('forget-component-page', pageId),

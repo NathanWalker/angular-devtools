@@ -9,7 +9,14 @@ import {
   signal,
 } from '@angular/core';
 import type { DevframeRpcClient } from 'devframe/client';
+import {
+  summarizeNgDevtoolsConfig,
+  type ResolvedNgDevtoolsConfig,
+} from '@santoshyadavdev/ng-devtools/config';
 import { hostPageId } from '../page-id';
+import { injectorTreeFor, signalGraphFor } from '../live-pages';
+import { isStaticReport } from '../rpc';
+import { panelConfig, tabEnabled } from '../devtools-config';
 import { TabIcon } from './tab-icon';
 
 type LoadState = 'loading' | 'ready' | 'error';
@@ -55,6 +62,18 @@ interface InjectorNode {
 interface InjectorSnapshot {
   roots?: InjectorNode[];
   environment?: InjectorNode[];
+  zone?: string | null;
+  pages?: Record<string, InjectorSnapshot>;
+}
+
+const ZONE_LABELS: Record<string, string> = {
+  zoneless: 'Zoneless',
+  zone: 'zone.js',
+  'zone-unused': 'Zoneless, zone.js loaded',
+};
+
+export function zoneLabel(mode: string | null | undefined): string | null {
+  return mode && Object.hasOwn(ZONE_LABELS, mode) ? ZONE_LABELS[mode] : null;
 }
 
 interface GraphSnapshot {
@@ -146,7 +165,13 @@ export function storeCard(rows: Row[]): Card {
           }
         </h2>
         @if (metaState() === 'error') {
-          <p class="hint">Check that the dev server is running, then reload the panel.</p>
+          <p class="hint">
+            @if (staticReport()) {
+              Run <code>ng-devtools build</code> again to rebuild the report.
+            } @else {
+              Check that the dev server is running, then reload the panel.
+            }
+          </p>
         }
       </div>
       <ul class="chips" [class.pending]="metaState() === 'loading'">
@@ -156,11 +181,14 @@ export function storeCard(rows: Row[]): Card {
         @if (meta()?.analog; as analog) {
           <li class="analog"><span>Analog</span>{{ analog }}</li>
         }
+        @if (zone(); as zone) {
+          <li><span>Change detection</span>{{ zone }}</li>
+        }
       </ul>
     </section>
 
     <div class="grid">
-      @for (stat of stats; track stat.tab; let i = $index) {
+      @for (stat of stats(); track stat.tab; let i = $index) {
         @let state = stateOf(stat.tab);
         <button
           type="button"
@@ -191,6 +219,24 @@ export function storeCard(rows: Row[]): Card {
         </button>
       }
     </div>
+
+    <section class="config" aria-labelledby="config-title" [attr.aria-busy]="!rpc()">
+      <h2 id="config-title">Configuration</h2>
+      @if (!rpc()) {
+        <p>Loading…</p>
+      } @else if (configItems().length) {
+        <dl>
+          @for (item of configItems(); track item.label) {
+            <div>
+              <dt>{{ item.label }}</dt>
+              <dd>{{ item.value }}</dd>
+            </div>
+          }
+        </dl>
+      } @else {
+        <p>Defaults</p>
+      }
+    </section>
   `,
   styles: `
     @use 'mixins' as m;
@@ -384,6 +430,45 @@ export function storeCard(rows: Row[]): Card {
       font-size: 12px;
       line-height: 16px;
     }
+    .config {
+      margin-top: 16px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .config h2 {
+      @include m.label;
+      margin: 0 0 8px;
+      color: var(--text-2);
+    }
+    .config p,
+    .config dl {
+      margin: 0;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .config dl {
+      display: grid;
+      gap: 4px;
+    }
+    .config dl div {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+    }
+    .config dt {
+      color: var(--text-2);
+    }
+    .config dt::after {
+      content: ':';
+    }
+    .config dd {
+      margin: 0;
+      color: var(--text-strong);
+      overflow-wrap: anywhere;
+    }
     @keyframes shimmer {
       to {
         background-position: -200% 0;
@@ -422,9 +507,14 @@ export function storeCard(rows: Row[]): Card {
 export class Dashboard {
   rpc = input<DevframeRpcClient | null>(null);
   navigate = output<StatTab>();
+  staticReport = computed(() => isStaticReport(this.rpc()));
 
   meta = signal<BuildMeta | null>(null);
-  protected readonly stats = STATS;
+  private readonly config = computed(() => panelConfig(this.rpc()));
+  protected readonly stats = computed(() =>
+    this.rpc() ? STATS.filter((stat) => tabEnabled(stat.tab, this.config())) : [],
+  );
+  protected readonly configItems = computed(() => summarizeNgDevtoolsConfig(this.config()));
   protected readonly metaState = signal<LoadState>('loading');
   protected readonly states = signal<Partial<Record<StatTab, LoadState>>>({});
   private readonly rows = signal<Partial<Record<StatTab, Row[]>>>({});
@@ -434,8 +524,12 @@ export class Dashboard {
   private readonly destroyRef = inject(DestroyRef);
   private stopLive: (() => void)[] = [];
 
+  protected readonly zone = computed(() =>
+    zoneLabel(injectorTreeFor(this.injectorTree(), this.pageId)?.zone),
+  );
+
   private readonly liveInjectors = computed(() => {
-    const tree = this.injectorTree();
+    const tree = injectorTreeFor(this.injectorTree(), this.pageId);
     if (!tree?.roots?.length) return null;
     let injectors = 0;
     let providers = 0;
@@ -449,8 +543,7 @@ export class Dashboard {
   });
 
   private readonly liveSignals = computed(() => {
-    const state = this.signalGraph();
-    const graph = (this.pageId && state?.pages?.[this.pageId]) || state?.graph;
+    const graph = signalGraphFor(this.signalGraph(), this.pageId);
     if (!graph?.nodes?.length) return null;
     return graph.nodes.filter((node) => LIVE_SIGNAL_KINDS.has(node.kind ?? '')).length;
   });
@@ -510,13 +603,15 @@ export class Dashboard {
           this.metaState.set('ready');
         })
         .catch(() => this.metaState.set('error'));
-      this.load(my.rpc.call('get-components'), 'components');
-      this.load(my.rpc.call('get-routes'), 'routes');
-      this.load(my.rpc.call('get-signals'), 'signals');
-      this.load(my.rpc.call('get-providers'), 'injectors');
-      this.load(my.rpc.call('get-ngrx-store'), 'store');
-      this.load(my.rpc.call('get-pipes'), 'pipes');
-      void this.watchLive(client);
+      const config = panelConfig(client);
+      const on = (tab: StatTab) => tabEnabled(tab, config);
+      if (on('components')) this.load(my.rpc.call('get-components'), 'components');
+      if (on('routes')) this.load(my.rpc.call('get-routes'), 'routes');
+      if (on('signals')) this.load(my.rpc.call('get-signals'), 'signals');
+      if (on('injectors')) this.load(my.rpc.call('get-providers'), 'injectors');
+      if (on('store')) this.load(my.rpc.call('get-ngrx-store'), 'store');
+      if (on('pipes')) this.load(my.rpc.call('get-pipes'), 'pipes');
+      void this.watchLive(client, config);
     });
     this.destroyRef.onDestroy(() => this.unwatch());
   }
@@ -537,7 +632,7 @@ export class Dashboard {
       .catch(() => mark('error'));
   }
 
-  private async watchLive(client: DevframeRpcClient) {
+  private async watchLive(client: DevframeRpcClient, config: ResolvedNgDevtoolsConfig) {
     this.unwatch();
     const rpc = client.scope('ng-devtools').rpc;
     const follow = async <T>(
@@ -554,8 +649,10 @@ export class Dashboard {
       }
     };
     await Promise.all([
-      follow<InjectorSnapshot | null>('injector-tree', (value) => this.injectorTree.set(value)),
-      follow<GraphSnapshot | null>('signal-graph', (value) => this.signalGraph.set(value)),
+      config.inspectors.injectors &&
+        follow<InjectorSnapshot | null>('injector-tree', (value) => this.injectorTree.set(value)),
+      config.inspectors.signals &&
+        follow<GraphSnapshot | null>('signal-graph', (value) => this.signalGraph.set(value)),
     ]);
   }
 

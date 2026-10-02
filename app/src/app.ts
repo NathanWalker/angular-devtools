@@ -29,6 +29,11 @@ import { ComingSoon, type ComingSoonInfo } from './pages/coming-soon';
 import { TabIcon } from './pages/tab-icon';
 import { styleHubRail } from './hub-rail-style';
 import { followHubDocks, selectHubDock } from './hub-dock-sync';
+import { panelConfig, tabEnabled } from './devtools-config';
+import { hostPageId } from './page-id';
+import { initialTab, storeTab, storedTab } from './tab-memory';
+import { detectBaseURL } from './base-url';
+import { clearHighlightsOnHide } from './rpc';
 
 const HUB_VIEWS = ['angular', 'ngrx', 'analog', 'nativescript', 'capacitor'] as const;
 
@@ -113,7 +118,10 @@ function readView(): View | null {
 
 @Component({
   selector: 'app-root',
-  host: { '[style.--accent]': 'viewAccent()' },
+  host: {
+    '[style.--accent]': 'viewAccent()',
+    '(window:message)': 'inspectFromPanel($event)',
+  },
   imports: [
     Dashboard,
     ComponentTree,
@@ -220,7 +228,7 @@ function readView(): View | null {
         [class.fade-end]="navFade().end"
         (scroll)="measureNav()"
       >
-        @if (tabs().length > 1) {
+        @if (availableTabs().length > 1) {
           @for (t of tabs(); track t.id) {
             <button
               type="button"
@@ -245,19 +253,29 @@ function readView(): View | null {
       </span>
     </header>
     <main #main tabindex="-1">
+      <p class="background-note" role="status">{{ backgroundNote() }}</p>
       @if (connectionFailed()) {
         <p class="connection-error" role="alert">
           Can't reach the devtools server. Check that the dev server is running, then reload.
         </p>
       } @else if (comingSoon(); as info) {
         <app-coming-soon [info]="info" />
+      } @else if (!tabEnabled(tab(), config())) {
+        <p class="turned-off">
+          This inspector is turned off in the devtools config (<code>inspectors</code>).
+        </p>
       } @else {
         @switch (tab()) {
           @case ('dashboard') {
             <app-dashboard [rpc]="rpc()" (navigate)="switchTab($event)" />
           }
           @case ('components') {
-            <app-component-tree [rpc]="rpc()" (showForm)="showForm($event)" />
+            <app-component-tree
+              [rpc]="rpc()"
+              [focus]="componentFocus()"
+              (focusHandled)="componentFocus.set(null)"
+              (showForm)="showForm($event)"
+            />
           }
           @case ('routes') {
             <app-route-inspector [rpc]="rpc()" />
@@ -555,6 +573,23 @@ function readView(): View | null {
     main > * {
       animation: enter 0.28s var(--ease) both;
     }
+    .background-note {
+      margin: 0 0 12px;
+      color: var(--text-2);
+      font-size: 12px;
+      &:empty {
+        display: none;
+      }
+    }
+    .turned-off {
+      max-width: 60ch;
+      margin: 0;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+    }
     .connection-error {
       max-width: 60ch;
       margin: 0;
@@ -621,14 +656,23 @@ export class App implements OnInit, OnDestroy {
     if (view === 'nativescript') return NATIVESCRIPT_SETUP;
     return view ? COMING_SOON[view] : undefined;
   });
-  readonly tabs = computed(() => {
+  readonly config = computed(() => panelConfig(this.rpc()));
+  protected readonly tabEnabled = tabEnabled;
+  protected readonly availableTabs = computed(() => {
     if (this.comingSoon()) return [];
     const view = this.view();
     const only = view ? VIEW_TAB[view] : undefined;
-    if (only) return this.allTabs.filter((t) => t.id === only);
-    return this.allTabs.filter(
+    const enabled = this.allTabs.filter((t) => tabEnabled(t.id, this.config()));
+    if (only) return enabled.filter((t) => t.id === only);
+    return enabled.filter(
       (t) => (t.id !== 'analog' || this.analog()) && !(view === 'angular' && TAB_VIEW[t.id]),
     );
+  });
+  readonly tabs = computed(() => {
+    const tabs = this.availableTabs();
+    if (this.rpc()) return tabs;
+    const tab = this.tab();
+    return tabs.filter((t) => t.id === 'dashboard' || t.id === tab);
   });
 
   tab = linkedSignal<Tab>(() => {
@@ -638,8 +682,22 @@ export class App implements OnInit, OnDestroy {
   rpc = signal<DevframeRpcClient | null>(null);
   connected = signal(false);
   readonly connectionFailed = signal(false);
+  private readonly hiddenPages = signal<string[]>([]);
+  private readonly pageId = hostPageId();
+  readonly backgroundNote = computed(() => {
+    const hidden = this.hiddenPages();
+    if (this.pageId) {
+      return hidden.includes(this.pageId) ? 'Tab in background, showing the last data.' : '';
+    }
+    if (!hidden.length) return '';
+    return hidden.length === 1
+      ? 'A tab is in the background, showing its last data.'
+      : `${hidden.length} tabs are in the background, showing their last data.`;
+  });
+  private stopVisibility = () => {};
 
   private stopFollowing = () => {};
+  private stopHighlights = () => {};
   private readonly nav = viewChild<ElementRef<HTMLElement>>('nav');
   private readonly main = viewChild<ElementRef<HTMLElement>>('main');
   private readonly injector = inject(Injector);
@@ -693,18 +751,20 @@ export class App implements OnInit, OnDestroy {
     } catch {
       // a cross origin parent cannot be styled
     }
-    // Deep link: read tab from hash
-    const params = new URLSearchParams(location.hash.replace(/^#/, ''));
-    const hashTab = params.get('tab');
-    if (hashTab && this.tabs().some((t) => t.id === hashTab)) {
-      this.tab.set(hashTab as Tab);
-    }
+    const restored = initialTab(
+      location.hash,
+      storedTab(this.tabScope()),
+      this.availableTabs().map((t) => t.id),
+    );
+    if (restored) this.tab.set(restored);
 
+    this.stopHighlights = clearHighlightsOnHide(() => this.rpc());
     const baseURL = detectBaseURL();
     connectDevframe(baseURL ? { baseURL } : {}).then(
       (client) => {
         this.rpc.set(client);
         this.connected.set(true);
+        void this.watchVisibility(client);
         const scoped = client.scope('ng-devtools').rpc as unknown as {
           call: (name: string) => Promise<unknown>;
         };
@@ -733,6 +793,8 @@ export class App implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.stopFollowing();
+    this.stopVisibility();
+    this.stopHighlights();
     this.navObserver?.disconnect();
   }
 
@@ -746,10 +808,25 @@ export class App implements OnInit, OnDestroy {
   }
 
   formFocus = signal<{ id: string } | null>(null);
+  // Belongs to the Components tab that received it, so leaving the tab drops it.
+  readonly componentFocus = linkedSignal<Tab, { id: string } | null>({
+    source: this.tab,
+    computation: () => null,
+  });
 
   showForm(formId: string) {
     this.formFocus.set({ id: formId });
     this.switchTab('forms');
+  }
+
+  inspectFromPanel({ source, origin, data }: MessageEvent<unknown>) {
+    if (source !== window.parent || origin !== location.origin) return;
+    const message = data as { type?: unknown; id?: unknown } | null;
+    if (message?.type !== 'ng-devtools:inspect-component' || typeof message.id !== 'string') return;
+    // Any element inside the app resolves to a component, so following every
+    // Elements selection would pull the user off whichever tab they are on.
+    if (this.tab() !== 'components' || !this.config().inspectors.components) return;
+    this.componentFocus.set({ id: message.id });
   }
 
   switchTab(id: Tab) {
@@ -765,6 +842,28 @@ export class App implements OnInit, OnDestroy {
   private setTab(id: Tab) {
     this.keepFocus();
     this.tab.set(id);
+    storeTab(this.tabScope(), id);
+  }
+
+  private tabScope() {
+    return this.view() ?? 'panel';
+  }
+
+  private async watchVisibility(client: DevframeRpcClient) {
+    try {
+      const state = await client.scope('ng-devtools').rpc.sharedState('page-visibility');
+      const apply = (value: unknown) => {
+        const hidden = (value as { hidden?: unknown } | undefined)?.hidden;
+        this.hiddenPages.set(
+          Array.isArray(hidden) ? hidden.filter((id) => typeof id === 'string') : [],
+        );
+      };
+      apply(state.value());
+      this.stopVisibility();
+      this.stopVisibility = state.on('updated', apply);
+    } catch {
+      // an older server has no visibility state, and no note is shown
+    }
   }
 
   private keepFocus() {
@@ -806,47 +905,4 @@ export class App implements OnInit, OnDestroy {
       this.setTab(fallback);
     }
   }
-}
-
-// Chrome extension passes ?baseURL=...; the Vite bridge mounts the connection
-// at /__ng-devtools/ beside a page served from /; the standalone server and the
-// Express mount serve it next to the page.
-function sameOrigin(value: string): boolean {
-  try {
-    return new URL(value, location.href).origin === location.origin;
-  } catch {
-    return false;
-  }
-}
-
-const LOOPBACK_HOSTS = ['localhost', '127.0.0.1'];
-
-function loopbackFromExtension(value: string): boolean {
-  if (location.protocol !== 'chrome-extension:') return false;
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === 'http:' || url.protocol === 'https:') &&
-      LOOPBACK_HOSTS.includes(url.hostname)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function detectBaseURL(): string | string[] | undefined {
-  const params = new URLSearchParams(location.search);
-  const fromQuery = params.get('baseURL');
-  // Same origin only: any page can open this URL, and this value decides where
-  // the panel opens its RPC channel.
-  // `new URL` throws on a malformed value, and this runs before the connection
-  // is made, so an unhandled throw would leave the panel blank.
-  if (fromQuery && (sameOrigin(fromQuery) || loopbackFromExtension(fromQuery))) {
-    return fromQuery;
-  }
-
-  if (location.pathname.includes('__ng-devtools') || location.pathname.includes('__devframes/')) {
-    return undefined;
-  }
-  return ['./', '/__ng-devtools/'];
 }

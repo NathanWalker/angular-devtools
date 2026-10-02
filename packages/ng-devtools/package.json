@@ -1,6 +1,6 @@
 {
   "name": "@santoshyadavdev/ng-devtools",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Angular DevTools \u2014 inspect components, signals, DI, and routes. Runs standalone, embedded, or over MCP.",
   "license": "MIT",
   "repository": {
@@ -16,9 +16,11 @@
   "exports": {
     ".": "./src/devframe.ts",
     "./devframe": "./src/devframe.ts",
+    "./config": "./src/config.ts",
     "./overlay": "./src/overlay.ts",
     "./popup": "./src/popup.ts",
     "./overlay-nativescript": "./src/overlay-nativescript.ts",
+    "./cli": "./src/cli.ts",
     "./http": "./src/http.ts",
     "./hub": "./src/hub.ts",
     "./package.json": "./package.json",
@@ -28,9 +30,11 @@
     "exports": {
       ".": "./dist/devframe.mjs",
       "./devframe": "./dist/devframe.mjs",
+      "./config": "./dist/config.mjs",
       "./overlay": "./dist/overlay.mjs",
       "./popup": "./dist/popup.mjs",
       "./overlay-nativescript": "./dist/overlay-nativescript.mjs",
+      "./cli": "./dist/cli.mjs",
       "./http": "./dist/http.mjs",
       "./hub": "./dist/hub.mjs",
       "./package.json": "./package.json",
@@ -102,6 +106,7 @@
   "devDependencies": {
     "@angular/common": "^22.1.0",
     "@angular/core": "^22.1.0",
+    "hono": "4.13.8",
     "@nativescript/core": "^9.1.0",
     "rxjs": "~7.8.0",
     "tsdown": "^0.23.0"

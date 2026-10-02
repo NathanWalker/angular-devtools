@@ -6,6 +6,7 @@ import type {
   ProviderInfo,
 } from './types.ts';
 import { documentTree, type HostTree } from './host-tree.ts';
+import { zoneModeOf } from './zone-mode.ts';
 
 interface ProviderRecord {
   token: unknown;
@@ -17,7 +18,8 @@ interface ProviderRecord {
 export interface DebugNg<H = Element> {
   getInjector?(el: H): unknown;
   getComponent?(el: H): unknown;
-  getDirectives?(el: H): unknown[];
+  /** Also takes an anchor, such as an `<ng-container>` comment. */
+  getDirectives?(node: H | object): unknown[];
   ɵgetInjectorMetadata?(injector: unknown): { type: string; source: unknown } | null;
   ɵgetInjectorProviders?(injector: unknown): ProviderRecord[];
   ɵgetInjectorResolutionPath?(injector: unknown): unknown[];
@@ -27,6 +29,7 @@ export interface DebugNg<H = Element> {
   ): {
     dependencies: {
       token?: unknown;
+      value?: unknown;
       flags?: { optional?: boolean; host?: boolean; self?: boolean; skipSelf?: boolean };
       providedIn?: unknown;
     }[];
@@ -77,14 +80,26 @@ function isBuiltInElementToken(record: ProviderRecord): boolean {
   return record.provider === record.token && !!token && '__NG_ELEMENT_ID__' in token;
 }
 
-function toProviders<H>(ng: DebugNg<H>, injector: unknown): ProviderInfo[] {
-  let records: ProviderRecord[];
-  try {
-    records = ng.ɵgetInjectorProviders?.(injector) ?? [];
-  } catch {
-    return [];
-  }
-  return records
+type RecordReader = (injector: unknown) => ProviderRecord[];
+
+function recordReader<H>(ng: DebugNg<H>): RecordReader {
+  const cache = new Map<unknown, ProviderRecord[]>();
+  return (injector) => {
+    let list = cache.get(injector);
+    if (!list) {
+      try {
+        list = ng.ɵgetInjectorProviders?.(injector) ?? [];
+      } catch {
+        list = [];
+      }
+      cache.set(injector, list);
+    }
+    return list;
+  };
+}
+
+function toProviders(injector: unknown, records: RecordReader): ProviderInfo[] {
+  return records(injector)
     .filter((record) => !isBuiltInElementToken(record))
     .map((record) => {
       const info: ProviderInfo = {
@@ -109,10 +124,10 @@ function environmentName(injector: unknown, source: unknown): string {
 
 export const NULL_INJECTOR_ID = 'inj-null';
 
-export function injectorRef<H extends object = Element>(
+export function injectorRef<H extends object = Element, A extends object = object>(
   ng: DebugNg<H>,
   injector: unknown,
-  tree: HostTree<H> = documentTree(),
+  tree: HostTree<H, A> = documentTree(),
 ): { id: string; name: string } | null {
   if (!injector || typeof injector !== 'object') return null;
   let meta: { type: string; source: unknown } | null = null;
@@ -122,22 +137,67 @@ export function injectorRef<H extends object = Element>(
     return null;
   }
   if (meta?.type === 'element') {
-    return tree.isHost(meta.source)
-      ? { id: idFor(meta.source), name: `<${tree.tag(meta.source)}>` }
+    const source = meta.source;
+    return tree.isHost(source) || tree.isAnchor?.(source)
+      ? { id: idFor(source), name: `<${tree.tag(source)}>` }
       : null;
   }
   if (meta?.type === 'null') return { id: NULL_INJECTOR_ID, name: 'Null injector' };
   return { id: idFor(injector), name: environmentName(injector, meta?.source) };
 }
 
-export function dependenciesOf<H extends object = Element>(
+type DependencyFlags = { optional?: boolean; host?: boolean; self?: boolean; skipSelf?: boolean };
+
+/**
+ * The injector on the lookup path whose own providers list the token.
+ * `ɵgetDependenciesFromInjectable` treats a provider whose value is `null` as
+ * missing, so a `useValue: null` provider is found here instead.
+ */
+function listedOnPath<H>(
+  ng: DebugNg<H>,
+  path: unknown[],
+  records: RecordReader,
+  token: unknown,
+  flags: DependencyFlags,
+): unknown {
+  for (let i = 0; i < path.length; i++) {
+    if (i === 0 && flags.skipSelf) continue;
+    const candidate = path[i];
+    if (flags.host) {
+      let type: string | undefined;
+      try {
+        type = ng.ɵgetInjectorMetadata?.(candidate)?.type;
+      } catch {
+        type = undefined;
+      }
+      if (type !== 'element') break;
+    }
+    if (records(candidate).some((record) => record.token === token)) return candidate;
+    if (i === 0 && flags.self) break;
+  }
+  return null;
+}
+
+export function dependenciesOf<H extends object = Element, A extends object = object>(
   ng: DebugNg<H>,
   injector: unknown,
   owners: Iterable<unknown>,
   withNames = false,
-  tree: HostTree<H> = documentTree(),
+  tree: HostTree<H, A> = documentTree(),
+  records: RecordReader = recordReader(ng),
 ): DependencyInfo[] {
   const out: DependencyInfo[] = [];
+  let path: unknown[] | undefined;
+  const lookupPath = () => {
+    if (!path) {
+      try {
+        path = ng.ɵgetInjectorResolutionPath?.(injector) ?? [];
+      } catch {
+        path = [];
+      }
+    }
+    return path;
+  };
   for (const ctor of owners) {
     if (typeof ctor !== 'function') continue;
     try {
@@ -147,7 +207,9 @@ export function dependenciesOf<H extends object = Element>(
         const flags = Object.entries(dep.flags ?? {})
           .filter(([, on]) => on)
           .map(([flag]) => flag);
-        const by = dep.providedIn ? injectorRef(ng, dep.providedIn, tree) : null;
+        const providedIn =
+          dep.providedIn ?? listedOnPath(ng, lookupPath(), records, dep.token, dep.flags ?? {});
+        const by = providedIn ? injectorRef(ng, providedIn, tree) : null;
         const info: DependencyInfo = {
           from: className(ctor),
           token: tokenName(dep.token),
@@ -177,6 +239,68 @@ interface ElementEntry {
 }
 
 export const MAX_INJECTOR_NODES = 2000;
+export const MAX_SERVICE_DEPENDENCIES = 500;
+
+interface InjectorRecord {
+  factory?: unknown;
+  value?: unknown;
+  multi?: unknown;
+}
+
+function ownRecords(injector: unknown): [unknown, InjectorRecord][] {
+  const records = (injector as { records?: unknown } | null)?.records;
+  if (!(records instanceof Map)) return [];
+  return [...records.entries()].filter(
+    (entry): entry is [unknown, InjectorRecord] => !!entry[1] && typeof entry[1] === 'object',
+  );
+}
+
+/**
+ * Whether the injector already holds an instance for a record. A record still
+ * waiting to be created holds an empty placeholder object (or one mid-creation),
+ * and asking Angular for its dependencies would create it.
+ */
+function isCreated(record: InjectorRecord): boolean {
+  const { value } = record;
+  if (value === undefined || value === null) return false;
+  if (typeof value !== 'object') return true;
+  return !(Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === 0);
+}
+
+const serviceDependencies = new WeakMap<object, Map<unknown, DependencyInfo[]>>();
+
+/** What the services an environment injector already created inject. */
+function environmentDependencies<H extends object, A extends object>(
+  ng: DebugNg<H>,
+  injector: object,
+  tree: HostTree<H, A>,
+  records: RecordReader,
+): DependencyInfo[] {
+  let known = serviceDependencies.get(injector);
+  if (!known) {
+    known = new Map();
+    serviceDependencies.set(injector, known);
+  }
+  const out: DependencyInfo[] = [];
+  const seen = new Set<string>();
+  for (const [token, record] of ownRecords(injector)) {
+    if (out.length >= MAX_SERVICE_DEPENDENCIES) break;
+    if (typeof token !== 'function' || typeof record.factory !== 'function') continue;
+    if (record.multi || !isCreated(record)) continue;
+    let deps = known.get(token);
+    if (!deps) {
+      deps = dependenciesOf(ng, injector, [token], false, tree, records);
+      known.set(token, deps);
+    }
+    for (const dep of deps) {
+      const key = `${dep.from}|${dep.token}|${dep.flags.join(',')}|${dep.providedBy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(dep);
+    }
+  }
+  return out.slice(0, MAX_SERVICE_DEPENDENCIES);
+}
 
 const elementEntries = new WeakMap<object, ElementEntry>();
 
@@ -190,17 +314,18 @@ function environmentsOf<H>(ng: DebugNg<H>, path: unknown[]): object[] {
   }) as object[];
 }
 
-function readElement<H extends object>(
+function readElement<H extends object, A extends object>(
   ng: DebugNg<H>,
-  el: H,
-  tree: HostTree<H>,
+  el: H | A,
+  tree: HostTree<H, A>,
+  records: RecordReader,
 ): ElementEntry | null {
   const cached = elementEntries.get(el);
   if (cached) return cached;
   let component: unknown = null;
   let directives: unknown[] = [];
   try {
-    component = ng.getComponent?.(el) ?? null;
+    component = tree.isHost(el) ? (ng.getComponent?.(el) ?? null) : null;
     directives = ng.getDirectives?.(el) ?? [];
   } catch {
     return null;
@@ -209,7 +334,7 @@ function readElement<H extends object>(
 
   let injector: unknown;
   try {
-    injector = ng.getInjector!(el);
+    injector = ng.getInjector!(el as H);
   } catch {
     return null;
   }
@@ -222,7 +347,7 @@ function readElement<H extends object>(
     path = [];
   }
 
-  const providers = toProviders(ng, injector);
+  const providers = toProviders(injector, records);
   const owners = new Set(
     [component, ...directives]
       .map((owner) => (owner as { constructor?: unknown } | null)?.constructor)
@@ -243,20 +368,21 @@ function readElement<H extends object>(
   const entry: ElementEntry = {
     info,
     providers,
-    dependencies: dependenciesOf(ng, injector, owners, false, tree),
+    dependencies: dependenciesOf(ng, injector, owners, false, tree, records),
     environments: environmentsOf(ng, path),
   };
   elementEntries.set(el, entry);
   return entry;
 }
 
-export function collectInjectorTree<H extends object = Element>(
+export function collectInjectorTree<H extends object = Element, A extends object = object>(
   ng: DebugNg<H> | undefined,
-  tree: HostTree<H> = documentTree(),
-): InjectorTreeReport & { truncated?: boolean } {
+  tree: HostTree<H, A> = documentTree(),
+): InjectorTreeReport {
   const empty: InjectorTreeReport = { roots: [], environment: [] };
   if (!ng?.getInjector || !ng.ɵgetInjectorMetadata) return empty;
 
+  const records = recordReader(ng);
   const envs = new Map<object, Env>();
   const noteEnvironment = (chain: object[]) => {
     chain.forEach((injector, index) => {
@@ -267,7 +393,7 @@ export function collectInjectorTree<H extends object = Element>(
       } catch {
         meta = null;
       }
-      const providers = toProviders(ng, injector);
+      const providers = toProviders(injector, records);
       envs.set(injector, {
         parent: chain[index + 1] ?? null,
         node: {
@@ -279,6 +405,7 @@ export function collectInjectorTree<H extends object = Element>(
           },
           providers,
           children: [],
+          dependencies: environmentDependencies(ng, injector, tree, records),
         },
       });
     });
@@ -289,7 +416,7 @@ export function collectInjectorTree<H extends object = Element>(
   let truncated = false;
   // Depth first in render order; each entry carries the list its nearest
   // injector-bearing ancestor collects children into.
-  const stack: { el: H; into: InjectorTreeNode[] }[] = tree
+  const stack: { el: H | A; into: InjectorTreeNode[] }[] = tree
     .roots()
     .map((el) => ({ el, into: roots }))
     .reverse();
@@ -297,7 +424,7 @@ export function collectInjectorTree<H extends object = Element>(
   while (stack.length) {
     const { el, into } = stack.pop()!;
     let childrenInto = into;
-    const entry = readElement(ng, el, tree);
+    const entry = readElement(ng, el, tree, records);
     if (entry) {
       if (count >= MAX_INJECTOR_NODES) {
         truncated = true;
@@ -305,8 +432,9 @@ export function collectInjectorTree<H extends object = Element>(
       }
       count++;
       noteEnvironment(entry.environments);
+      const selector = tree.selector(el);
       const node: InjectorTreeNode = {
-        injector: { ...entry.info, selector: tree.selector(el) },
+        injector: selector === null ? { ...entry.info } : { ...entry.info, selector },
         providers: entry.providers,
         children: [],
         dependencies: entry.dependencies,
@@ -314,7 +442,8 @@ export function collectInjectorTree<H extends object = Element>(
       into.push(node);
       childrenInto = node.children;
     }
-    const children = tree.children(el);
+    if (!tree.isHost(el)) continue;
+    const children = tree.childNodes?.(el) ?? tree.children(el);
     for (let i = children.length - 1; i >= 0; i--) {
       stack.push({ el: children[i], into: childrenInto });
     }
@@ -327,5 +456,13 @@ export function collectInjectorTree<H extends object = Element>(
     else environment.push(env.node);
   }
 
-  return truncated ? { roots, environment, truncated } : { roots, environment };
+  const report: InjectorTreeReport = truncated
+    ? { roots, environment, truncated }
+    : { roots, environment };
+  const root = [...envs.keys()].find((injector) =>
+    (injector as { scopes?: Set<string> }).scopes?.has?.('root'),
+  );
+  const zone = root ? zoneModeOf(root) : null;
+  if (zone) report.zone = zone;
+  return report;
 }

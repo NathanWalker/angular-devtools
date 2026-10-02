@@ -21,6 +21,7 @@ export interface NgrxPageOptions<H extends object> {
   tree?: HostTree<H>;
   /** Where the app is, for the page list. */
   describe?: () => { url: string; title: string };
+  maxLog?: number;
 }
 
 const describeDocument = () => ({
@@ -37,6 +38,7 @@ export function attachNgrx<H extends object = Element>(
   const describe = options.describe ?? describeDocument;
   const session = Math.random().toString(36).slice(2, 10);
   let sentSeq = 0;
+  let sentLost = 0;
   let lastBody = '';
   let lastPushAt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -53,7 +55,12 @@ export function attachNgrx<H extends object = Element>(
     }, 50);
   };
 
-  const collector = createNgrxCollector(getNg, () => schedule(), options.tree ?? documentTree());
+  const collector = createNgrxCollector(
+    getNg,
+    () => schedule(),
+    options.tree ?? documentTree(),
+    options.maxLog,
+  );
 
   const push = async (rediscover = true) => {
     if (pushing) return schedule(rediscover);
@@ -61,9 +68,11 @@ export function attachNgrx<H extends object = Element>(
     try {
       const { stores, classic } = collector.collect(rediscover);
       const log = collector.logSince(sentSeq);
+      const lost = collector.unrestorableSince(sentLost);
       if (!stores.length && !classic && !log.length && !lastBody) return;
       const body = JSON.stringify({ stores, classic });
-      if (!log.length && body === lastBody && Date.now() - lastPushAt < HEARTBEAT_MS) return;
+      const quiet = !log.length && !lost.updates.length;
+      if (quiet && body === lastBody && Date.now() - lastPushAt < HEARTBEAT_MS) return;
       lastBody = body;
       lastPushAt = Date.now();
       const report: NgrxPageReport = {
@@ -73,10 +82,12 @@ export function attachNgrx<H extends object = Element>(
         stores,
         classic,
         log,
+        ...(lost.updates.length ? { unrestorable: lost.updates } : {}),
       };
       const answer = (await my.rpc.call('push-ngrx-state', report)) as
         { seq?: unknown } | undefined;
       sentSeq = typeof answer?.seq === 'number' ? answer.seq : collector.lastSeq();
+      sentLost = lost.last;
     } catch {
       return;
     } finally {

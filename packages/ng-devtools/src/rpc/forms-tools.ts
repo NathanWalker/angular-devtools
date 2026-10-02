@@ -5,6 +5,7 @@ import {
   type FormFieldError,
   type FormFieldNode,
 } from '../forms.ts';
+import { fixedTtl, type PageTtl } from './page-ttl.ts';
 
 export interface FormsState {
   forms: CollectedForm[];
@@ -12,6 +13,8 @@ export interface FormsState {
   reportedAt: number;
   setupErrors?: { pageId: string; message: string }[];
   instrumented?: string[];
+  /** Older events removed at `limits.formTimeline`, by page id. */
+  dropped?: Record<string, number>;
 }
 
 export interface InspectFormsArgs {
@@ -28,10 +31,12 @@ export interface PageReport {
   events: FormEvent[];
   setupErrors?: string[];
   instrumented?: boolean;
+  dropped?: number;
 }
 
 const STALE_AFTER_MS = 10_000;
-const PAGE_EXPIRES_MS = 150_000;
+export const FORMS_PAGE_TTL_MS = 150_000;
+const PAGE_EXPIRES_MS = FORMS_PAGE_TTL_MS;
 const MAX_EVENTS = 200;
 const MAX_TOOL_CHARS = 20_000;
 const RESOURCE_EVENTS = 50;
@@ -389,25 +394,58 @@ export function isPageReport(value: unknown): value is PageReport {
     Array.isArray(report.events) &&
     report.events.every(isFormEvent) &&
     (report.instrumented === undefined || typeof report.instrumented === 'boolean') &&
+    (report.dropped === undefined ||
+      (typeof report.dropped === 'number' && Number.isFinite(report.dropped))) &&
     (report.setupErrors === undefined ||
       (isStringArray(report.setupErrors) && report.setupErrors.length <= 50))
   );
 }
 
-type Pages = Map<string, PageReport & { reportedAt: number }>;
+type Pages = Map<
+  string,
+  PageReport & { reportedAt: number; seqs?: Map<number, { seq: number; timestamp: number }> }
+>;
 
-export function currentForms(pages: Pages): FormsState {
-  return stateOf(pages);
+const lastSeq = new WeakMap<Pages, number>();
+
+function withGlobalSeqs(pages: Pages, report: PageReport) {
+  const previous = pages.get(report.pageId)?.seqs;
+  const reloaded = report.events.some((event) => {
+    const known = event.seq === undefined ? undefined : previous?.get(event.seq);
+    return known !== undefined && known.timestamp !== event.timestamp;
+  });
+  const known = reloaded ? undefined : previous;
+  const seqs = new Map<number, { seq: number; timestamp: number }>();
+  let last = lastSeq.get(pages) ?? 0;
+  const events = report.events.map((event) => {
+    if (event.seq === undefined) return event;
+    const seq = known?.get(event.seq)?.seq ?? ++last;
+    seqs.set(event.seq, { seq, timestamp: event.timestamp });
+    return { ...event, seq };
+  });
+  lastSeq.set(pages, last);
+  return { events, seqs };
 }
 
-function stateOf(pages: Pages): FormsState {
+export function currentForms(pages: Pages, maxEvents = MAX_EVENTS): FormsState {
+  return stateOf(pages, maxEvents);
+}
+
+function stateOf(pages: Pages, maxEvents: number): FormsState {
   const all = Array.from(pages.values());
+  const events = all.flatMap((page) => page.events).sort((a, b) => a.timestamp - b.timestamp);
+  const dropped: Record<string, number> = {};
+  for (const page of all) {
+    if (page.dropped && page.dropped > 0) dropped[page.pageId] = Math.floor(page.dropped);
+  }
+  for (const event of events.slice(0, Math.max(0, events.length - maxEvents))) {
+    const pageId = event.formId.split('@')[1] ?? '';
+    dropped[pageId] = (dropped[pageId] ?? 0) + 1;
+  }
   return {
     forms: all.flatMap((page) => page.forms),
-    events: all
-      .flatMap((page) => page.events)
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(-MAX_EVENTS),
+    events: events.slice(-maxEvents),
+    dropped,
     reportedAt: all.length ? Math.min(...all.map((page) => page.reportedAt)) : 0,
     instrumented: all.filter((page) => page.instrumented).map((page) => page.pageId),
     setupErrors: all.flatMap((page) =>
@@ -416,19 +454,30 @@ function stateOf(pages: Pages): FormsState {
   };
 }
 
-export function expirePages(pages: Pages, now = Date.now()): FormsState | null {
+export function expirePages(
+  pages: Pages,
+  now = Date.now(),
+  maxEvents = MAX_EVENTS,
+  ttl: PageTtl = fixedTtl(PAGE_EXPIRES_MS),
+): FormsState | null {
   let expired = false;
   for (const [id, page] of pages) {
-    if (now - page.reportedAt > PAGE_EXPIRES_MS) {
+    if (now - page.reportedAt > ttl(id)) {
       pages.delete(id);
       expired = true;
     }
   }
-  return expired ? stateOf(pages) : null;
+  return expired ? stateOf(pages, maxEvents) : null;
 }
 
-export function mergePageReport(pages: Pages, report: PageReport, now = Date.now()): FormsState {
-  pages.set(report.pageId, { ...report, reportedAt: now });
-  expirePages(pages, now);
-  return stateOf(pages);
+export function mergePageReport(
+  pages: Pages,
+  report: PageReport,
+  now = Date.now(),
+  maxEvents = MAX_EVENTS,
+  ttl: PageTtl = fixedTtl(PAGE_EXPIRES_MS),
+): FormsState {
+  pages.set(report.pageId, { ...report, ...withGlobalSeqs(pages, report), reportedAt: now });
+  expirePages(pages, now, maxEvents, ttl);
+  return stateOf(pages, maxEvents);
 }

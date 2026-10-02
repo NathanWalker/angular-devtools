@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - examples/*
+  - apps/*
   # Installs with npm from its own lockfile, outside the root install.
   - '!examples/nativescript'
 

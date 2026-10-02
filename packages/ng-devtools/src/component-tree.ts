@@ -27,7 +27,7 @@ const MAX_DEPTH = 256;
 const MAX_PROPS = 60;
 const VALUE_LIMITS = { depth: 3, keys: 30, items: 30, text: 300 };
 
-const CHANGE_DETECTION: Record<number, string> = { 0: 'OnPush', 1: 'Default' };
+const CHANGE_DETECTION: Record<number, string> = { 0: 'OnPush', 1: 'Eager' };
 const ENCAPSULATION: Record<number, string> = {
   0: 'Emulated',
   2: 'None',
@@ -53,7 +53,7 @@ function componentAt<H>(ng: ComponentDebugNg<H>, el: H): object | null {
   return found && typeof found === 'object' ? found : null;
 }
 
-function directivesAt<H>(ng: ComponentDebugNg<H>, el: H): object[] {
+function directivesAt<H extends object>(ng: ComponentDebugNg<H>, el: H): object[] {
   const found = read(() => ng.getDirectives?.(el) ?? [], [] as unknown[]);
   return found.filter((d): d is object => !!d && typeof d === 'object');
 }
@@ -73,20 +73,58 @@ export function componentHosts<H extends object = Element>(
   return out;
 }
 
+function hostsUnder<H extends object>(
+  ng: ComponentDebugNg<H>,
+  scope: H,
+  tag: string,
+  tree: HostTree<H>,
+): H[] {
+  const out: H[] = [];
+  const visit = (el: H, depth: number) => {
+    if (depth > MAX_DEPTH) return;
+    for (const child of tree.children(el)) {
+      if (componentAt(ng, child)) {
+        if (tree.tag(child) === tag) out.push(child);
+      } else {
+        visit(child, depth + 1);
+      }
+    }
+  };
+  visit(scope, 0);
+  return out;
+}
+
 export function hostPath<H extends object = Element>(
   ng: ComponentDebugNg<H>,
   el: H,
   tree: HostTree<H> = documentTree(),
 ): string {
-  const parts: string[] = [];
+  const chain: H[] = [];
+  let top: H = el;
   for (let node: H | null = el; node; node = tree.parent(node)) {
-    if (!componentAt(ng, node)) continue;
-    const tag = tree.tag(node);
-    const parent = tree.parent(node);
-    const twins = parent ? tree.children(parent).filter((c) => tree.tag(c) === tag) : [];
-    parts.unshift(twins.length > 1 ? `${tag}[${twins.indexOf(node) + 1}]` : tag);
+    top = node;
+    if (componentAt(ng, node)) chain.unshift(node);
   }
-  return parts.join(' > ');
+  return chain
+    .map((node, i) => {
+      const tag = tree.tag(node);
+      const scope = i > 0 ? chain[i - 1] : top === node ? null : top;
+      const twins = scope ? hostsUnder(ng, scope, tag, tree) : [node];
+      return twins.length > 1 ? `${tag}[${twins.indexOf(node) + 1}]` : tag;
+    })
+    .join(' > ');
+}
+
+export function componentHostOf<H extends object = Element>(
+  ng: ComponentDebugNg<H> | undefined,
+  el: H,
+  tree: HostTree<H> = documentTree(),
+): H | null {
+  if (!ng?.getComponent) return null;
+  for (let node: H | null = el; node; node = tree.parent(node)) {
+    if (componentAt(ng, node)) return node;
+  }
+  return null;
 }
 
 function unwrap<H>(ng: ComponentDebugNg<H>, value: unknown): unknown {
@@ -116,6 +154,78 @@ function readInputs<H>(
     });
 }
 
+function resourceOf<H>(ng: ComponentDebugNg<H>, value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  const ref = value as Record<string, unknown>;
+  const isSignal = (field: unknown) => read(() => !!ng.isSignal?.(field), false);
+  if (
+    !isSignal(ref['value']) ||
+    !isSignal(ref['status']) ||
+    typeof ref['hasValue'] !== 'function'
+  ) {
+    return null;
+  }
+  const call = (field: unknown) => read(() => (field as () => unknown)(), undefined);
+  const snapshot: Record<string, unknown> = {
+    status: call(ref['status']),
+    value: call(ref['value']),
+  };
+  if (isSignal(ref['error'])) {
+    const error = call(ref['error']);
+    if (error !== undefined) snapshot['error'] = error;
+  }
+  return snapshot;
+}
+
+function injectedValues<H>(
+  ng: ComponentDebugNg<H>,
+  injector: unknown,
+  owner: unknown,
+): Set<unknown> {
+  const values = new Set<unknown>();
+  const result = read(() => ng.ɵgetDependenciesFromInjectable?.(injector, owner) ?? null, null);
+  for (const dep of result?.dependencies ?? []) {
+    if (dep.value !== null && typeof dep.value === 'object') values.add(dep.value);
+  }
+  return values;
+}
+
+function readProperties<H>(
+  ng: ComponentDebugNg<H>,
+  instance: object,
+  skip: Set<string>,
+  injected: Set<unknown>,
+): ComponentProp[] {
+  const out: ComponentProp[] = [];
+  const keys = read(() => Object.keys(instance), [] as string[]);
+  for (const name of keys) {
+    if (out.length >= MAX_PROPS) break;
+    if (skip.has(name) || name.startsWith('__ng') || name.startsWith('ɵ')) continue;
+    const raw = read(() => (instance as Record<string, unknown>)[name], undefined);
+    if (injected.has(raw)) continue;
+    const resource = resourceOf(ng, raw);
+    if (resource) {
+      out.push({
+        name,
+        prop: name,
+        kind: 'resource',
+        value: serializeNamed(name, resource, VALUE_LIMITS),
+      });
+      continue;
+    }
+    const isSignal = typeof raw === 'function' && read(() => !!ng.isSignal?.(raw), false);
+    if (typeof raw === 'function' && !isSignal) continue;
+    const prop: ComponentProp = {
+      name,
+      prop: name,
+      value: serializeNamed(name, unwrap(ng, raw), VALUE_LIMITS),
+    };
+    if (isSignal) prop.kind = 'signal';
+    out.push(prop);
+  }
+  return out;
+}
+
 function readOutputs(
   outputs: Record<string, unknown> | undefined,
   listened: Set<string>,
@@ -140,6 +250,13 @@ export function componentDetail<H extends object = Element>(
   const listened = new Set(listeners.filter((l) => l.type === 'output').map((l) => l.name));
   const dom = [...new Set(listeners.filter((l) => l.type !== 'output').map((l) => l.name))];
   const directives = directivesAt(ng, el).filter((d) => d !== instance);
+  const injector = read(() => ng.getInjector?.(el) ?? null, null);
+  const bound = new Set(
+    [...Object.entries(meta?.inputs ?? {}), ...Object.entries(meta?.outputs ?? {})].map(
+      ([name, entry]) => propName(entry, name),
+    ),
+  );
+  const injected = injector ? injectedValues(ng, injector, instance.constructor) : new Set();
 
   const detail: ComponentDetail = {
     id: elementId(el),
@@ -148,6 +265,7 @@ export function componentDetail<H extends object = Element>(
     path: hostPath(ng, el, tree),
     inputs: readInputs(ng, instance, meta?.inputs),
     outputs: readOutputs(meta?.outputs, listened),
+    properties: readProperties(ng, instance, bound, injected),
     listeners: dom.slice(0, MAX_PROPS),
     directives: directives.map((directive) => {
       const dirMeta = read(() => ng.getDirectiveMetadata?.(directive) ?? null, null);
@@ -164,7 +282,6 @@ export function componentDetail<H extends object = Element>(
   const enc = meta?.encapsulation;
   if (typeof enc === 'number' && ENCAPSULATION[enc]) detail.encapsulation = ENCAPSULATION[enc];
 
-  const injector = read(() => ng.getInjector?.(el) ?? null, null);
   if (injector) {
     detail.dependencies = dependenciesOf(ng, injector, [instance.constructor], true, tree);
   }
@@ -182,6 +299,7 @@ export function collectComponentTree<H extends object = Element>(
   const visit = (el: H, out: LiveComponentNode[], depth: number) => {
     if (depth > MAX_DEPTH) {
       report.truncated = true;
+      report.truncatedBy = { ...report.truncatedBy, depth: MAX_DEPTH };
       return;
     }
     const instance = componentAt(ng, el);
@@ -189,6 +307,7 @@ export function collectComponentTree<H extends object = Element>(
     if (instance) {
       if (report.count >= MAX_COMPONENTS) {
         report.truncated = true;
+        report.truncatedBy = { ...report.truncatedBy, components: MAX_COMPONENTS };
         return;
       }
       report.count++;

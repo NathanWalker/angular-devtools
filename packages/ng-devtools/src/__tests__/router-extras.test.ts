@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { noteFailedCall, redactText, type NavigationRecord } from '../router.ts';
-import type { RouteNode } from '../router-config.ts';
+import {
+  noteFailedCall,
+  redactText,
+  setNavigationLimit,
+  type NavigationRecord,
+} from '../router.ts';
+import { walkConfig, type RouteNode } from '../router-config.ts';
 import { lintRoutes, listRoutesText, matchUrl, renderModeFor } from '../rpc/router-config-tools.ts';
 import {
   describeNavigation,
   explainNavigationText,
   isRouterReport,
-  loopIn,
   plainReason,
-  redirectChain,
   type RouterPage,
 } from '../rpc/router-tools.ts';
 import { parseServerRoutes } from '../rpc/server-routes.ts';
@@ -192,9 +195,7 @@ describe('explanations', () => {
       nav(3, { url: '/a', outcome: 'redirected', redirectedFrom: 2 }),
     ];
     const p = page({ navigations });
-    expect(redirectChain(p, navigations[2]).map((n) => n.id)).toEqual([1, 2, 3]);
-    expect(loopIn(redirectChain(p, navigations[2]))).toBe('/a');
-    expect(describeNavigation(navigations[2], p)).toContain('**redirect loop**');
+    expect(describeNavigation(navigations[2], p)).toContain('**redirect loop** `/a` → `/b` → `/a`');
   });
 
   it('summarizes slow navigations', () => {
@@ -242,6 +243,70 @@ describe('report validation', () => {
       isRouterReport({ ...base, config: [node('/a')], activeIds: ['/a'], instrumented: true }),
     ).toBe(true);
   });
+
+  it('accepts the config the page walks when a level has more than 200 routes', () => {
+    const routes = (n: number, prefix: string) =>
+      Array.from({ length: n }, (_, i) => ({ path: `${prefix}${i}` }));
+    for (const config of [
+      routes(201, 'r'),
+      [{ path: 'admin', children: routes(150, 'c'), _loadedRoutes: routes(60, 'l') }],
+    ]) {
+      const cut = { routes: 0 };
+      const tree = walkConfig({ config }, cut);
+      expect(cut.routes).toBe(config.length === 1 ? 10 : 1);
+      expect(isRouterReport({ ...base, config: tree, configTruncated: cut.routes })).toBe(true);
+    }
+    const deep = { routes: 0 };
+    walkConfig(
+      {
+        config: [
+          ...routes(200, 'r'),
+          { path: 'shop', children: routes(50, 'c') },
+          {
+            path: 'admin',
+            loadChildren: () => [],
+            _loadedRoutes: [{ path: 'x', children: routes(3, 'y') }],
+          },
+        ],
+      },
+      deep,
+    );
+    expect(deep.routes).toBe(51 + 5);
+    const cut = { routes: 0 };
+    walkConfig({ config: routes(200, 'r') }, cut);
+    expect(cut.routes).toBe(0);
+    expect(isRouterReport({ ...base, configTruncated: 'many' })).toBe(false);
+  });
+
+  it('says how many routes the page left out', () => {
+    const text = listRoutesText(
+      { pages: [page({ config: [node('/a')], configTruncated: 12 })] },
+      {},
+    );
+    expect(text).toContain('12 route(s) were left out');
+    expect(listRoutesText({ pages: [page({ config: [node('/a')] })] }, {})).not.toContain(
+      'left out',
+    );
+  });
+
+  it('warns about left-out routes when matching a URL and auditing', () => {
+    const state = { pages: [page({ config: [node('/a')], configTruncated: 12 })] };
+    const miss = listRoutesText(state, { match: '/b' });
+    expect(miss).toContain('12 route(s) were left out');
+    expect(miss).toContain('matches no route in the reported part of the config');
+    expect(miss).not.toContain('NG04002');
+    expect(listRoutesText(state, { match: '/a' })).toContain('12 route(s) were left out');
+    expect(listRoutesText(state, { audit: true })).toContain('12 route(s) were left out');
+    const full = listRoutesText({ pages: [page({ config: [node('/a')] })] }, { match: '/b' });
+    expect(full).toContain('NG04002');
+    expect(full).not.toContain('left out');
+  });
+
+  it('accepts as many navigations as the configured limit', () => {
+    const report = { ...base, navigations: Array.from({ length: 60 }, (_, i) => nav(i + 1)) };
+    expect(isRouterReport(report)).toBe(false);
+    expect(isRouterReport(report, 100)).toBe(true);
+  });
 });
 
 describe('failed calls', () => {
@@ -251,6 +316,17 @@ describe('failed calls', () => {
     expect(list).toHaveLength(50);
     expect(new Set(list.map((n) => n.id)).size).toBe(50);
     expect(list.every((n) => n.id < 0)).toBe(true);
+  });
+
+  it('follow the configured navigation limit', () => {
+    const list: NavigationRecord[] = [];
+    setNavigationLimit(10);
+    try {
+      for (let i = 0; i < 20; i++) noteFailedCall(list, `/x/${i}`, new Error('nope'), i);
+    } finally {
+      setNavigationLimit(50);
+    }
+    expect(list).toHaveLength(10);
   });
 });
 

@@ -3,14 +3,28 @@ import type { RouteNode } from '../router-config.ts';
 import type { RouterSetup } from '../router-setup.ts';
 import type { LinkInfo, OutletInfo } from '../router-links.ts';
 import type { PreloadRecord } from '../router-actions.ts';
+import { fixedTtl, type PageTtl } from './page-ttl.ts';
 import { code, UNTRUSTED } from './forms-tools.ts';
+import { unknownPageText } from './pages.ts';
+import { droppedNote } from '../timeline-limits.ts';
+import {
+  describeLoop,
+  detectLoops,
+  hopText,
+  loopChain,
+  loopTitle,
+  type NavigationLoop,
+} from './router-loops.ts';
 
 export interface RouterReport {
   pageId: string;
   snapshot: RouterSnapshot | null;
   navigations: NavigationRecord[];
+  /** Older navigations removed at `limits.navigations`. */
+  dropped?: number;
   generation?: number;
   config?: RouteNode[];
+  configTruncated?: number;
   activeIds?: string[];
   setup?: RouterSetup;
   outlets?: OutletInfo[];
@@ -22,6 +36,7 @@ export interface RouterReport {
 export interface RouterPage extends RouterReport {
   reportedAt: number;
   changedAt: number;
+  loops?: NavigationLoop[];
 }
 
 export interface RouterState {
@@ -31,7 +46,8 @@ export interface RouterState {
 type Pages = Map<string, RouterPage>;
 
 const STALE_AFTER_MS = 10_000;
-const PAGE_EXPIRES_MS = 150_000;
+export const ROUTER_PAGE_TTL_MS = 150_000;
+const PAGE_EXPIRES_MS = ROUTER_PAGE_TTL_MS;
 const MAX_NAVIGATIONS = 50;
 const MAX_PAGES = 20;
 const MAX_RESOURCE_CHARS = 100_000;
@@ -279,7 +295,10 @@ function isNode(value: unknown, budget: { n: number }, depth = 0): boolean {
   );
 }
 
-export function isRouterReport(value: unknown): value is RouterReport {
+export function isRouterReport(
+  value: unknown,
+  maxNavigations = MAX_NAVIGATIONS,
+): value is RouterReport {
   if (!isRecord(value)) return false;
   const report: Partial<RouterReport> = value;
   const nodes = { n: 0 };
@@ -287,13 +306,15 @@ export function isRouterReport(value: unknown): value is RouterReport {
     isText(report.pageId, 50) &&
     isSnapshot(report.snapshot) &&
     Array.isArray(report.navigations) &&
-    report.navigations.length <= MAX_NAVIGATIONS &&
+    report.navigations.length <= maxNavigations &&
     report.navigations.every(isNavigation) &&
+    optional(report.dropped, isNumber) &&
     optional(report.generation, isNumber) &&
     optional(
       report.config,
       (v) => Array.isArray(v) && v.length <= MAX_CHILDREN && v.every((node) => isNode(node, nodes)),
     ) &&
+    optional(report.configTruncated, isNumber) &&
     optional(report.activeIds, (v) => isNames(v, MAX_ROUTES)) &&
     optional(report.setup, (v) => isRecord(v) && isPlain(v, { n: 500 })) &&
     optional(report.outlets, (v) => Array.isArray(v) && isPlain(v, { n: 3_000 })) &&
@@ -325,10 +346,14 @@ export function currentRouter(pages: Pages): RouterState {
   return stateOf(pages);
 }
 
-export function expireRouterPages(pages: Pages, now = Date.now()): RouterState | null {
+export function expireRouterPages(
+  pages: Pages,
+  now = Date.now(),
+  ttl: PageTtl = fixedTtl(PAGE_EXPIRES_MS),
+): RouterState | null {
   let expired = false;
   for (const [id, page] of pages) {
-    if (now - page.reportedAt > PAGE_EXPIRES_MS) {
+    if (now - page.reportedAt > ttl(id)) {
       pages.delete(id);
       expired = true;
     }
@@ -343,7 +368,12 @@ export function touchRouterPage(pages: Pages, pageId: unknown, now = Date.now())
   return true;
 }
 
-export function mergeRouterReport(pages: Pages, report: RouterReport, now = Date.now()) {
+export function mergeRouterReport(
+  pages: Pages,
+  report: RouterReport,
+  now = Date.now(),
+  ttl: PageTtl = fixedTtl(PAGE_EXPIRES_MS),
+) {
   const previous = pages.get(report.pageId);
   const changedAt =
     previous && contentOf(previous) === contentOf(report) ? previous.changedAt : now;
@@ -351,8 +381,9 @@ export function mergeRouterReport(pages: Pages, report: RouterReport, now = Date
   if (!report.config && previous?.config && previous.generation === report.generation) {
     next.config = previous.config;
   }
+  next.loops = detectLoops(next.navigations, next.config);
   pages.set(report.pageId, next);
-  expireRouterPages(pages, now);
+  expireRouterPages(pages, now, ttl);
   if (pages.size > MAX_PAGES) {
     const oldest = [...pages.values()].sort((a, b) => a.reportedAt - b.reportedAt);
     for (const page of oldest.slice(0, pages.size - MAX_PAGES)) pages.delete(page.pageId);
@@ -379,8 +410,13 @@ export function otherPages(state: RouterState, page: RouterPage): string {
   return `\n\n${others.length} other page(s) report too: ${list}. Pass \`page\` to see one.`;
 }
 
-export function noPage(pageId?: string): string {
-  return `No page ${code(pageId ?? '')} is reporting router state.`;
+export function noPage(pageId: string | undefined, state: RouterState): string {
+  const pages = state.pages.map((page) => ({
+    pageId: page.pageId,
+    url: page.snapshot?.url,
+    reportedAt: page.reportedAt,
+  }));
+  return unknownPageText(pageId ?? '', pages, 'router state');
 }
 
 export function json(value: unknown): string {
@@ -448,6 +484,9 @@ function outletLines(outlets: OutletInfo[], depth: number, out: string[]) {
         `${pad}  - router-bound inputs: ${bound.map((i) => `${code(i.input)} from ${i.source}`).join(', ')}`,
       );
     }
+    if (outlet.data !== undefined) {
+      out.push(`${pad}  - routerOutletData (ROUTER_OUTLET_DATA): ${code(outlet.data)}`);
+    }
     if (outlet.children) outletLines(outlet.children, depth + 1, out);
   }
 }
@@ -473,7 +512,7 @@ export function inspectRouteText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   if (!page.snapshot) {
     return `${UNTRUSTED}\n\nPage ${code(page.pageId)} reports no Router. The app may not use the Angular router, or it is not a development build.${otherPages(state, page)}${freshness(page, now)}`;
   }
@@ -564,32 +603,20 @@ export function plainReason(nav: NavigationRecord, setup?: RouterSetup): string 
     case 'Aborted':
       return 'The navigation was aborted (abort() on the current navigation or the Navigation API).';
     case 'Redirect':
-      return `A ${nav.redirectKind ?? 'guard or resolver'} redirected${nav.redirectTo ? ` to ${code(nav.redirectTo)}` : ''}.`;
+      return `${nav.redirectKind === 'error handler' ? 'The navigation error handler' : `A ${nav.redirectKind ?? 'guard or resolver'}`} redirected${nav.redirectTo ? ` to ${code(nav.redirectTo)}` : ''}.`;
     default:
       return undefined;
   }
 }
 
-export function redirectChain(page: RouterPage, nav: NavigationRecord): NavigationRecord[] {
-  const chain: NavigationRecord[] = [nav];
-  let cursor: NavigationRecord | undefined = nav;
-  while (cursor?.redirectedFrom !== undefined && chain.length < 20) {
-    const from = page.navigations.find((n) => n.id === cursor!.redirectedFrom);
-    if (!from) break;
-    chain.unshift(from);
-    cursor = from;
-  }
-  return chain;
+export function loopsOf(page: RouterPage): NavigationLoop[] {
+  return page.loops ?? detectLoops(page.navigations, page.config);
 }
 
-export function loopIn(chain: NavigationRecord[]): string | undefined {
-  const seen = new Map<string, number>();
-  for (const nav of chain) {
-    const count = (seen.get(nav.url) ?? 0) + 1;
-    seen.set(nav.url, count);
-    if (count >= 2) return nav.url;
-  }
-  return undefined;
+export function loopsText(loops: NavigationLoop[]): string {
+  return loops.length
+    ? `**Loops** (a URL visited twice in one chain of redirects or code-started navigations)\n${loops.map(describeLoop).join('\n')}\n\n`
+    : '';
 }
 
 export function describeNavigation(nav: NavigationRecord, page?: RouterPage): string {
@@ -618,10 +645,12 @@ export function describeNavigation(nav: NavigationRecord, page?: RouterPage): st
   if (nav.redirectTo) {
     lines.push(`  - ${nav.redirectKind ?? 'router'} redirect to ${code(nav.redirectTo)}`);
   }
-  if (page && nav.redirectedFrom !== undefined) {
-    const loop = loopIn(redirectChain(page, nav));
-    if (loop)
-      lines.push(`  - **redirect loop**: ${code(loop)} appears more than once in the chain`);
+  const loop = page && loopsOf(page).find((l) => l.ids.includes(nav.id));
+  if (loop) {
+    const hops = loop.hops.filter((hop) => hop.id === nav.id).map(hopText);
+    lines.push(
+      `  - **${loopTitle(loop)}** ${loopChain(loop)}${hops.length ? `; here: ${hops.join('; ')}` : ''}`,
+    );
   }
   if (nav.guards && (nav.guards.names.length || nav.guards.passed === false)) {
     const names = nav.guards.names.length ? list(nav.guards.names) : 'none on the route';
@@ -720,7 +749,7 @@ export function explainNavigationText(
   now = Date.now(),
 ): string {
   const page = pickPage(state, args.page);
-  if (!page) return noPage(args.page);
+  if (!page) return noPage(args.page, state);
   if (args.perf) {
     return capped(
       `${UNTRUSTED}\n\n${perfSummary(page.navigations, page.preloads)}${otherPages(state, page)}${freshness(page, now)}`,
@@ -742,9 +771,10 @@ export function explainNavigationText(
       : `No navigations recorded since DevTools connected on page ${code(page.pageId)}; earlier ones are not visible.${otherPages(state, page)}${freshness(page, now)}`;
   }
   const recent = matching.slice(-limit).reverse();
+  const loops = loopsOf(page).filter((loop) => recent.some((nav) => loop.ids.includes(nav.id)));
   const header = `Most recent ${recent.length} of ${matching.length} navigation(s), newest first. Guards lists the candidates: canDeactivate guards of the page being left (marked "leaving") and canActivate/canActivateChild guards of the target; without per-guard instrumentation the router reports one result for all of them. Turn instrumentation on (navigate tool, action "instrument") to see each guard's verdict.${page.instrumented ? ' Instrumentation is on.' : ''}`;
   return capped(
-    `${UNTRUSTED}\n\n${header}\n\n${recent.map((nav) => describeNavigation(nav, page)).join('\n')}${otherPages(state, page)}${freshness(page, now)}`,
+    `${UNTRUSTED}\n\n${header}\n\n${loopsText(loops)}${recent.map((nav) => describeNavigation(nav, page)).join('\n')}${droppedNote(page.dropped, 'navigations', 'navigations')}${otherPages(state, page)}${freshness(page, now)}`,
   );
 }
 

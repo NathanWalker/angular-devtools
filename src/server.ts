@@ -17,7 +17,6 @@ const auth = process.env['NG_DEVTOOLS_AUTH'] === 'true';
 const devtools = initNgDevtoolsHub({
   ws: { sidecar: true },
   auth,
-  allowedOrigins: false,
 });
 app.use(devtools.nodeMiddleware);
 

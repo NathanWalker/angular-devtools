@@ -60,6 +60,24 @@ export interface NavigationRecord {
   probe?: boolean;
 }
 
+export interface LoopHop {
+  id: number;
+  from: string;
+  to: string;
+  via: string;
+  by?: string;
+}
+
+export interface NavigationLoop {
+  kind: 'redirect' | 'burst' | 'config';
+  ids: number[];
+  cycle: string[];
+  hops: LoopHop[];
+  guards: string[];
+  bounces: number;
+  end: string;
+}
+
 export interface RouteNode {
   id: string;
   path: string;
@@ -116,6 +134,7 @@ export interface OutletInfo {
   activated: boolean;
   detached?: boolean;
   inputs?: { input: string; source: string }[];
+  data?: string;
   children?: OutletInfo[];
 }
 
@@ -155,14 +174,17 @@ export interface RouterPage {
     pending?: { id: number; url: string };
   } | null;
   navigations: NavigationRecord[];
+  dropped?: number;
   generation?: number;
   config?: RouteNode[];
+  configTruncated?: number;
   activeIds?: string[];
   setup?: RouterSetup;
   outlets?: OutletInfo[];
   links?: LinkInfo[];
   preloads?: { path: string; startedAt: number; ms?: number; failed?: boolean }[];
   instrumented?: boolean;
+  loops?: NavigationLoop[];
 }
 
 export interface LintFinding {
@@ -174,14 +196,34 @@ export interface LintFinding {
   angular: string;
 }
 
+export type LintResult =
+  | { checked: true; findings: LintFinding[] }
+  | { checked: false; reason: 'no-page' | 'events-only' | 'no-config' };
+
 export const routerCall = rpcTry;
 
-export function routerAction(
+export function isReplayableUrl(url: string): boolean {
+  return (
+    url.startsWith('/') &&
+    !url.startsWith('//') &&
+    !/^\/*[a-z][a-z0-9+.-]*:/i.test(url) &&
+    !url.includes('[redacted]') &&
+    url.length <= 2000
+  );
+}
+
+export const PAGE_UNREACHABLE = 'Could not reach the page.';
+
+export async function routerAction(
   client: DevframeRpcClient | null,
   pageId: string | undefined,
   request: Record<string, unknown>,
-): Promise<Record<string, unknown> | null> {
-  return routerCall<Record<string, unknown>>(client, 'request-router-action', { pageId, request });
+): Promise<Record<string, unknown>> {
+  const result = await routerCall<Record<string, unknown>>(client, 'request-router-action', {
+    pageId,
+    request,
+  });
+  return result ?? { error: PAGE_UNREACHABLE };
 }
 
 export const SHARED_STYLES = `
