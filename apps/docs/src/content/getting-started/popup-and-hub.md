@@ -113,7 +113,7 @@ When the page's server mounts the hub (`/__devframes/`), the button opens the wh
 | Angular      | Dashboard, Components, Routes, Signals, Injectors, Forms, Pipes, and SSR & HTTP |
 | NgRx         | The Store tab                                                                   |
 | Analog       | The Analog tab, or a notice in apps that do not use Analog                      |
-| NativeScript | A **Coming Soon** placeholder                                                   |
+| NativeScript | Setup steps for [NativeScript apps](../guides/nativescript.md)                  |
 | Capacitor    | A **Coming Soon** placeholder                                                   |
 
 ### Full-page viewer

@@ -173,7 +173,7 @@ A floating button appears on your page. It opens the devtools with one dock entr
 | Angular      | Dashboard, components, routes, signals, injectors, forms, pipes, and SSR & HTTP |
 | NgRx         | Store patterns from source, and live state and actions                          |
 | Analog       | File routes, server calls, render modes and lint (a notice in non-Analog apps)  |
-| NativeScript | A **Coming Soon** placeholder                                                   |
+| NativeScript | Setup steps for [NativeScript apps](../guides/nativescript.md)                  |
 | Capacitor    | A **Coming Soon** placeholder                                                   |
 
 [Popup and hub](./popup-and-hub.md) covers the panel, its dock modes and deep links.
