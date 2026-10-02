@@ -21,7 +21,7 @@ One inspector's page-side code inside the overlay, such as `forms-collector.ts` 
 _Avoid_: scraper, probe, watcher
 
 **Host tree**:
-The tree Angular rendered into, as the component, injector and NgRx collectors walk it: roots, children, parent and a tag for each host (`HostTree` in `host-tree.ts`). In the browser it is the DOM, through `domTree()`; a platform without a DOM describes its own views.
+The tree Angular rendered into, as the component, injector, signal graph and NgRx collectors walk it: roots, children, parent and a tag for each host (`HostTree` in `host-tree.ts`). In the browser it is the DOM, through `domTree()`; a platform without a DOM describes its own views.
 _Avoid_: view tree, render tree, DOM (when the code does not depend on it)
 
 **Push**:

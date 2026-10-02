@@ -109,11 +109,11 @@ function stripped(token: unknown): string {
 
 function componentElements<H extends object>(ng: NgrxDebugNg<H>, tree: HostTree<H>): H[] {
   const out: H[] = [];
-  const stack = tree.roots().reverse();
+  const stack = [...tree.roots()].reverse();
   while (stack.length) {
     const el = stack.pop()!;
     if (read(() => !!ng.getComponent?.(el), false)) out.push(el);
-    stack.push(...tree.children(el).reverse());
+    stack.push(...[...tree.children(el)].reverse());
   }
   return out;
 }

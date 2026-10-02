@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { collectComponentTree, hostPath, type ComponentDebugNg } from '../component-tree.ts';
 import { elementId } from '../element-id.ts';
-import type { HostTree } from '../host-tree.ts';
+import { hostBySelector, type HostTree } from '../host-tree.ts';
 import { collectInjectorTree } from '../injector-tree.ts';
 import { createNgrxCollector } from '../ngrx-collector.ts';
+import { collectSignalGraph, type SignalDebugNg } from '../signal-graph.ts';
 
 interface View {
   type: string;
@@ -104,5 +105,46 @@ describe('collectors over a non-DOM host tree', () => {
     collector.collect();
     expect(seen.slice(0, 5)).toEqual(['App', 'List', 'StackLayout', 'Row', 'Row']);
     collector.stop();
+  });
+
+  it('finds a host by selector without reordering the tree', () => {
+    const withSelectors: HostTree<View> = {
+      ...tree,
+      selector: (host) => {
+        const parent = host.parent;
+        const own = parent
+          ? `${host.type}:nth-child(${parent.children.indexOf(host) + 1})`
+          : host.type;
+        return parent ? `${withSelectors.selector!(parent)} > ${own}` : own;
+      },
+    };
+    const order = () => list.children[0]!.children.map((host) => host === first);
+    expect(order()).toEqual([true, false]);
+    expect(
+      hostBySelector(
+        withSelectors,
+        'App > List:nth-child(1) > StackLayout:nth-child(1) > Row:nth-child(2)',
+      ),
+    ).toBe(second);
+    expect(hostBySelector(withSelectors, 'App > Nope')).toBeNull();
+    expect(order()).toEqual([true, false]);
+    expect(hostBySelector(tree, 'App')).toBeNull();
+  });
+
+  it('collects the signal graph of a host found by id', () => {
+    const signals: SignalDebugNg<View> = {
+      ...ng,
+      ɵgetSignalGraph: (injector) =>
+        (injector as { host?: View }).host === second
+          ? {
+              nodes: [{ id: '2', kind: 'signal', label: 'label', epoch: 1, value: 'second' }],
+              edges: [],
+            }
+          : { nodes: [], edges: [] },
+    };
+    const graph = collectSignalGraph(signals, { id: elementId(second) }, tree)!;
+    expect(graph.source).toBe('selected');
+    expect(graph.component).toMatchObject({ name: 'Row', path: 'App > List > Row[2]' });
+    expect(graph.nodes.map((n) => n.id)).toEqual(['2']);
   });
 });
