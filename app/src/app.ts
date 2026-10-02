@@ -100,7 +100,7 @@ const NATIVESCRIPT_SETUP: ComingSoonInfo = {
   plans: [
     'Install @santoshyadavdev/ng-devtools and @valor/nativescript-websockets',
     'Call initNativeScriptOverlay() in main.ts, before the app bootstraps',
-    'Run ng-devtools dev --host 0.0.0.0 in the app, then open the Angular dock',
+    'Run ng-devtools dev --no-auth in the app, then open the Angular dock',
   ],
   link: {
     label: 'NativeScript setup guide',

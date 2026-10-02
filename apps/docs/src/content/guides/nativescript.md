@@ -101,16 +101,24 @@ Run the server in the app's folder, so the source scanners read its `src/`:
 
 ```bash
 cd my-nativescript-app
-npx @santoshyadavdev/ng-devtools dev --host 0.0.0.0 --no-auth
+npx @santoshyadavdev/ng-devtools dev --no-auth
 ```
+
+The server listens on `localhost` only, which the iOS simulator and the Android emulator reach. `--no-auth` is needed because the app cannot enter the one-time code the panel asks for.
 
 | What         | Where                         |
 | ------------ | ----------------------------- |
 | Devtools UI  | `http://localhost:9999/`      |
 | MCP endpoint | `http://localhost:9999/__mcp` |
 
+A physical device reaches your machine over the network, so the server has to listen on an interface the device can reach:
+
+```bash
+npx @santoshyadavdev/ng-devtools dev --host 192.168.1.20 --no-auth
+```
+
 <ngmd-alert severity="warning" label="Trusted networks only">
-  <code>--host 0.0.0.0 --no-auth</code> exposes the devtools RPC and MCP endpoints, unauthenticated, to every host that can reach your machine. The simulators reach the server over loopback, so drop <code>--host 0.0.0.0</code> unless a physical device needs it, and prefer the one interface that device uses (for example <code>--host 192.168.1.20</code>).
+  With <code>--host</code> and <code>--no-auth</code>, every host that can reach that address can call the devtools RPC and MCP endpoints without a code. Use it on a trusted network only, and bind to the one interface the device uses rather than <code>0.0.0.0</code>.
 </ngmd-alert>
 
 See [Standalone CLI](../getting-started/cli.md) for the other server options and [Security](../security.md) for what `--no-auth` turns off.
@@ -127,7 +135,7 @@ pnpm devtools:nativescript
 cd examples/nativescript && npm install && ns debug ios --no-hmr
 ```
 
-`pnpm devtools:nativescript` starts the devtools server scanning `examples/nativescript/src`.
+`pnpm devtools:nativescript` starts the devtools server on `localhost`, scanning `examples/nativescript/src`. For a physical device, `pnpm devtools:nativescript:device` listens on every interface instead, with the same warning as above.
 
 ## Where to next
 
