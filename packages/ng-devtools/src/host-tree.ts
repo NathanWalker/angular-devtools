@@ -129,3 +129,14 @@ export function domTree(
 export function documentTree<H extends object>(): HostTree<H> {
   return domTree() as unknown as HostTree<H>;
 }
+
+export function hostBySelector<H extends object>(tree: HostTree<H>, selector: string): H | null {
+  if (!tree.selector) return null;
+  const stack = tree.roots().reverse();
+  while (stack.length) {
+    const host = stack.pop()!;
+    if (tree.selector(host) === selector) return host;
+    stack.push(...tree.children(host).reverse());
+  }
+  return null;
+}
